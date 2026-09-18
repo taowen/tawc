@@ -1,3 +1,7 @@
-TODO(maintainer): replace this whole file before submitting to F-Droid.
-Max 4000 characters. A proposed draft to rewrite from is in
-fastlane/DRAFTS.md.
+TAWC allows you to install a normal Linux distro on your phone, and run Linux applications. Both CLI and graphical programs are supported. Graphical apps may use X11 or Wayland and may be hardware accelerated in either case.
+
+Instead of a Linux desktop environment, Linux apps appear alongside Android apps in the Android app switcher. Touch support, Android keyboard support, clipboard integration and home screen shortcuts integrate Linux apps into Android.
+
+Root is not required. tawcroot, a faster alternative to proot, provides the desktop Linux-like environment.
+
+Accelerated desktop GL is not supported at this time. Only the graphics APIs the phone natively supports work (usually this means GLES and Vulkan). This is good enough for a lot of programs, but prevents some apps and most games from working unless you use CPU graphics.

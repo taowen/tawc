@@ -15,9 +15,6 @@
 # `Categories`, reorders the build fields, and strips every comment in
 # this file. The commentary is for us, not for them.
 #
-# TODO(maintainer): AuthorName is public attribution, so it is left for you
-# to fill in (or delete if you would rather not be listed).
-#
 # This file names the app version in five places, and must be re-synced
 # with app/build.gradle.kts on every version bump for as long as it lives
 # here — `scripts/check-version-sync.sh` enforces that, and
@@ -32,7 +29,7 @@ Categories:
 License: GPL-3.0-only
 SourceCode: https://github.com/wmww/tawc
 IssueTracker: https://github.com/wmww/tawc/issues
-# AuthorName: ...
+AuthorName: Sophie Winter
 
 RepoType: git
 Repo: https://github.com/wmww/tawc.git
