@@ -34,6 +34,24 @@ AuthorName: Sophie Winter
 RepoType: git
 Repo: https://github.com/wmww/tawc.git
 
+# Reproducible build: F-Droid rebuilds the tag, checks the result against
+# the APK published on GitHub, and ships *that* APK — so users stay on one
+# signing key whichever channel they install from. See
+# plans/reproducible-builds.md. The release is built in F-Droid's own
+# buildserver image at their path (scripts/fdroid/run.sh release), which
+# is what makes the two builds match.
+#
+# The asset name must match this pattern exactly, and a published asset
+# must never be replaced: F-Droid pins what it verified.
+#
+# NB: only a version cut through that process can be listed under Builds
+# below. v2 was built on Arch and cannot reproduce, so v3 has to replace
+# it before this is submitted.
+Binaries: https://github.com/wmww/tawc/releases/download/v%v/tawc-v%v.apk
+# SHA-256 of the release signing certificate (`apksigner verify
+# --print-certs`), pinned so a different key cannot slip a binary in.
+AllowedAPKSigningKeys: 0b2262d221a951b57d847b288324004ce3b2fefe1ef52a1140f2fbc1fbb990be
+
 Builds:
   - versionName: '2'
     versionCode: 2

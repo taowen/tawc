@@ -400,6 +400,23 @@ fun depTreeState(vararg deps: String): Provider<String> = providers.exec {
     commandLine(listOf("scripts/ensure-deps.sh", "--tree-state") + deps)
 }.standardOutput.asText
 
+// Asset tars must be byte-identical across machines for reproducible
+// release builds (notes/release.md): fixed entry order, owner, modes and
+// mtime. `scripts/lib/repro.sh` is the single source of truth, shared
+// with the shell build scripts; the runtime extractors read only entry
+// names, link targets and the exec bit, so pinning the rest is safe.
+fun reproQuery(flag: String): String = providers.exec {
+    workingDir(rootDir)
+    commandLine("scripts/lib/repro.sh", flag)
+}.standardOutput.asText.get().trim()
+val sourceDateEpoch: String = reproQuery("--epoch")
+val deterministicTarArgs: List<String> = reproQuery("--tar-args").lines()
+// Every native build script and cargo run goes through an Exec task;
+// autotools/meson deps that stamp a build date honour this instead.
+tasks.withType<Exec>().configureEach {
+    environment("SOURCE_DATE_EPOCH", sourceDateEpoch)
+}
+
 // Ensure the smithay checkout exists before cargo runs. Cargo's
 // `[patch.crates-io] smithay = { path = "../deps/smithay" }` errors
 // up front if the dir is missing — so this has to come before the
@@ -675,11 +692,12 @@ if (anyVariantPacksDebootstrap) {
         workingDir = file(debootstrapDir)
         // Only what the runtime invokes: the entry script, the shared
         // functions library, and the per-suite scripts dir.
-        commandLine("tar", "--format=ustar",
+        commandLine(listOf("tar") + deterministicTarArgs + listOf(
             "-cf", debootstrapAssetFile.absolutePath,
-            "debootstrap", "functions", "scripts")
+            "debootstrap", "functions", "scripts"))
         inputs.file("$tawcRoot/deps/deps.list")
         inputs.property("depTreeState", depTreeState("debootstrap"))
+        inputs.property("tarArgs", deterministicTarArgs)
         outputs.file(debootstrapAssetFile)
     }
 
@@ -770,11 +788,12 @@ if ("arm64-v8a" in tawcAbis) {
         //  - `pkgconfig/` — `.pc` files, also reference host paths
         //  - `include/`   — C headers, not needed at runtime
         //  - `bin/`       — `getprop`/`setprop` utilities, not used
-        commandLine("tar", "--format=ustar",
+        commandLine(listOf("tar") + deterministicTarArgs + listOf(
             "--exclude=*.la", "--exclude=pkgconfig",
             "--exclude=include", "--exclude=bin",
-            "-cf", "${project.projectDir}/$libhybrisAssetFile", ".")
+            "-cf", "${project.projectDir}/$libhybrisAssetFile", "."))
         inputs.dir(libhybrisInstallDir)
+        inputs.property("tarArgs", deterministicTarArgs)
         outputs.file(libhybrisAssetFile)
     }
 
@@ -966,11 +985,12 @@ if (xwaylandPackaged) {
         dependsOn(xwaylandShareBuildTask)
         doFirst { mkdir(file(xwaylandShareAssetFile).parentFile) }
         workingDir = file(xwaylandShareInstallDir)
-        commandLine("tar", "--format=ustar",
+        commandLine(listOf("tar") + deterministicTarArgs + listOf(
             "-cf", "${project.projectDir}/$xwaylandShareAssetFile",
-            "share/X11", "share/xkeyboard-config-2")
+            "share/X11", "share/xkeyboard-config-2"))
         inputs.dir("$xwaylandShareInstallDir/share/X11")
         inputs.dir("$xwaylandShareInstallDir/share/xkeyboard-config-2")
+        inputs.property("tarArgs", deterministicTarArgs)
         outputs.file(xwaylandShareAssetFile)
     }
 

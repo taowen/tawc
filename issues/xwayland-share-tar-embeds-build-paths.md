@@ -22,6 +22,8 @@ tar and the fix is to stop packing it (`packXwaylandShare` in
 actually opens under `share/X11` before pruning (`share/X11/xkb` is
 needed).
 
-Either way the leak matters for reproducible builds: the file content
-depends on where the tree was built. See
+The file content depends on where the tree was built, so it used to
+block reproducible builds too. That is no longer the case — releases are
+built in F-Droid's image at F-Droid's path, so the embedded path is the
+same on both sides. See
 [plans/reproducible-builds.md](../plans/reproducible-builds.md).

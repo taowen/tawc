@@ -2,6 +2,15 @@
 
 Releases are signed APKs published as GitHub release assets. No app-store distribution yet.
 
+Release APKs are **built in F-Droid's buildserver image, not on a dev
+machine** — that is what lets F-Droid rebuild the tag, get a byte-identical
+result, and distribute the maintainer-signed APK instead of one signed with
+their own key. One signing lineage means nobody ever has to uninstall (which
+would delete their distros) to switch channels. The container build needs no
+keys, so the agent runs it; the maintainer only signs. See
+[plans/reproducible-builds.md](../plans/reproducible-builds.md) and
+[building.md](building.md) ("F-Droid buildserver rig").
+
 ## Versioning
 
 - Plain release counter: versions are `1`, `2`, `3`, … No semver — the app has no breaking/non-breaking distinction for users; every release is expected to migrate existing installs forward.
@@ -46,18 +55,57 @@ When asked to prep a release:
    its `versionName`, `versionCode`, `commit`, `CurrentVersion` and
    `CurrentVersionCode` to this release. Then run
    `scripts/check-version-sync.sh` and fix anything it reports.
-5. Commit as `release: vN`, then tag `vN` (the prep request counts as the explicit ask to commit/tag; do not push).
-6. Hand off: print the human steps below with the concrete version filled in, plus the drafted notes (e.g. as a `--notes-file` in scratch or inline for copy/paste).
+5. Commit as `release: vN` (the prep request counts as the explicit ask to commit/tag; do not push).
+6. Build the release APK in F-Droid's image, from that commit:
 
-The release build cannot be run by the agent: the signing keystore lives in a different user account where Claude does not run.
+       scripts/fdroid/prepare.sh release
+       scripts/fdroid/run.sh
+
+   `release` mode refuses a dirty tree and re-clones the mirror, so what
+   it builds is exactly what the tag will name. The unsigned APK lands in
+   `app/build/outputs/apk/release/me.phie.tawc_N-unsigned.apk`. Build it
+   close to publishing: the rig `dist-upgrade`s inside the container, so a
+   trixie package update between this build and F-Droid's rebuild is the
+   one thing that can break reproducibility.
+7. Spot-check determinism: run it a second time with `--fresh-cache` (and
+   optionally `--cpuset-cpus 0-5`) and compare:
+
+       scripts/fdroid/compare-apks.py <first> <second>
+
+   Anything other than "all entries identical" means a new
+   non-determinism crept in — find it before tagging, not after F-Droid
+   refuses to publish.
+8. Tag `vN` (annotated) on the release commit. Do not push.
+9. Hand off: print the human steps below with the concrete version filled
+   in, the path to the unsigned APK, and the drafted notes (e.g. as a
+   `--notes-file` in scratch or inline for copy/paste).
+
+Signing cannot be run by the agent: the keystore lives in a different user account where Claude does not run.
 
 ## Publish steps (human, as the key-owning user)
 
-1. `scripts/build-release-apk.sh` — builds `assembleRelease` (default graphics `libhybris,cpu`), zipaligns, signs, verifies, and renames the artifact to `app/build/outputs/apk/release/tawc-vN.apk` (version read from the APK via aapt2).
-2. Smoke-test that exact APK on the physical phone: fresh install + launch + distro install + run an app (e.g. lxterminal); for later releases also install *over* the previous release to catch signing/versionCode upgrade breakage. The release build differs from the dev loop (no debug methods, production graphics set), so dev-loop testing does not cover it.
-3. Push `main` and the tag.
-4. `gh release create vN tawc-vN.apk --title "TAWC vN" --notes-file <notes>`.
-5. Close out any upstream issues the release fixes. Pending:
+1. Sign the container's APK — not a fresh local build, which would not
+   reproduce:
+
+       scripts/build-release-apk.sh --apk app/build/outputs/apk/release/me.phie.tawc_N-unsigned.apk
+
+   It checks the APK is already aligned, signs it with v2/v3 only, and
+   gates on `apksigcopier compare`, which is the same check F-Droid runs.
+   Output: `app/build/outputs/apk/release/tawc-vN.apk`. Needs
+   `apksigcopier` and build-tools 35+.
+2. Optionally run F-Droid's own verification end to end before anything is
+   public (no key needed, so the agent can do this given the signed APK):
+
+       scripts/fdroid/prepare.sh reproduce --apk <tawc-vN.apk> --commit vN
+       scripts/fdroid/run.sh
+
+3. Smoke-test that exact APK on the physical phone: fresh install + launch + distro install + run an app (e.g. lxterminal); for later releases also install *over* the previous release to catch signing/versionCode upgrade breakage. The release build differs from the dev loop (no debug methods, production graphics set), so dev-loop testing does not cover it.
+4. Push `main` and the tag.
+5. `gh release create vN tawc-vN.apk --title "TAWC vN" --notes-file <notes>`.
+   The asset name must be exactly `tawc-vN.apk` — the recipe's `Binaries:`
+   URL pattern depends on it. **Never replace a published asset:** F-Droid
+   pins the binary it verified, and swapping it out breaks that pin.
+6. Close out any upstream issues the release fixes. Pending:
    [#12](https://github.com/wmww/tawc/issues/12) (`mkdir /test` →
    Permission denied under a 0555 `/`) — fixed by tawcroot's lazy
    CAP_DAC_OVERRIDE emulation; the interim workaround for anyone on an

@@ -64,6 +64,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/deps.sh
 source "$SCRIPT_DIR/lib/deps.sh"
+# shellcheck source=lib/repro.sh
+source "$SCRIPT_DIR/lib/repro.sh"
 MESA_DIR="$(dep_dir mesa)"
 WAYLAND_PROTOCOLS_DIR="$(dep_dir wayland-protocols)"
 PATCH_DIR="$REPO_DIR/deps/mesa-patches/mesa"
@@ -490,7 +492,7 @@ EOF
     # `-C` so entries are relative (no leading `mesa-zink/`), so the
     # runtime extractor lands them straight at <filesDir>/mesa-zink/.
     local ZINK_TAR="$PREFIX/usr/lib/mesa-zink-$MESON_CPU.tar"
-    tar -C "$ZINK_INSTALL" -cf "$ZINK_TAR" .
+    repro_tar -C "$ZINK_INSTALL" -cf "$ZINK_TAR" .
     echo "==> [$abi] Mesa-Zink staged:"
     tar tf "$ZINK_TAR" | sort
 }

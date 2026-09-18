@@ -104,8 +104,8 @@ then human steps 3.3 and 4.
       `gradle/gradle-daemon-jvm.properties` itself, which is expected.
     - cargo-ndk resolves from `~/.cargo/bin` for the Gradle step, so the
       `gradle:` field works as-is with no `build:` override.
-  Two things the rig could not test faithfully, both noted in
-  `build/fdroid-test/README.md`: it builds the local tree from a mirror
+  Two things the rig could not test faithfully (the rig now lives in
+  `scripts/fdroid/`): it builds the local tree from a mirror
   clone rather than GitHub's `v1` tag (which predates all of this work),
   and `fdroid rewritemeta` will strip the recipe's comments on
   submission.

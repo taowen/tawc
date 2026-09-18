@@ -53,6 +53,8 @@ and launch as documented in AGENTS.md's Common Commands.
 | `patchelf` (libhybris GL shims) | `patchelf`                  | `patchelf`                                           |
 | `file` (libhybris build verify step) | `file`                 | `file`                                               |
 | nginx (dev-time mirror cache, optional) | `nginx`                       | `nginx`                                              |
+| podman (release builds + the F-Droid rig, rootless) | `podman`      | `podman`                                             |
+| `apksigcopier` (release signing check) | `apksigcopier`             | `apksigcopier`                                       |
 
 On a clean Debian trixie the whole set is one line — the same set the
 F-Droid recipe installs, verified by building a release APK from scratch
@@ -89,6 +91,11 @@ shell's default `java` is newer.
 `nginx` is only needed for the dev-time install caching proxy
 (`scripts/cache-proxy.sh`, see notes/cache-proxy.md). Skip if you
 don't iterate on installs.
+
+`podman` and `apksigcopier` are only needed to cut a release or test the
+F-Droid recipe — see "F-Droid buildserver rig" below. Skip for ordinary
+dev builds. Release signing also needs build-tools 35 or newer, for
+`apksigner --alignment-preserved`.
 
 ### aarch64 glibc cross-toolchain (libhybris)
 
@@ -173,6 +180,15 @@ above when they are unset. `ANDROID_NDK_HOME` is auto-detected by
 `scripts/build-libxkbcommon.sh`
 (it falls back to `$ANDROID_HOME/ndk/<latest>`). Direct `./gradlew` invocations
 use the repo's Gradle daemon JVM pin and require JDK 21 to be installed.
+
+`SOURCE_DATE_EPOCH` is exported onto every Gradle `Exec` task (so every
+native build script and cargo run inherits it) for reproducible release
+builds. `scripts/lib/repro.sh` is the single source of truth: it derives
+the epoch from HEAD's commit time (0 outside a git checkout), and its
+`repro_tar` wrapper packs the asset tars with fixed entry order, owner,
+modes and mtime. Gradle reads both back via `scripts/lib/repro.sh
+--epoch` / `--tar-args`. Set `SOURCE_DATE_EPOCH` yourself to override.
+See [reproducible-builds](../plans/reproducible-builds.md).
 
 ## Vendored repos
 
@@ -566,6 +582,38 @@ manifest (build-type overlay `app/src/overlays/no-all-files-access/`)
 for distribution channels that can't carry it; the app hides the
 external-binds UI when the permission is absent. See
 [external-binds.md](external-binds.md).
+
+### F-Droid buildserver rig (release builds + recipe testing)
+
+```bash
+scripts/fdroid/prepare.sh verify     # stage the local tree
+scripts/fdroid/run.sh                # build it in F-Droid's image (hours)
+scripts/fdroid/lint.sh               # lint/rewritemeta/schema the recipe
+scripts/fdroid/clean.sh              # drop all rig state (GBs, re-downloads)
+```
+
+Runs `fdroid build` on `fdroid/me.phie.tawc.yml` inside F-Droid's own
+buildserver image (`registry.gitlab.com/fdroid/fdroidserver:buildserver-trixie`)
+under rootless podman, as close as it gets to how fdroiddata's CI does
+it. State — container storage, the fdroiddata checkout, a mirror of this
+repo, the caches and logs — lives under `build/fdroid/`.
+
+Two modes:
+
+- `verify` builds the working tree (dirty included, snapshotted into the
+  mirror without touching any ref here) with `fdroid build --test`, and
+  throws the APK away. Use it to check the recipe still builds.
+- `release` builds a clean tree from a freshly cloned mirror, keeps the
+  result, and copies it to
+  `app/build/outputs/apk/release/me.phie.tawc_<version>-unsigned.apk`.
+  This is the APK a release ships: building it in F-Droid's image at
+  F-Droid's path is what makes their independent rebuild of the tag come
+  out byte-identical, so they can distribute the maintainer-signed APK.
+  `scripts/fdroid/compare-apks.py A.apk B.apk` is the entry-by-entry
+  check. See [plans/reproducible-builds.md](../plans/reproducible-builds.md).
+
+`run.sh --cpuset-cpus <spec>` and `--fresh-cache` vary core count and
+cache warmth, which is how a build gets checked for determinism.
 
 ### Third-party license text (checked-in asset)
 

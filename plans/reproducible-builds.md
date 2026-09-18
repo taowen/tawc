@@ -13,7 +13,7 @@ decided before the fdroiddata MR (plans/f-droid.md step 3.3) is opened.
 
 ## Measured 2026-09-18 (v2, `ef2ae6b`)
 
-F-Droid-image build (`build/fdroid-test` rig) vs the maintainer-signed
+F-Droid-image build (the rig, now `scripts/fdroid/`) vs the maintainer-signed
 `tawc-v2.apk` built on Arch: 1320 of 1359 entries identical — all dex,
 resources, manifest, `libtawcroot.so`, `libando.so`, zstd-jni. The 39
 that differ are all native code our scripts build, from three causes:
@@ -43,56 +43,94 @@ that the binary corresponds to the tagged source.
 
 ## Steps
 
-1. **Deterministic asset tars.** `packLibhybris` and `packXwaylandShare`
-   in `app/build.gradle.kts` (and the Mesa/zink packers, for
-   consistency): add `--sort=name --owner=0 --group=0 --numeric-owner
-   --mode=u+rwX,go+rX,go-w --mtime=@<epoch>`, epoch = commit time of
-   HEAD (`git log -1 --format=%ct`; fall back to 0 outside git). Check
-   the runtime extractors don't care about owner/mtime (the xwayland
-   stamp is version+lastUpdateTime, not tar mtimes).
-2. **Promote the rig to a release builder.** Move
-   `build/fdroid-test/{prepare,run,in-container,lint,clean}.sh` into
-   `scripts/fdroid/` (state stays under `build/fdroid/`), parameterised
-   on the version instead of the hardcoded `me.phie.tawc:N`. Two modes:
-   `verify` (today's behaviour: does the recipe build?) and `release`
-   (build a given commit from a clean mirror clone, copy
-   `unsigned/me.phie.tawc_N.apk` out to
-   `app/build/outputs/apk/release/`). Document in notes/building.md
-   (podman becomes a release-time host dep).
-3. **Prove determinism before trusting it.** Build the same commit
-   twice — once with cold `cache/`, once warm, and once with a different
-   core count (`--cpuset-cpus`) — and diff entry-by-entry. Expect to
-   chase a few residuals; suspects in order: autotools deps embedding
-   `__DATE__`/hostname, link order under parallel make, zstd-jni/AGP
-   packaging order, Rust (normally deterministic with a pinned
-   toolchain and `Cargo.lock`). Fix each at its source; honour
-   `SOURCE_DATE_EPOCH` (export it in the build scripts from the same
-   commit time as step 1). Keep the comparison as a script
-   (`scripts/fdroid/compare-apks.py`, the zip-CRC diff used for the v2
-   measurement) so every release can re-run it.
-4. **Sign-only path.** `scripts/build-release-apk.sh --apk <unsigned>`:
-   skip Gradle, sign that exact file. The signed APK must differ from
-   the unsigned one only by the signing block, or F-Droid's signature
-   transplant fails — so verify whether the current zipalign pass
-   rewrites an already-aligned AGP output, and drop it for this path if
-   it does. Gate the script on `apksigcopier compare <signed>
-   --unsigned <container apk>` succeeding.
-5. **Recipe.** Add to `fdroid/me.phie.tawc.yml`:
+1. ~~**Deterministic asset tars.**~~ **Done.** `scripts/lib/repro.sh` is
+   the single source of truth for `SOURCE_DATE_EPOCH` (HEAD's commit
+   time, 0 outside git) and the tar flags; `app/build.gradle.kts` reads
+   both back from it, exports the epoch onto every `Exec` task, and
+   passes the flags to `packDebootstrap`, `packLibhybris` and
+   `packXwaylandShare`; `build-mesa-gfxstream.sh` uses `repro_tar` for
+   the zink tar. Re-packing now gives byte-identical tars. The runtime
+   extractors read only entry names, link targets and the exec bit, so
+   normalising owner/mode/mtime is safe.
+2. ~~**Promote the rig to a release builder.**~~ **Done.**
+   `scripts/fdroid/{lib,prepare,run,in-container,lint,clean}.sh`, state
+   under `build/fdroid/`, version read from `versionName`. `prepare.sh
+   [verify|release] [--commit <ref>]`, `run.sh [--cpuset-cpus <spec>]
+   [--fresh-cache]`; release mode requires a clean tree, re-clones the
+   mirror, drops `--test` and copies the unsigned APK to
+   `app/build/outputs/apk/release/`. Documented in notes/building.md.
+   `verify` and `lint` both exercised after the move; `release` mode has
+   not run yet (it needs a clean tree).
+3. ~~**Prove determinism before trusting it.**~~ **Done, clean.** Three
+   `verify` builds of the same snapshot (2026-09-18, app version 2,
+   `libhybris,cpu`): cold caches, warm caches, and six cores instead of
+   24. All three came out byte-identical — same sha256, 1359 of 1359
+   entries identical under `scripts/fdroid/compare-apks.py`. None of the
+   suspected residuals (autotools `__DATE__`/hostname, link order under
+   parallel make, AGP packaging order, Rust) showed up; `fdroid build`
+   `git clean -dffx`s the checkout, so each run built the native stack
+   from scratch. `libhybris` and `Xwayland` both rebuilt; Mesa does not
+   ship in a release build. Re-run this before every tag.
 
-       Binaries: https://github.com/wmww/tawc/releases/download/v%v/tawc-v%v.apk
-       AllowedAPKSigningKeys: 0b2262d221a951b57d847b288324004ce3b2fefe1ef52a1140f2fbc1fbb990be
+   Rootless podman cannot honour `--cpuset-cpus` unless systemd
+   delegates the cpuset controller to the user slice (it usually
+   delegates only cpu, memory and pids), so `run.sh` applies the limit
+   with `taskset` inside the container instead. `nproc` is
+   affinity-aware, so the build scripts really did use `-j6`.
 
-   (SHA-256 of the release cert, from `apksigner verify --print-certs`
-   on v2.) Re-run lint, rewritemeta and schema validation. Add a rig
-   mode that feeds the signed APK to `fdroid build` as the reference
-   binary so the full verify path is exercised before anything is
-   public.
-6. **Release process.** Rewrite notes/release.md: prep commit →
-   container `release` build of that commit (agent) → determinism
-   spot-check → tag → maintainer signs with `--apk` → `apksigcopier
-   compare` → smoke test → push + GitHub release. The asset name must
-   match the `Binaries:` pattern exactly (`tawc-vN.apk`). Never replace
-   a published asset: F-Droid pins what it verified.
+   Also: podman records its storage path absolutely, so moving the rig
+   from `build/fdroid-test/` to `build/fdroid/` made it refuse to start.
+   Rewriting `DBConfig`'s `StaticDir`/`GraphRoot`/`VolumeDir` in
+   `build/fdroid/containers/storage/db.sql` fixes it without
+   re-downloading the image; noted in `scripts/fdroid/lib.sh`.
+4. ~~**Sign-only path.**~~ **Done.** `scripts/build-release-apk.sh --apk
+   <unsigned>` skips Gradle, checks the APK is already aligned instead
+   of re-aligning it, signs it, and gates on `apksigcopier compare
+   <signed> --unsigned <that APK>`. Verified end to end with a throwaway
+   keystore.
+
+   Signing needed two non-default apksigner flags to survive that
+   comparison, both found by trying it:
+   - `--v1-signing-enabled false`. v1 adds three META-INF entries;
+     apksigner sets the UTF-8 name flag on them and apksigcopier does
+     not. Six bytes, and the v3 digest stops matching. minSdk is 29, so
+     v1 was dead weight.
+   - `--alignment-preserved true`. build-tools 35 apksigner re-aligns
+     native libs to 16 KB by default and shifts every later entry;
+     apksigcopier realigns the classic way (4 bytes / 4 KB pages), which
+     is what AGP and zipalign already produced.
+
+   Both apply to the plain path too, so there is one signing behaviour.
+   That makes build-tools 35+ and `apksigcopier` release-time host deps.
+   Note this changes the signing schemes v3 tags the APK with relative
+   to v2's release (v1 entries gone); the certificate is unchanged, so
+   updates still install over v2.
+5. ~~**Recipe.**~~ **Done.** `fdroid/me.phie.tawc.yml` now carries
+   `Binaries:` (the `v%v`/`tawc-v%v.apk` GitHub asset pattern) and
+   `AllowedAPKSigningKeys:` (`0b2262d2…`, the release cert's SHA-256).
+   Lint, rewritemeta and schema validation all still pass. The `Builds:`
+   entry is still v2, which cannot reproduce — it has to become v3
+   before submission, and the recipe says so.
+
+   `scripts/fdroid/prepare.sh reproduce --apk <signed.apk>` is the third
+   mode: it points `Binaries:` at a copy of the signed APK served inside
+   the container, so `fdroid build` runs its real download-and-verify
+   path. Exercised end to end against a container-built APK signed with
+   a throwaway key (`--unpinned-key` re-pins the recipe for that
+   self-test only): "compared built binary to supplied reference binary
+   successfully", signature transplanted by fdroidserver's own
+   apksigcopier and still verifying, allowed-signer check passed.
+
+   The server has to be HTTPS with a cert added to the container trust
+   store — fdroidserver's downloader mounts no plain `http://` adapter
+   and fails with "No connection adapters were found".
+6. ~~**Release process.**~~ **Done.** notes/release.md now runs: prep
+   commit → container `release` build of that commit (agent) →
+   determinism spot-check → tag → maintainer signs with `--apk` →
+   `apksigcopier compare` → optional `reproduce` run → smoke test →
+   push + GitHub release, with the exact asset name and the
+   never-replace-a-published-asset rule spelled out. CLAUDE.md's release
+   bullet points at the container build too.
 7. **Cut v3 through the new process, then open the MR** with the
    "Enable Reproducible Builds" box ticked and v3 as the only Builds
    entry.
@@ -104,7 +142,10 @@ that the binary corresponds to the tagged source.
   between changes libhybris. Trixie is stable so this is rare; the rig
   `dist-upgrade`s like their CI, so build right before publishing.
   Failure mode is benign: F-Droid does not publish that version, users
-  stay on the previous one, fix is vN+1.
+  stay on the previous one, fix is vN+1. Seen in practice already: a
+  libssl 3.5.6 → 3.5.7 update landed between the determinism sweep and
+  the step-5 verification an hour later, and the rebuild still matched —
+  most trixie updates touch nothing this build links against.
 - **CI image vs production buildserver.** fdroiddata CI and the rig use
   the container image; production builds run in a VM provisioned from
   the same base. Differences (core count, kernel, locale, umask) are
