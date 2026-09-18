@@ -23,8 +23,10 @@
        refused now — see `include/fdtab.h`.)
      • Trapped + handled: `close`, `close_range` (clamped at the
        reserved boundary so `close_range(0, ~0u)` only closed
-       guest-visible fds — it now splits around the reserved fds
-       instead), `dup`, `dup2` (x86_64 only; aarch64 has only dup3),
+       guest-visible fds — then split around the reserved fds, and
+       now fully emulated over `/proc/self/fd`, because Android
+       policies below API 34 RET_TRAP NR 436), `dup`, `dup2` (x86_64
+       only; aarch64 has only dup3),
        `dup3`, `fcntl` (which then capped the F_DUPFD/F_DUPFD_CLOEXEC
        minimum at base-1; no longer).
      • SIGSYS shadow: `rt_sigaction(SIGSYS, ...)` round-trips a
@@ -57,11 +59,13 @@
    pass on the device. With this run, Phase-0's outstanding
    "real-`untrusted_app`-zygote-filter validation" item is also closed.
    The `faccessat2` (kernel ≥5.8) and `close_range` (kernel ≥5.9)
-   handler-suite cases skip on 5.4 — testhost detects -ENOSYS from the
-   raw syscall and emits `[skip]` (parsed by `tawcroot/tests/handler/steps.c`,
-   registered as passing); polyfilling new syscalls with older ones is
-   intentionally out of scope for tawcroot, real workloads on 5.4 see
-   the same -ENOSYS without us in the path.
+   handler-suite cases skipped on 5.4 — testhost detected -ENOSYS from
+   the raw syscall and emitted `[skip]` (parsed by
+   `tawcroot/tests/handler/steps.c`, registered as passing). Since
+   superseded for `close_range`: the handler now emulates NR 436 over
+   `/proc/self/fd` (it has to — Android traps it below API 34), so
+   those cases are kernel-version-independent and the skip branch is
+   gone. Polyfilling stays opt-in per syscall, not a general policy.
    Comprehensive handler set:
      • argv parse (`-r <rootfs>`, `-b src:dst` repeatable)
      • dispatch table; BPF trap set generated from the same handler list

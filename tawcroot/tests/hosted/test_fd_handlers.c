@@ -4,9 +4,10 @@
  * in-process under ASan; see hosted.h.
  *
  * The raw-syscall hook doubles as an observation point here: the
- * close_range trim test must not let a real close_range(0, …) reach
- * the kernel (it would shred the test binary's own fd table), so the
- * hook captures the handler's outgoing call instead. */
+ * close_range tests assert the handler emits NO raw NR 436 at all (it
+ * emulates instead — see handle_close_range), and the hook both proves
+ * that and stops a regression from shredding the test binary's own fd
+ * table. */
 
 #include <cleat/test.h>
 
@@ -120,78 +121,149 @@ test(hosted_guest_fds_above_reserved_base_are_usable)
 	th_teardown(&v);
 }
 
-/* --- close_range: observed via the hook, never executed ----------------- */
+/* --- close_range: emulated, so no raw NR 436 may ever be emitted ------- */
 
 #define CR_MAX_SEEN 8
 static size_t cr_n_seen;
-static unsigned int cr_seen[CR_MAX_SEEN][3];
 static bool cr_hook(long nr, const long args[6], long *ret)
 {
+	(void)args;
 	if (nr != TAWC_SYS_close_range) return false;
-	if (cr_n_seen < CR_MAX_SEEN) {
-		cr_seen[cr_n_seen][0] = (unsigned int)args[0];
-		cr_seen[cr_n_seen][1] = (unsigned int)args[1];
-		cr_seen[cr_n_seen][2] = (unsigned int)args[2];
-	}
 	cr_n_seen++;
 	*ret = 0;
 	return true;
 }
 
-/* The handler must close everything the guest asked for EXCEPT its own
- * reserved slots — i.e. split the range around them rather than trim it
- * at the base. Trimming left the guest's own fds above the base open
- * (issues/tawcroot-reserved-fd-base-collides-with-guest-fds.md). */
-test(hosted_close_range_splits_around_reserved_fds)
+/* Android's zygote policy RET_TRAPs NR 436 on every API below 34 and
+ * SIGSYS is masked inside our own handler, so a raw re-issue would
+ * nest a trap the kernel answers by force-killing (wmww/tawc#14).
+ * handle_close_range therefore walks /proc/self/fd instead, and the
+ * contract is: the guest's fds in range die, ours survive, and no
+ * close_range leaves the handler. The hook swallows any 436 that does
+ * escape, so a regression fails an assert rather than shredding the
+ * test binary's fd table.
+ *
+ * Every sweep below starts at or above the reserved base so the cleat
+ * orchestrator's own low fds are never in range. */
+test(hosted_close_range_emulates_without_raw_close_range)
 {
 	th_view v;
 	th_setup(&v, "fd-crange");
 	th_add_bind(&v, "/mnt/host");  /* a second reserved fd */
 
 	test_true(tawcroot_n_reserved_fds == 2);
-	unsigned int lo = (unsigned int)tawcroot_reserved_fds[0];
-	unsigned int hi = (unsigned int)tawcroot_reserved_fds[1];
-	if (lo > hi) { unsigned int t = lo; lo = hi; hi = t; }
 
-	/* Whole-table sweep: gaps below, between (unless the two fds are
-	 * adjacent, as they are in practice), and above our fds. */
-	long want_segs = hi == lo + 1 ? 2 : 3;
+	/* A guest fd above the reserved cluster: it must die while both
+	 * reserved fds live. Only exact membership tells them apart. */
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/etc/probe",
+			 O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+	long g_hi = th_sys(TAWC_SYS_fcntl, fd, F_DUPFD,
+			   TAWCROOT_RESERVED_FD_BASE + 64, 0, 0, 0);
+	test_true(g_hi >= TAWCROOT_RESERVED_FD_BASE + 64);
+	test_false(tawcroot_fd_is_reserved((int)g_hi));
+
 	cr_n_seen = 0;
 	tawcroot_test_raw_hook = cr_hook;
-	test_int_eq(th_sys(TAWC_SYS_close_range, 3, ~0U, 0, 0, 0, 0), 0);
-	test_int_eq((long)cr_n_seen, want_segs);
-	test_int_eq(cr_seen[0][0], 3);
-	test_int_eq(cr_seen[0][1], lo - 1);
-	size_t k = 1;
-	if (hi != lo + 1) {
-		test_int_eq(cr_seen[k][0], lo + 1);
-		test_int_eq(cr_seen[k][1], hi - 1);
-		k++;
-	}
-	test_int_eq(cr_seen[k][0], hi + 1);
-	test_int_eq(cr_seen[k][1], ~0U);
+	test_int_eq(th_sys(TAWC_SYS_close_range, TAWCROOT_RESERVED_FD_BASE,
+			   ~0U, 0, 0, 0, 0), 0);
+	test_int_eq((long)cr_n_seen, 0);
 
-	/* Entirely above the base: still a real sweep of the guest's high
-	 * fds, minus our slots. Flags ride along on every segment. */
-	cr_n_seen = 0;
-	test_int_eq(th_sys(TAWC_SYS_close_range, hi + 1, ~0U, 4 /*CLOEXEC*/,
-			   0, 0, 0), 0);
-	test_int_eq((long)cr_n_seen, 1);
-	test_int_eq(cr_seen[0][0], hi + 1);
-	test_int_eq(cr_seen[0][1], ~0U);
-	test_int_eq(cr_seen[0][2], 4);
+	struct stat st;
+	test_int_eq(fstat((int)g_hi, &st), -1);
+	for (size_t i = 0; i < tawcroot_n_reserved_fds; i++)
+		test_int_eq(fstat(tawcroot_reserved_fds[i], &st), 0);
 
-	/* A range that is nothing but reserved fds issues no syscall. */
-	cr_n_seen = 0;
-	test_int_eq(th_sys(TAWC_SYS_close_range, lo, lo, 0, 0, 0, 0), 0);
+	/* Argument validation is ours now, not the kernel's. */
+	test_int_eq(th_sys(TAWC_SYS_close_range, 5, 4, 0, 0, 0, 0),
+		    TAWC_EINVAL);
+	test_int_eq(th_sys(TAWC_SYS_close_range, TAWCROOT_RESERVED_FD_BASE,
+			   ~0U, 8 /*undefined flag*/, 0, 0, 0), TAWC_EINVAL);
 	test_int_eq((long)cr_n_seen, 0);
 
 	tawcroot_test_raw_hook = NULL;
+	test_int_eq(close((int)fd), 0);
+	th_teardown(&v);
+}
+
+/* CLOSE_RANGE_CLOEXEC sets the flag on the guest's fds in range and
+ * leaves ours alone — including their close-on-exec state, which
+ * matters because the shm segments are deliberately non-CLOEXEC. */
+test(hosted_close_range_cloexec_sets_flag_and_spares_reserved)
+{
+	th_view v;
+	th_setup(&v, "fd-crange-cloexec");
+
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/etc/probe",
+			 O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+	long g_hi = th_sys(TAWC_SYS_fcntl, fd, F_DUPFD,
+			   TAWCROOT_RESERVED_FD_BASE + 64, 0, 0, 0);
+	test_true(g_hi >= TAWCROOT_RESERVED_FD_BASE + 64);
+	test_int_eq(fcntl((int)g_hi, F_GETFD) & FD_CLOEXEC, 0);
+
+	/* Reservation uses F_DUPFD_CLOEXEC, so clear the flag on the
+	 * rootfs fd to stand in for a non-CLOEXEC shm segment. */
+	int rfd = tawcroot_rootfs_fd;
+	test_int_eq(fcntl(rfd, F_SETFD, 0), 0);
+
+	cr_n_seen = 0;
+	tawcroot_test_raw_hook = cr_hook;
+	test_int_eq(th_sys(TAWC_SYS_close_range, TAWCROOT_RESERVED_FD_BASE,
+			   ~0U, 4 /*CLOSE_RANGE_CLOEXEC*/, 0, 0, 0), 0);
+	test_int_eq((long)cr_n_seen, 0);
+	tawcroot_test_raw_hook = NULL;
+
+	/* Guest fd: still open, now close-on-exec. Ours: untouched. */
+	test_int_eq(fcntl((int)g_hi, F_GETFD) & FD_CLOEXEC, FD_CLOEXEC);
+	test_int_eq(fcntl(rfd, F_GETFD) & FD_CLOEXEC, 0);
+	test_int_eq(fcntl(rfd, F_SETFD, FD_CLOEXEC), 0);
+
+	test_int_eq(close((int)g_hi), 0);
+	test_int_eq(close((int)fd), 0);
+	th_teardown(&v);
+}
+
+/* More open fds in range than one getdents64 batch holds: the walk
+ * must page through every batch, and the close-mode rescan (the dir
+ * mutates as we close) must terminate having closed all of them. */
+test(hosted_close_range_closes_more_fds_than_one_dirent_batch)
+{
+	th_view v;
+	th_setup(&v, "fd-crange-many");
+
+	long fd = th_sys(TAWC_SYS_openat, AT_FDCWD, "/etc/probe",
+			 O_RDONLY, 0, 0, 0);
+	test_true(fd >= 0);
+
+	/* 64 fds from base+2048 up: several 512-byte dirent batches. */
+	const long base = TAWCROOT_RESERVED_FD_BASE + 2048;
+	int made[64];
+	const size_t n_made = sizeof made / sizeof made[0];
+	for (size_t i = 0; i < n_made; i++) {
+		long d = th_sys(TAWC_SYS_fcntl, fd, F_DUPFD, base, 0, 0, 0);
+		test_true(d >= base);
+		made[i] = (int)d;
+	}
+
+	cr_n_seen = 0;
+	tawcroot_test_raw_hook = cr_hook;
+	test_int_eq(th_sys(TAWC_SYS_close_range, base, ~0U, 0, 0, 0, 0), 0);
+	test_int_eq((long)cr_n_seen, 0);
+	tawcroot_test_raw_hook = NULL;
+
+	struct stat st;
+	for (size_t i = 0; i < n_made; i++)
+		test_int_eq(fstat(made[i], &st), -1);
+
+	test_int_eq(close((int)fd), 0);
 	th_teardown(&v);
 }
 
 /* The reserved fds themselves survive a guest sweep, and translation
- * still works afterwards — the property the trim used to provide. */
+ * still works afterwards — the property the trim used to provide.
+ * Kernel-version-independent since the emulation landed: nothing here
+ * needs the host kernel to implement close_range(2) (Linux >= 5.9). */
 test(hosted_close_range_keeps_reserved_fds_alive)
 {
 	th_view v;

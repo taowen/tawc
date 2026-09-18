@@ -12,9 +12,12 @@
  *   - bind src host paths must survive: --exec-child re-establishes
  *     the bind table from `bind.src[256]` after the closefrom loses
  *     the original bind src_fds.
- *   - close_range trim: handle_close_range must trim `last` to
- *     RESERVED_FD_BASE-1 so the kernel-side close_range never sees
- *     reserved fds.
+ *   - close_range emulation: handle_close_range must walk
+ *     /proc/self/fd and skip the reserved slots rather than re-issue
+ *     NR 436. Android's policy RET_TRAPs 436 below API 34, and SIGSYS
+ *     is masked inside our handler, so a raw re-issue is a silent
+ *     force-kill (wmww/tawc#14). Under the prod-env layer this fixture
+ *     runs against the real zygote filter, which is where that shows.
  *
  * If any of those bugs regress, the child either spins forever (no
  * exit) or the new tawcroot from --exec-child fails to set up rootfs
@@ -32,10 +35,10 @@
  *    73  — argc < 2
  *  90..150 — child's execve failed
  *
- * Note: close_range is trapped by tawcroot, so even if the kernel is
- * too old to support it directly, the SIGSYS handler routes it. We
- * also try plain close() of a few well-known reserved fd numbers
- * (1000..1003) to exercise the BPF close fast-path.
+ * Note: close_range is trapped by tawcroot and emulated, so neither an
+ * old kernel nor an old Android policy matters here. We also try plain
+ * close() of a few well-known reserved fd numbers (1000..1003) to
+ * exercise the BPF close fast-path.
  */
 
 	.text
@@ -101,12 +104,12 @@ _start:
 	syscall
 
 	/* close_range(0, ~0u, 0) — close everything from stdin onwards.
-	 * handle_close_range trims `last` to RESERVED_FD_BASE-1 so the
-	 * kernel never sees our internal slots; reserved fds survive
-	 * untouched. After this returns the guest has no open fds in
-	 * the [0, 999] range; the upcoming execve will pick stdin/out/
-	 * err back up via /dev/null only if we cared (we don't — the
-	 * child binary doesn't print). */
+	 * handle_close_range emulates it by walking /proc/self/fd and
+	 * skipping the reserved slots, so every guest fd dies and ours
+	 * survive untouched. After this returns the guest has no open fds
+	 * left; the upcoming execve will pick stdin/out/err back up via
+	 * /dev/null only if we cared (we don't — the child binary doesn't
+	 * print). */
 	xor     %rdi, %rdi
 	mov     $-1, %esi
 	xor     %rdx, %rdx

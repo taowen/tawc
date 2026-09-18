@@ -100,8 +100,15 @@ Implementation contract:
   `pidfd_getfd` if present. Guest operations targeting internal fds
   must behave as if the fd does not exist (`-EBADF`) unless the call is
   issued by tawcroot itself through `tawcroot_raw_syscall()`.
-- `close_range` must *split* around the reserved fds, not truncate at
-  the base: truncating silently leaves the guest's own high fds open.
+- `close_range` is **emulated**, never re-issued: the handler walks
+  `/proc/self/fd` with `getdents64` and closes (or `F_SETFD`s, for
+  `CLOSE_RANGE_CLOEXEC`) each guest fd in range, skipping the reserved
+  ones. Re-issuing NR 436 from the handler is fatal on Android below
+  API 34 — see "Never emit a syscall newer than the oldest Android
+  policy" in [sigsys-handler.md](sigsys-handler.md). Earlier shapes
+  split the range around the reserved fds (still one raw 436 per gap)
+  or truncated `last` at the base, which silently left the guest's own
+  high fds open.
 - `dup2`/`dup3` reject an explicit `newfd` that names a reserved fd
   (`-EBADF`); `fcntl(F_DUPFD*)` needs no guard at all, since the kernel
   only ever returns a free number.

@@ -261,7 +261,8 @@ not a to-do list** — live work lives in `issues/` and `plans/`.
    `close_range`/`dup`/`dup2`/`dup3`/`fcntl` are trapped so guest
    operations on *those specific fds* behave as `-EBADF`. The base is a
    placement/fast-path floor only — guest fds above it are the guest's,
-   `close_range` splits around ours instead of truncating at the base,
+   `close_range` is emulated by walking `/proc/self/fd` and skipping
+   ours (never by re-issuing NR 436, which pre-API-34 Android traps),
    and `fcntl(F_DUPFD*)` passes through unguarded. The BPF close fast
    path is a range compare on `args[0]` (a deliberate superset of the
    table), so fds reserved after filter install are covered too.

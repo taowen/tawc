@@ -23,6 +23,13 @@
  *                        // recursively (the bug fixed in handle_access).
  *   - clone3      (435)  // tawcroot must explicitly trap and -ENOSYS so
  *                        // glibc 2.34+'s probe falls back to clone(2).
+ *   - close_range (436)  // Every Android policy older than API 34 predates
+ *                        // NR 436 (bionic gained close_range at 34), so the
+ *                        // zygote filter TRAPs it. tawcroot's handler must
+ *                        // therefore EMULATE close_range, never re-issue it
+ *                        // — a raw 436 from inside the handler nests SIGSYS
+ *                        // while ours is auto-masked and the kernel
+ *                        // force-kills (wmww/tawc#14).
  *   - With --include-legacy-x86_64 (only meaningful on x86_64): also TRAP
  *     access (21), open (2), chmod (90), chown (92), mkdir (83),
  *     rmdir (84), unlink (87), symlink (88), link (86), rename (82),
@@ -85,12 +92,14 @@
 # define WRAP_NR_openat2      437
 # define WRAP_NR_faccessat2   439
 # define WRAP_NR_clone3       435
+# define WRAP_NR_close_range  436
 # define WRAP_NR_ioctl         29
 #elif defined(__x86_64__)
 # define WRAP_AUDIT_ARCH      AUDIT_ARCH_X86_64
 # define WRAP_NR_openat2      437
 # define WRAP_NR_faccessat2   439
 # define WRAP_NR_clone3       435
+# define WRAP_NR_close_range  436
 # define WRAP_NR_ioctl         16
 /* Legacy lp64-x86_64 RET_TRAP set (Android allows these only for lp32).
  * This is a MODELED SUBSET, not the full list — the authoritative set
@@ -155,6 +164,7 @@ static bool install_filter(bool include_legacy_x86_64,
 	WRAP_PUSH(WRAP_NR_openat2);
 	WRAP_PUSH(WRAP_NR_faccessat2);
 	WRAP_PUSH(WRAP_NR_clone3);
+	WRAP_PUSH(WRAP_NR_close_range);
 
 #if defined(__x86_64__)
 	if (include_legacy_x86_64) {

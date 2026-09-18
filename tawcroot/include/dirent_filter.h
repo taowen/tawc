@@ -23,6 +23,13 @@ int tawcroot_dirent_filter_dname_is_reserved(const char *name,
 					     const int *reserved_fds,
 					     size_t n_reserved);
 
+/* Parse `name` (NUL-terminated) as a strict decimal fd number, the
+ * shape /proc/<pid>/fd entries have. Returns 1 and stores the value in
+ * *out on success; 0 for anything that isn't a bare decimal in
+ * [0, INT_MAX] (including "." and ".."). Used by the close_range
+ * emulation to turn a dirent listing back into fd numbers. */
+int tawcroot_dirent_filter_dname_to_fd(const char *name, int *out);
+
 /* Compact a linux_dirent64 buffer in place, dropping entries whose
  * d_name parses to a reserved fd. Returns the new byte length
  * (0 <= rv <= n). The buffer is guest memory, so records are sanity-

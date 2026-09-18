@@ -340,6 +340,37 @@ Two AVDs are supported:
   `run-integration-tests.sh` probes `su -c 'id -u'` and marks
   root-requiring tests ignored via `--cfg tawc_skip_root_on_target`.)
 
+A third, **optional** AVD exists for one specific job:
+
+- `tawc-api30` — stock API 30 (`system-images;android-30;google_apis;
+  x86_64`, kernel 5.4). Not part of any standing test run; create it
+  when you need to check behaviour against an *old* Android seccomp
+  policy or an old kernel. `minSdk` is 29, so the APK installs.
+  One-time setup (~1 GB download):
+
+      sdkmanager 'system-images;android-30;google_apis;x86_64'
+      echo no | avdmanager create avd -n tawc-api30 \
+          -k 'system-images;android-30;google_apis;x86_64' -d 'pixel_5'
+
+  Drive it with `TAWC_AVD=tawc-api30 scripts/emulator.sh start rootless`
+  (and the same `TAWC_AVD=` for `stop` — bare `stop` only knows the two
+  standard AVDs). Known good there: the Arch install, `pacman-key
+  --init/--populate`, `pacman -Sy <pkg>` with signature checking, and
+  the whole `tawcroot_prodenv::` suite except the two *dynamic*
+  (bionic-linked) fixtures, which SIGSEGV because the NDK builds them
+  against a newer bionic than API 30 ships. Known broken there:
+  `scripts/rootfs-run.sh` / `tawc-exec --in-rootfs` run the guest but
+  relay no stdio and exit 0 — see
+  issues/rootfs-session-no-stdio-on-api-30.md. Work around it by
+  invoking `libtawcroot.so` directly through the broker's ARGV form.
+
+  What it bought us: it is where wmww/tawc#14 reproduced. Android's
+  policy below API 34 RET_TRAPs `close_range` (NR 436), and a handler
+  that re-issued it was force-killed mid-guest — see "Never emit a
+  syscall newer than the oldest Android policy" in
+  notes/tawcroot/sigsys-handler.md. Worth recreating whenever a change
+  touches the handler's raw-syscall set.
+
 To create the rootless AVD (one-time):
 
     echo no | avdmanager create avd -n tawc-rootless \

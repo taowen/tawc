@@ -14,6 +14,7 @@
  *
  * Pure-function helpers tested here:
  *   - tawcroot_dirent_filter_is_proc_fd_link: gate predicate
+ *   - tawcroot_dirent_filter_dname_to_fd: d_name -> fd number
  *   - tawcroot_dirent_filter_dname_is_reserved: per-entry predicate
  *   - tawcroot_dirent_filter_compact: in-place buffer compaction
  *
@@ -102,6 +103,42 @@ test(is_proc_fd_link_pid_with_letters_does_not_match)
 	/* Pids are pure digits; /proc/12a3/fd shouldn't match. */
 	const char s[] = "/proc/12a3/fd";
 	test_int_eq(tawcroot_dirent_filter_is_proc_fd_link(s, sizeof s - 1), 0);
+}
+
+/* --- dname_to_fd ---------------------------------------------------- */
+/* The close_range emulation walks /proc/self/fd and turns each d_name
+ * back into an fd number with this. */
+
+test(dname_to_fd_basics)
+{
+	int fd = -1;
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd("0", &fd), 1);
+	test_int_eq(fd, 0);
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd("1007", &fd), 1);
+	test_int_eq(fd, 1007);
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd("2147483647", &fd), 1);
+	test_int_eq(fd, 2147483647);
+}
+
+test(dname_to_fd_rejects_non_numeric)
+{
+	int fd = -1;
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd(".", &fd), 0);
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd("..", &fd), 0);
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd("", &fd), 0);
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd("12a", &fd), 0);
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd("+3", &fd), 0);
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd("-3", &fd), 0);
+	test_int_eq(fd, -1);  /* untouched on rejection */
+}
+
+test(dname_to_fd_rejects_past_int_max)
+{
+	int fd = -1;
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd("2147483648", &fd), 0);
+	test_int_eq(tawcroot_dirent_filter_dname_to_fd(
+		"999999999999999999999", &fd), 0);
+	test_int_eq(fd, -1);
 }
 
 /* --- dname_is_reserved ---------------------------------------------- */

@@ -198,6 +198,48 @@ Android's already-stacked zygote filter. If Android `TRAP`s or
 `KILL`s one of these raw syscalls from the stub, pick a different
 primitive before building on it.
 
+### Never emit a syscall newer than the oldest Android policy
+
+A nested SIGSYS is fatal, silently. Our `SIGSYS` handler is installed
+with `sa_mask = ~0`, so SIGSYS is blocked while it runs; if a raw
+syscall the handler issues is itself `RET_TRAP`ped by Android's
+zygote filter, the kernel cannot deliver the second SIGSYS and
+force-kills the process — no log, no exit code, no core. The guest
+just vanishes.
+
+The rule that follows: **a handler may only emit syscall numbers that
+every Android policy we support already allows.** Android's app
+filter is generated from bionic's syscall list at the API level the
+device shipped with, so "old enough for bionic at `minSdk`" is the
+real test — not "old enough for the kernel". seccomp runs *before*
+the kernel's unknown-syscall check, so a new kernel does not rescue a
+new NR from an old policy either.
+
+Known instances, all in `src/syscalls_fd.c`:
+
+- `close_range` (NR 436, bionic API 34): **emulated**, never
+  re-issued. `handle_close_range` opens `/proc/self/fd`,
+  `getdents64`-walks it, and closes (or sets `FD_CLOEXEC` on) each
+  guest fd in range, skipping the reserved table, rescanning until a
+  pass closes nothing. Falls back to a linear loop bounded by
+  `prlimit64(RLIMIT_NOFILE)` when `/proc` can't be opened. This was
+  wmww/tawc#14: glibc's pre-exec `closefrom` killed every
+  gpg/gpg-agent/dirmngr spawn on an Android 11 device, surfacing as
+  pacman's "GPGME error: Invalid crypto engine".
+- `dup2` → `dup3`, `poll` → `ppoll`, `select` → `pselect6`,
+  `epoll_wait` → `epoll_pwait`, `pipe` → `pipe2`, and friends on
+  x86_64: the legacy NR is lp32-only in bionic's allowlist, so the
+  handler issues the modern sibling.
+- `faccessat2` (NR 439): trapped and routed to `faccessat`.
+
+Test coverage for the rule is the synthesized android filter
+(`tawcroot/tests/handler/androidfilter/wrap.c`), which `RET_TRAP`s the
+version-gated NRs — including 436 — so any handler that re-emits one
+kills the testhost and fails the whole module. The prod-env layer
+(`tests/integration/tests/tawcroot_prodenv.rs`) is the matching
+real-policy check, but only on whatever API the target AVD or phone
+runs.
+
 ### Why non-PIE
 
 The IP-based allowlisting in the BPF filter bakes

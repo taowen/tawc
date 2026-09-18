@@ -35,11 +35,9 @@ int tawcroot_dirent_filter_is_proc_fd_link(const char *link, long n)
 	return link[i] == '/' && link[i+1] == 'f' && link[i+2] == 'd';
 }
 
-int tawcroot_dirent_filter_dname_is_reserved(const char *name,
-					     const int *reserved_fds,
-					     size_t n_reserved)
+int tawcroot_dirent_filter_dname_to_fd(const char *name, int *out)
 {
-	if (!name || !reserved_fds || n_reserved == 0) return 0;
+	if (!name || !out) return 0;
 	/* Accumulate in unsigned long so a long numeric d_name can't
 	 * trigger signed-overflow UB during the *10 multiply (the .o
 	 * for the post-multiply check is allowed to elide it under
@@ -50,12 +48,23 @@ int tawcroot_dirent_filter_dname_is_reserved(const char *name,
 	while (*p) {
 		if (*p < '0' || *p > '9') return 0;
 		v = v * 10 + (unsigned long)(*p - '0');
-		/* Reserved fds are int — anything past INT_MAX cannot match. */
+		/* fds are int — anything past INT_MAX cannot be one. */
 		if (v > 0x7fffffffUL) return 0;
 		p++;
 	}
+	*out = (int)v;
+	return 1;
+}
+
+int tawcroot_dirent_filter_dname_is_reserved(const char *name,
+					     const int *reserved_fds,
+					     size_t n_reserved)
+{
+	if (!reserved_fds || n_reserved == 0) return 0;
+	int v;
+	if (!tawcroot_dirent_filter_dname_to_fd(name, &v)) return 0;
 	for (size_t i = 0; i < n_reserved; i++) {
-		if ((unsigned long)reserved_fds[i] == v) return 1;
+		if (reserved_fds[i] == v) return 1;
 	}
 	return 0;
 }

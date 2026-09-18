@@ -123,6 +123,117 @@ static long handle_close(const tawcroot_syscall_args *args, ucontext_t *uc)
 	return 0;
 }
 
+/* close_range(2) uapi. The flags live in <linux/close_range.h>, which
+ * the <linux/fcntl.h> in tawc_uapi.h doesn't pull in and which older
+ * kernel headers don't ship at all, so pin them here along with the
+ * clone flag the UNSHARE variant needs and the RLIMIT the fallback
+ * queries. */
+#define TAWC_CLOSE_RANGE_UNSHARE 0x02U
+#define TAWC_CLOSE_RANGE_CLOEXEC 0x04U
+#define TAWC_CLONE_FILES         0x0400U
+#define TAWC_RLIMIT_NOFILE       7
+
+/* One getdents64 batch for the close_range walk. /proc/<pid>/fd names
+ * are bare decimals, so a record is at most 19 + 11 bytes rounded up
+ * to 32 — this holds 16 fds per batch and keeps the frame well inside
+ * the 1 KiB handler cap (stack_budget.h). */
+#define CLOSE_RANGE_DENTS_BUF 512
+
+/* Apply the guest's requested action to one fd. Per-fd errors are
+ * ignored, exactly as the kernel's close_range does. */
+static void close_range_act(unsigned int fd, unsigned int flags)
+{
+	if (flags & TAWC_CLOSE_RANGE_CLOEXEC)
+		(void)TAWC_RAW(TAWC_SYS_fcntl, (long)fd, F_SETFD,
+			       FD_CLOEXEC, 0, 0, 0);
+	else
+		(void)TAWC_RAW(TAWC_SYS_close, (long)fd, 0, 0, 0, 0, 0);
+}
+
+/* Last-resort walk when /proc/self/fd can't be opened (EMFILE/ENFILE,
+ * no /proc mounted): try every number up to the soft RLIMIT_NOFILE.
+ * Slow, but bounded and correct, and only reachable when the process
+ * is already out of descriptors. */
+static long close_range_linear(unsigned int first, unsigned int last,
+			       unsigned int flags)
+{
+	struct { unsigned long long cur, max; } rl = { 0, 0 };
+	unsigned int hi = last;
+	if (TAWC_RAW(TAWC_SYS_prlimit64, 0, TAWC_RLIMIT_NOFILE,
+		     0, (long)&rl, 0, 0) == 0 &&
+	    rl.cur > 0 && rl.cur - 1 < (unsigned long long)hi)
+		hi = (unsigned int)(rl.cur - 1);
+	if (first > hi) return 0;
+	for (unsigned int fd = first;; fd++) {
+		if (!tawcroot_fd_is_reserved((int)fd))
+			close_range_act(fd, flags);
+		if (fd == hi) break;
+	}
+	return 0;
+}
+
+/* One pass over an already-rewound /proc/self/fd. Returns the number of
+ * fds acted on, or -errno if getdents64 itself failed. */
+static long close_range_pass(int dirfd, unsigned int first,
+			     unsigned int last, unsigned int flags)
+{
+	char buf[CLOSE_RANGE_DENTS_BUF];
+	long acted = 0;
+	for (;;) {
+		long n = TAWC_RAW(TAWC_SYS_getdents64, dirfd, (long)buf,
+				  (long)sizeof buf, 0, 0, 0);
+		if (n < 0) return n;
+		if (n == 0) return acted;
+		for (long i = 0; i + 19 <= n;) {
+			unsigned short reclen;
+			__builtin_memcpy(&reclen, buf + i + 16, 2);
+			if (reclen < 20 || i + (long)reclen > n) break;
+			const char *name = buf + i + 19;
+			/* The kernel NUL-terminates inside the record; bail
+			 * on the buffer rather than trust it blindly. */
+			long k = i + 19;
+			while (k < i + reclen && buf[k]) k++;
+			if (k == i + reclen) break;
+			i += reclen;
+
+			int fd;
+			if (!tawcroot_dirent_filter_dname_to_fd(name, &fd))
+				continue;  /* "." / ".." */
+			if ((unsigned int)fd < first ||
+			    (unsigned int)fd > last) continue;
+			if (fd == dirfd) continue;  /* ours, closed below */
+			if (tawcroot_fd_is_reserved(fd)) continue;
+			close_range_act((unsigned int)fd, flags);
+			acted++;
+		}
+	}
+}
+
+/* close_range is EMULATED, never re-issued.
+ *
+ * Android's zygote seccomp policy is generated from bionic's syscall
+ * list, and bionic only gained close_range at API 34 — so every older
+ * policy (the app's minSdk is 29) RET_TRAPs NR 436. SIGSYS is masked
+ * inside our own SIGSYS handler (sa_mask = ~0), so a raw 436 from here
+ * nests a trap the kernel answers by force-killing the process: no
+ * log, no exit code. glibc's closefrom-before-exec hits this on every
+ * gpg/gpg-agent/dirmngr spawn, which surfaces as pacman's "GPGME
+ * error: Invalid crypto engine" (wmww/tawc#14). seccomp runs before
+ * the kernel's ENOSYS check, so a newer kernel doesn't help either.
+ *
+ * So: walk /proc/self/fd with syscalls every Android policy allows
+ * (openat, getdents64, close, fcntl, lseek), skipping our reserved
+ * slots. Cost scales with open fds rather than with RLIMIT_NOFILE,
+ * and the general rule this is an instance of — a handler must never
+ * emit a syscall newer than the oldest Android policy we support —
+ * is in notes/tawcroot/sigsys-handler.md.
+ *
+ * Two shapes preceded this one: trimming `last` to the base, which
+ * leaked every guest fd at or above it across exec, and then issuing
+ * one raw close_range per gap between reserved fds. The exact
+ * membership test both of those introduced is what keeps
+ * CLOSE_RANGE_CLOEXEC honest — our non-CLOEXEC shm fds must not be
+ * swept into CLOEXEC — and the walk keeps it. */
 static long handle_close_range(const tawcroot_syscall_args *args,
 			       ucontext_t *uc)
 {
@@ -131,44 +242,39 @@ static long handle_close_range(const tawcroot_syscall_args *args,
 	unsigned int last  = (unsigned int)args->b;
 	unsigned int flags = (unsigned int)args->c;
 
-	/* Close everything the guest asked for except our reserved slots:
-	 * walk the range upwards, issuing one close_range per gap between
-	 * them. With the ~8 reserved fds we ship (clustered right above the
-	 * base) a full `close_range(3, ~0U)` costs two kernel calls.
-	 *
-	 * Trimming `last` to the base instead — the old shape — silently
-	 * left every guest fd at or above the base open, i.e. an fd leak
-	 * across exec for exactly the programs careful enough to closefrom.
-	 * Splitting also gets CLOSE_RANGE_CLOEXEC right: our non-CLOEXEC
-	 * shm fds must not be swept into CLOEXEC. */
-	if (first > last)
-		return TAWC_RAW(TAWC_SYS_close_range, first, last, flags,
-				0, 0, 0);  /* kernel's EINVAL, verbatim */
+	if (first > last) return TAWC_EINVAL;
+	if (flags & ~(TAWC_CLOSE_RANGE_UNSHARE | TAWC_CLOSE_RANGE_CLOEXEC))
+		return TAWC_EINVAL;
 
-	unsigned int cur = first;
-	for (;;) {
-		/* Lowest reserved fd in [cur, last], if any. */
-		unsigned int next = 0;
-		int have = 0;
-		size_t n = __atomic_load_n(&tawcroot_n_reserved_fds,
-					   __ATOMIC_ACQUIRE);
-		for (size_t i = 0; i < n; i++) {
-			int r = __atomic_load_n(&tawcroot_reserved_fds[i],
-						__ATOMIC_RELAXED);
-			if (r < 0) continue;  /* tombstone */
-			unsigned int u = (unsigned int)r;
-			if (u < cur || u > last) continue;
-			if (!have || u < next) { next = u; have = 1; }
-		}
-		if (!have || next > cur) {
-			long rv = TAWC_RAW(TAWC_SYS_close_range, cur,
-					   have ? next - 1 : last, flags,
-					   0, 0, 0);
-			if (rv < 0) return rv;
-		}
-		if (!have || next == last) return 0;
-		cur = next + 1;
+	/* unshare(2) is ancient and allowed by every Android app policy
+	 * (verified on the emulator), so this one is safe to emit raw.
+	 * Our own filter traps NR unshare for the guest, but the raw stub
+	 * is IP-allowlisted past it. */
+	if (flags & TAWC_CLOSE_RANGE_UNSHARE) {
+		long rv = TAWC_RAW(TAWC_SYS_unshare, TAWC_CLONE_FILES,
+				   0, 0, 0, 0, 0);
+		if (rv < 0) return rv;
 	}
+
+	long dirfd = TAWC_RAW(TAWC_SYS_openat, AT_FDCWD,
+			      (long)"/proc/self/fd",
+			      O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0, 0, 0);
+	if (dirfd < 0) return close_range_linear(first, last, flags);
+
+	/* Closing mutates the directory we're iterating, so repeat until
+	 * a pass finds nothing left to close (glibc __closefrom_fallback's
+	 * shape). CLOEXEC mode doesn't remove entries, so one pass does. */
+	for (;;) {
+		long acted = close_range_pass((int)dirfd, first, last, flags);
+		if (acted < 0) {
+			tawc_close((int)dirfd);
+			return close_range_linear(first, last, flags);
+		}
+		if (acted == 0 || (flags & TAWC_CLOSE_RANGE_CLOEXEC)) break;
+		if (tawc_lseek((int)dirfd, 0, SEEK_SET) < 0) break;
+	}
+	tawc_close((int)dirfd);
+	return 0;
 }
 
 static long handle_dup(const tawcroot_syscall_args *args, ucontext_t *uc)

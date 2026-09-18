@@ -2978,53 +2978,105 @@ static int test_internal_fd_protection(void)
 	tawc_io_kv_dec("    fd", guest_hi);
 
 	/* close_range over a wide range that crosses the boundary: the
-	 * handler splits around its own fds, so every guest fd in the
-	 * range dies and every reserved fd survives. We start at fd 3 so
-	 * stderr stays open and we can keep printing test results after.
-	 * close_range was added in kernel 5.9; on older kernels the
-	 * handler's raw syscall returns -ENOSYS. Skip rather than fail
-	 * (out-of-scope to polyfill new syscalls with older ones). */
+	 * handler walks /proc/self/fd and skips its own fds, so every
+	 * guest fd in the range dies and every reserved fd survives. We
+	 * start at fd 3 so stderr stays open and we can keep printing
+	 * test results after.
+	 *
+	 * No kernel-version gate: handle_close_range emulates NR 436
+	 * rather than issuing it (Android RET_TRAPs it below API 34 —
+	 * wmww/tawc#14), so this works on any kernel, and under the
+	 * androidfilter wrapper — which traps 436 — it also proves no raw
+	 * 436 escapes the handler. */
 	INLINE_SYS6(TAWC_SYS_close_range, 3, 0xffffffffu,
 		    0, 0, 0, 0, rv);
-	bool close_range_unsupported = (rv == -38 /*ENOSYS*/);
-	if (close_range_unsupported) {
-		tawc_io_skip(
-			"close_range(3, ~0u) -> 0 (splits around reserved fds)",
-			"kernel <5.9: close_range not available");
-	} else {
-		fails += tawc_io_step(
-			"close_range(3, ~0u) -> 0 (splits around reserved fds)",
-			rv == 0);
-		tawc_io_kv_dec("    rv", rv);
-	}
+	fails += tawc_io_step(
+		"close_range(3, ~0u) -> 0 (emulated; skips reserved fds)",
+		rv == 0);
+	tawc_io_kv_dec("    rv", rv);
 
 	/* The guest's high fd is gone; ours (checked below) is not. */
-	if (close_range_unsupported) {
-		tawc_io_skip("close_range closed the guest's fd above the base",
-			     "kernel <5.9: close_range not available");
-	} else {
-		long gv;
-		INLINE_SYS6(TAWC_SYS_fcntl, guest_hi, 1 /*F_GETFD*/,
-			    0, 0, 0, 0, gv);
-		fails += tawc_io_step(
-			"close_range closed the guest's fd above the base",
-			gv == -9);
-		tawc_io_kv_dec("    rv", gv);
-	}
+	long gv;
+	INLINE_SYS6(TAWC_SYS_fcntl, guest_hi, 1 /*F_GETFD*/,
+		    0, 0, 0, 0, gv);
+	fails += tawc_io_step(
+		"close_range closed the guest's fd above the base",
+		gv == -9);
+	tawc_io_kv_dec("    rv", gv);
 
 	/* close_range entirely above the base: no reserved fd is harmed. */
-	if (close_range_unsupported) {
-		tawc_io_skip(
-			"close_range(base, ~0u) -> 0 (reserved fds skipped)",
-			"kernel <5.9: close_range not available");
-	} else {
-		INLINE_SYS6(TAWC_SYS_close_range,
-			    TAWCROOT_RESERVED_FD_BASE,
-			    0xffffffffu, 0, 0, 0, 0, rv);
-		fails += tawc_io_step(
-			"close_range(base, ~0u) -> 0 (reserved fds skipped)",
-			rv == 0);
+	INLINE_SYS6(TAWC_SYS_close_range,
+		    TAWCROOT_RESERVED_FD_BASE,
+		    0xffffffffu, 0, 0, 0, 0, rv);
+	fails += tawc_io_step(
+		"close_range(base, ~0u) -> 0 (reserved fds skipped)",
+		rv == 0);
+
+	/* Argument validation is the handler's job now, not the kernel's. */
+	INLINE_SYS6(TAWC_SYS_close_range, 5, 4, 0, 0, 0, 0, rv);
+	fails += tawc_io_step("close_range(5, 4) -> -EINVAL (first > last)",
+			      rv == -22);
+	INLINE_SYS6(TAWC_SYS_close_range, 3, 0xffffffffu,
+		    8 /*undefined flag*/, 0, 0, 0, rv);
+	fails += tawc_io_step("close_range(.., flags=8) -> -EINVAL",
+			      rv == -22);
+
+	/* CLOSE_RANGE_CLOEXEC marks the guest's fds instead of closing
+	 * them, and must leave ours alone — including their close-on-exec
+	 * state, which matters because the shm segments are deliberately
+	 * non-CLOEXEC. Reservation uses F_DUPFD_CLOEXEC, so clear the flag
+	 * on rootfs_fd through the raw stub (the guest-visible fcntl would
+	 * -EBADF) to stand in for one. */
+	long cloexec_fd;
+	INLINE_SYS6(TAWC_SYS_fcntl, 2, 0 /*F_DUPFD*/,
+		    TAWCROOT_RESERVED_FD_BASE + 256, 0, 0, 0, cloexec_fd);
+	fails += tawc_io_step("fcntl(F_DUPFD, base+256) -> high guest fd",
+			      cloexec_fd >= TAWCROOT_RESERVED_FD_BASE + 256);
+	(void)tawc_fcntl(tawcroot_rootfs_fd, F_SETFD, 0);
+	INLINE_SYS6(TAWC_SYS_close_range, TAWCROOT_RESERVED_FD_BASE,
+		    0xffffffffu, 4 /*CLOSE_RANGE_CLOEXEC*/, 0, 0, 0, rv);
+	fails += tawc_io_step("close_range(base, ~0u, CLOEXEC) -> 0", rv == 0);
+	INLINE_SYS6(TAWC_SYS_fcntl, cloexec_fd, 1 /*F_GETFD*/,
+		    0, 0, 0, 0, gv);
+	fails += tawc_io_step(
+		"CLOSE_RANGE_CLOEXEC set FD_CLOEXEC on the guest's fd",
+		gv == 1 /*FD_CLOEXEC*/);
+	tawc_io_kv_dec("    flags", gv);
+	long rflags = tawc_fcntl(tawcroot_rootfs_fd, F_GETFD, 0);
+	fails += tawc_io_step(
+		"CLOSE_RANGE_CLOEXEC left the reserved fd non-CLOEXEC",
+		rflags == 0);
+	tawc_io_kv_dec("    flags", rflags);
+	(void)tawc_fcntl(tawcroot_rootfs_fd, F_SETFD, FD_CLOEXEC);
+	INLINE_SYS6(TAWC_SYS_close, cloexec_fd, 0, 0, 0, 0, 0, rv);
+
+	/* More fds in range than one getdents64 batch holds: the walk has
+	 * to page through every batch, and the close-mode rescan (the dir
+	 * mutates as we close) has to terminate having closed them all. */
+	long many_lo = -1, many_hi = -1;
+	for (int i = 0; i < 64; i++) {
+		long d;
+		INLINE_SYS6(TAWC_SYS_fcntl, 2, 0 /*F_DUPFD*/,
+			    TAWCROOT_RESERVED_FD_BASE + 2048, 0, 0, 0, d);
+		if (d < 0) { many_lo = -1; break; }
+		if (many_lo < 0) many_lo = d;
+		many_hi = d;
 	}
+	fails += tawc_io_step("dup 64 guest fds at base+2048",
+			      many_lo >= TAWCROOT_RESERVED_FD_BASE + 2048 &&
+			      many_hi >= many_lo + 63);
+	INLINE_SYS6(TAWC_SYS_close_range, TAWCROOT_RESERVED_FD_BASE + 2048,
+		    0xffffffffu, 0, 0, 0, 0, rv);
+	long many_alive = 0;
+	for (long f = many_lo; f <= many_hi; f++) {
+		long fv;
+		INLINE_SYS6(TAWC_SYS_fcntl, f, 1 /*F_GETFD*/, 0, 0, 0, 0, fv);
+		if (fv >= 0) many_alive++;
+	}
+	fails += tawc_io_step(
+		"close_range closed all 64 (multi-batch dirent walk)",
+		rv == 0 && many_alive == 0);
+	tawc_io_kv_dec("    still open", many_alive);
 
 	/* fcntl(F_GETFD) on rootfs_fd: -EBADF. */
 	INLINE_SYS6(TAWC_SYS_fcntl, (long)tawcroot_rootfs_fd,

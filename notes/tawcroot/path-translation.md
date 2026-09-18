@@ -388,7 +388,8 @@ the target user. The privilege predicate everywhere is virtual
 
 - `close`, `close_range`, `dup`, `dup2`, `dup3`, `fcntl` → hide and
   protect tawcroot's reserved internal fd range; guest-visible fds
-  behave normally.
+  behave normally. `close_range` is emulated over `/proc/self/fd`
+  rather than re-issued (NR 436 is trapped by pre-API-34 policies).
 - `rt_sigaction`, `rt_sigprocmask` → virtualize `SIGSYS` so the guest
   cannot remove or block tawcroot's real trap handler.
 - `sigaltstack` → substitute undersized guest altstacks (our SIGSYS

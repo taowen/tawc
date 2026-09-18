@@ -131,6 +131,9 @@
 # define TAWC_SYS_umount2          39    /* aarch64 has no legacy umount */
 # define TAWC_SYS_unshare          97
 # define TAWC_SYS_setns           268
+/* close_range emulation (handle_close_range): unshare(CLONE_FILES) for
+ * CLOSE_RANGE_UNSHARE, and prlimit64 for the no-/proc fallback loop. */
+# define TAWC_SYS_prlimit64       261
 #elif defined(__x86_64__)
 # define TAWC_SYS_read            0
 # define TAWC_SYS_write           1
@@ -315,6 +318,9 @@
 # define TAWC_SYS_umount2         166   /* x86_64 has no legacy umount; glibc routes through umount2 */
 # define TAWC_SYS_unshare         272
 # define TAWC_SYS_setns           308
+/* close_range emulation (handle_close_range): unshare(CLONE_FILES) for
+ * CLOSE_RANGE_UNSHARE, and prlimit64 for the no-/proc fallback loop. */
+# define TAWC_SYS_prlimit64       302
 #else
 # error "unsupported arch"
 #endif
