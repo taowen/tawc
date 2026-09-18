@@ -1,10 +1,6 @@
 # Tess's Android Wayland Compositor
 TAWC runs CLI and graphical Linux programs on Android without root. Graphical apps get hardware acceleration with the phone's native graphics stack. The project consists of tawcroot (a performant alternative to PRoot), a Wayland compositor, and the UI to put it all together.
 
-This project is agent-built, primarily using Claude Code and latest Anthropic models.
-
-**I won't be working on TAWC for a few weeks, thanks for your patience! I'm so glad people are trying it out and the bug reports are genuinely useful. Keep 'em coming and I'll go through them all when I'm back.**
-
 ## Features
 - The app embeds Termux's widget for a familiar terminal UI (the Termux app itself is not required)
 - When graphical apps are installed they can be run from TAWC's launcher menu
