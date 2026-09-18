@@ -128,6 +128,18 @@ then human steps 3.3 and 4.
       before reaching its own "R8 is not used → minor" branch for any
       unminified APK. Ours is unminified on purpose (notes/release.md).
       Mention it in the MR rather than working around it.
+      The probe landed upstream the same day (fdroiddata !49015,
+      "CI: show dangerour permission specially and check R8", merged
+      2026-09-18 08:00 UTC, ~5 h before our pipeline) and was still
+      unfixed on master that afternoon. It is an MR-only lint, not a
+      buildserver gate, and the script's own `else` branch shows a
+      missing marker is meant to be a "minor" note, not a failure —
+      unminified apps are fine on F-Droid. Fix is `|| true` inside the
+      `$(…)`. Diagnosis is inferred (log ends at that line; shell
+      behaviour reproduced locally; our dex has `~~D8`, no `~~R8`), not
+      read off an error message — re-check before citing it if the job
+      still fails once upstream has touched that code. Reporting it
+      upstream is the maintainer's call (human-only, as with the MR).
 - No existing RFP/fdroiddata issue or MR mentions the app.
 - 3.3 is on hold pending [reproducible-builds.md](reproducible-builds.md):
   F-Droid cannot switch an app to the developer's signature after first
