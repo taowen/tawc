@@ -157,6 +157,36 @@ then human steps 3.3 and 4.
   published, signed, verified asset, while `Binaries:` is one URL
   pattern.
 
+## Progress 2026-09-18 (evening) — v3 published, MR branch ready
+
+- v3 is tagged, signed and published:
+  https://github.com/wmww/tawc/releases/tag/v3. Reproducible builds are
+  done end to end (plans/reproducible-builds.md steps 1-7).
+- **fdroiddata CI proved the reproducible build on their own runner**:
+  `fdroid build` downloaded the published `tawc-v3.apk`, rebuilt v3 from
+  source, and logged "compared built binary to supplied reference binary
+  successfully" + "supplied reference binary has allowed signer
+  0b2262d2…". Confirmed on two separate pipelines.
+- Fork branch `me.phie.tawc` on gitlab.com/sphi/fdroiddata is rebased
+  onto upstream master and carries the v3 recipe. Working checkout is
+  `build/fdroiddata-full` (blobless clone); see notes/building.md
+  "Working on the fdroiddata recipe" for why, and for the shallow-push
+  and lazy-blob traps.
+- CI status on the current branch: 8 of 9 jobs pass. Only `check apk`
+  fails, on an upstream script bug — see below. `checkupdates` was fixed
+  by adding `AutoName: TAWC` (it writes that field in itself and then
+  fails its own `git diff --exit-code`).
+- `check apk`'s failure is now **confirmed, not inferred**. Its
+  `codequality.json` artifact — reachable only at
+  `/-/jobs/<id>/artifacts/download?file_type=codequality`, since the job
+  declares a `reports:` artifact and no `paths:`, so every other
+  artifact URL 404s — ends mid-write after the `abi_size` entry, has no
+  `r8_marker` entry, and is missing its closing bracket. The failing
+  line is `.gitlab-ci.yml:644` between those two writes. Our APK carries
+  `~~D8` and no `~~R8`, and that assignment exits 1 under the job's
+  `-o pipefail`.
+- Remaining: **HUMAN** — open the MR (step 3.3), then step 4.
+
 ## Step 1 — repo hygiene fixes (agent, in this repo)
 
 1. Pin and verify the tarball deps: add sha256 checks to the libmd fetch in

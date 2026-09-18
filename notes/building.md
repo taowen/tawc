@@ -615,6 +615,40 @@ Two modes:
 `run.sh --cpuset-cpus <spec>` and `--fresh-cache` vary core count and
 cache warmth, which is how a build gets checked for determinism.
 
+### Working on the fdroiddata recipe
+
+The recipe lives at `fdroid/me.phie.tawc.yml` here and is submitted from
+a branch (`me.phie.tawc`) on the maintainer's fork,
+`gitlab.com/sphi/fdroiddata`. To update it:
+
+1. Copy `fdroid/me.phie.tawc.yml` over `metadata/me.phie.tawc.yml` in
+   the fork checkout, then run `fdroid rewritemeta me.phie.tawc` in the
+   buildserver image — fdroiddata CI enforces canonical formatting and
+   strips every comment. The repo copy keeps its comments; the fork copy
+   is the canonical one.
+2. Rebase onto current `upstream/master` before submitting.
+3. Keep it a single commit, message `New app: TAWC (me.phie.tawc)`,
+   authored by the maintainer, with no trailers — that is fdroiddata's
+   house style for new-app MRs.
+
+Two traps, both hit for real:
+
+- **GitLab refuses pushes from a shallow clone** ("shallow update not
+  allowed"), and `--unshallow` on fdroiddata pulls its entire history.
+  Use a blobless clone instead: `git clone --filter=blob:none` gives the
+  full commit graph with blobs on demand, is not shallow, and lands in
+  ~190 MB. `build/fdroiddata-full` is that clone.
+- In a blobless clone with both `origin` (the fork) and `upstream`
+  remotes, checking out `upstream/master` makes git lazily fetch blobs
+  from the `origin` promisor, which does not have them:
+  `fatal: git upload-pack: not our ref …`. Harmless when only committing
+  a new file (the commit is built from the index), but verify the result
+  with `git diff --name-status upstream/master HEAD` before pushing.
+
+`fdroid checkupdates` writes `AutoName:` into the recipe when it is
+absent and the CI job then fails its own `git diff --exit-code`, so that
+field has to be present and correct.
+
 ### Third-party license text (checked-in asset)
 
 ```bash
