@@ -38,6 +38,11 @@ static inline void tawcroot_arch_write_return(ucontext_t *uc, long rv)
 	uc->uc_mcontext.regs[0] = (__u64)rv;
 }
 
+static inline uintptr_t tawcroot_arch_sp(const ucontext_t *uc)
+{
+	return (uintptr_t)uc->uc_mcontext.sp;
+}
+
 static inline uintptr_t tawcroot_arch_resume_pc(const ucontext_t *uc)
 {
 	return (uintptr_t)uc->uc_mcontext.pc;

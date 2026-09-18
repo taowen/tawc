@@ -112,6 +112,10 @@ static bool build_rootfs(void)
 		  "static_fork_open_argv1" },
 		{ TAWCROOT_STATIC_SMALL_STACK_OPEN_ARGV1_BIN,
 		  "static_small_stack_open_argv1" },
+		{ TAWCROOT_STATIC_SIGALTSTACK_OPEN_ARGV1_BIN,
+		  "static_sigaltstack_open_argv1" },
+		{ TAWCROOT_STATIC_SIGALTSTACK_SMALL_OPEN_ARGV1_BIN,
+		  "static_sigaltstack_small_open_argv1" },
 		{ TAWCROOT_STATIC_FEXECVE_ARGV1_BIN,
 		  "static_fexecve_argv1" },
 		{ TAWCROOT_STATIC_OPEN_CREAT_ARGV1_BIN,
@@ -414,6 +418,37 @@ test(prod_path_trap_from_small_stack_thread)
 
 	(void)unlink(host_marker);
 	rh_rmrf(FAKE_ROOTFS);
+}
+
+/* Fixture exit codes: 50 = frame hit the thread stack (SA_ONSTACK lost),
+ * 51 = altstack (not) written, 52 = sigaltstack readback wrong. */
+static int sigaltstack_case(const char *bin, const char *guest_marker)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	if (!build_rootfs()) return -1;
+
+	char host_marker[PATH_MAX];
+	snprintf(host_marker, sizeof host_marker,
+	         "%s%s", FAKE_ROOTFS, guest_marker);
+
+	const char *args[] = { "-r", FAKE_ROOTFS, "--", bin, guest_marker, NULL };
+	int rc = run_with(args);
+	if (rc == 42 && access(host_marker, F_OK) != 0) rc = -2;
+
+	rh_rmrf(FAKE_ROOTFS);
+	return rc;
+}
+
+test(prod_path_trap_lands_on_guest_sigaltstack)
+{
+	test_int_eq(sigaltstack_case("/bin/static_sigaltstack_open_argv1",
+	                             "/marker-sigaltstack"), 42);
+}
+
+test(prod_undersized_sigaltstack_is_substituted)
+{
+	test_int_eq(sigaltstack_case("/bin/static_sigaltstack_small_open_argv1",
+	                             "/marker-sigaltstack-small"), 42);
 }
 
 test(prod_long_path_over_1024_still_translates)

@@ -384,6 +384,21 @@ covered by unit/hosted/smoke tests.)
   thread's first `rt_sigprocmask`. Bounded to a single wrong
   shadow-mask read; fixing it means resetting the table on the
   fork/clone return path for a race nobody has observed.
+- **Undersized `sigaltstack`s are substituted.** A guest altstack
+  below `TAWC_SIGALT_MIN` is replaced by a tawcroot-owned 16 KiB slot
+  (sigsys-handler.md "Handler stack budget"), so the guest's *own*
+  handlers also run there — disposition is per-signal but the stack is
+  per-thread. Readback is faithful; a handler that checks its SP
+  against its own buffer would notice. Slots leak on involuntary thread
+  death, for other threads' slots in a fork child, and for a
+  `sigaltstack` made inside an `SS_AUTODISARM` handler; a vfork child
+  replacing an inherited substituted stack frees the parent's slot.
+  All bounded by the fallback: slab exhausted → guest stack as-is.
+- **Freed-but-still-registered altstacks get written.** `SA_ONSTACK`
+  means every trapped syscall writes the guest's altstack, not just its
+  own rare signals, so a guest that frees the buffer without
+  `SS_DISABLE` corrupts that memory. Guest bug; Go, Rust std and
+  Python's faulthandler all disable first.
 - **Path-scratch pool can in principle livelock.** One handler chain
   holds 3–5 of the 128 slots while acquiring more, and acquire spins
   forever on exhaustion — a few dozen threads all mid-chain could
@@ -551,6 +566,8 @@ Android 14, API 34, kernel 5.4.284):
   `untrusted_app` (no SELinux hook in the seccomp installation path)
 - **`apk_data_file` exec** — confirmed working (proot's
   `libproot-loader.so` already proves this path)
+- **Trapped-syscall stack cost** — ~6.2 KiB below SP for a
+  path-resolving `openat` (~4.5 KiB kernel frame, no SVE, + handler)
 - **NDK static linking** — `libc.a` present for all ABIs in
   NDK r27. `-static -no-pie` produces ET_EXEC with no PT_INTERP
 

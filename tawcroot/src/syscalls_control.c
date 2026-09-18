@@ -18,6 +18,8 @@
  *     when reporting the previous mask. Guest reads back what it set;
  *     the kernel never actually blocks SIGSYS, so traps continue
  *     reaching our handler.
+ *   - `sigaltstack`: virtualize via uc->uc_stack so undersized guest
+ *     altstacks never receive our SA_ONSTACK frame (sigalt.h).
  *   - Other signals are unaffected.
  */
 
@@ -28,6 +30,7 @@
 #include "dispatch.h"
 #include "errno_neg.h"
 #include "raw_sys.h"
+#include "sigalt.h"
 #include "signal_shadow.h"
 #include "syscalls_control.h"
 #include "sysnr.h"
@@ -297,12 +300,36 @@ static long handle_rt_sigprocmask(const tawcroot_syscall_args *args,
 	return 0;
 }
 
+/* sigaltstack(ss, old_ss). Never forwarded — see sigalt.h. Old is
+ * copied out before anything mutates, so EFAULT leaves no trace. */
+static long handle_sigaltstack(const tawcroot_syscall_args *args,
+			       ucontext_t *uc)
+{
+	const void *guest_ss  = (const void *)(uintptr_t)args->a;
+	void       *guest_old = (void *)(uintptr_t)args->b;
+	stack_t ss, old;
+
+	if (guest_ss && tawc_copy_from_guest(&ss, sizeof ss, guest_ss) < 0)
+		return TAWC_EFAULT;
+	long r = tawc_sigalt_check(&uc->uc_stack, tawcroot_arch_sp(uc),
+				   guest_ss ? &ss : NULL,
+				   guest_old ? &old : NULL);
+	if (r < 0) return r;
+	if (guest_old && tawc_copy_to_guest(guest_old, &old, sizeof old) < 0)
+		return TAWC_EFAULT;
+	if (guest_ss)
+		tawc_sigalt_commit(&uc->uc_stack, &ss);
+	return 0;
+}
+
 /* exit(2) — per-thread exit (kills only the calling thread, not the
  * process; that's exit_group). Trapped purely so we can clear the
  * dying thread's blocked-shadow slot before the kernel reaps the tid;
  * otherwise a future thread that reuses this tid would read the previous
  * owner's stale "SIGSYS blocked" bit until its own first rt_sigprocmask.
- * (signal_shadow.c has the full rationale.)
+ * (signal_shadow.c has the full rationale.) Also frees the thread's
+ * substitute altstack slot — which, SA_ONSTACK, we are running on, so
+ * nothing may be read off the stack after that release.
  *
  * exit_group is not hooked: it kills every thread and the OS reclaims
  * everything, so per-slot cleanup would be wasted work. Involuntary
@@ -314,10 +341,11 @@ static long handle_rt_sigprocmask(const tawcroot_syscall_args *args,
  * the bottom of the signal-handler control flow on the trapping thread. */
 static long handle_exit(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
-	(void)uc;
+	long code = args->a;
 	long tid = TAWC_RAW(TAWC_SYS_gettid, 0, 0, 0, 0, 0, 0);
 	tawc_sigshadow_blocked_clear((int)tid);
-	TAWC_RAW(TAWC_SYS_exit, args->a, 0, 0, 0, 0, 0);
+	tawc_sigalt_thread_exit(&uc->uc_stack);
+	TAWC_RAW(TAWC_SYS_exit, code, 0, 0, 0, 0, 0);
 	__builtin_unreachable();
 }
 
@@ -387,6 +415,7 @@ void tawcroot_control_register(void)
 	tawcroot_dispatch_install(TAWC_SYS_prctl,           handle_prctl);
 	tawcroot_dispatch_install(TAWC_SYS_rt_sigaction,    handle_rt_sigaction);
 	tawcroot_dispatch_install(TAWC_SYS_rt_sigprocmask,  handle_rt_sigprocmask);
+	tawcroot_dispatch_install(TAWC_SYS_sigaltstack,     handle_sigaltstack);
 	/* io_uring_setup: deny with -ENOSYS so guest libraries fall back to
 	 * syscall-based I/O which we can translate. The plan
 	 * (notes/tawcroot/path-translation.md "Open questions" #1) classifies a passed-through

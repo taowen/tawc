@@ -156,6 +156,7 @@ PROD_C := \
     $(SRC_T)/src/chroot.c \
     $(SRC_T)/src/shm.c \
     $(SRC_T)/src/signal_shadow.c \
+    $(SRC_T)/src/sigalt.c \
     $(SRC_T)/src/syscalls_socket.c \
     $(SRC_T)/src/usercopy.c \
     $(SRC_T)/src/loader_elf.c \
@@ -393,6 +394,18 @@ $(OUT)/programs/static_fork_open_argv1: $(SRC_TS)/integration/programs/static_fo
 # child stack, then child openat-creates argv[1]. Catches SIGSYS handler
 # stack regressions: the path-bearing trap runs on that tiny stack.
 $(OUT)/programs/static_small_stack_open_argv1: $(SRC_TS)/integration/programs/static_small_stack_open_argv1_x86_64.S | $(OUT)
+	@mkdir -p $(dir $@)
+	$(CC) -static -nostdlib -O2 -Wl,--build-id=none $< -o $@
+
+# static_sigaltstack{,_small}_open_argv1: trapped openat with an altstack
+# installed; asserts the SIGSYS frame lands on it (SA_ONSTACK), or on
+# tawcroot's substitute when the guest's is undersized. The small variant
+# #includes the base source.
+$(OUT)/programs/static_sigaltstack_open_argv1: $(SRC_TS)/integration/programs/static_sigaltstack_open_argv1_x86_64.S | $(OUT)
+	@mkdir -p $(dir $@)
+	$(CC) -static -nostdlib -O2 -Wl,--build-id=none $< -o $@
+
+$(OUT)/programs/static_sigaltstack_small_open_argv1: $(SRC_TS)/integration/programs/static_sigaltstack_small_open_argv1_x86_64.S $(SRC_TS)/integration/programs/static_sigaltstack_open_argv1_x86_64.S | $(OUT)
 	@mkdir -p $(dir $@)
 	$(CC) -static -nostdlib -O2 -Wl,--build-id=none $< -o $@
 

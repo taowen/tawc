@@ -271,6 +271,8 @@ the target user. The privilege predicate everywhere is virtual
   behave normally.
 - `rt_sigaction`, `rt_sigprocmask` → virtualize `SIGSYS` so the guest
   cannot remove or block tawcroot's real trap handler.
+- `sigaltstack` → substitute undersized guest altstacks (our SIGSYS
+  handler is `SA_ONSTACK`).
 - `seccomp`, `prctl(PR_SET_SECCOMP)`, relevant `prctl` seccomp queries
   → deny guest filter installation for MVP; expose only compatible
   query behavior.

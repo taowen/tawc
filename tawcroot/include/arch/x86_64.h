@@ -37,6 +37,11 @@ static inline void tawcroot_arch_write_return(ucontext_t *uc, long rv)
 	uc->uc_mcontext.gregs[REG_RAX] = (greg_t)rv;
 }
 
+static inline uintptr_t tawcroot_arch_sp(const ucontext_t *uc)
+{
+	return (uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+}
+
 static inline uintptr_t tawcroot_arch_resume_pc(const ucontext_t *uc)
 {
 	return (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];

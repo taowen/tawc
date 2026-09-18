@@ -112,6 +112,8 @@ build_static  static_expect_erofs_argv1
 build_static  static_sleep_open_creat_argv1
 build_static  static_fork_open_argv1
 build_static  static_small_stack_open_argv1
+build_static  static_sigaltstack_open_argv1
+build_static  static_sigaltstack_small_open_argv1
 build_static  static_fork_exec_argv1
 build_static  static_fork_closefrom_exec_argv1
 build_static  static_vfork_exec_then_fork_exec_argv1

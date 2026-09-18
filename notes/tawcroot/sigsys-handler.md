@@ -325,6 +325,8 @@ hardening:
 - `rt_sigprocmask` / `sigprocmask`: prevent guest code from blocking
   real `SIGSYS`. Maintain a guest-visible shadow mask if needed, but
   clear `SIGSYS` before forwarding the real mask to the kernel.
+- `sigaltstack`: keep guest altstacks big enough for our `SA_ONSTACK`
+  frame. See §"Handler stack budget".
 - `seccomp(SECCOMP_SET_MODE_*)` and `prctl(PR_SET_SECCOMP, ...)`:
   fake-accept — validate arguments with the kernel's exact
   `EFAULT`/`EINVAL` shapes (NULL-fprog support probes must keep
@@ -400,15 +402,49 @@ only and the handler has no genuine reason to re-enter itself.
 
 ### Handler stack budget
 
-The handler runs on the trapping guest thread's own stack — whatever
-size the guest's runtime chose. musl's default thread stack is 128 KiB;
-the supported floor is the 16 KiB pinned by the
-`static_small_stack_open_argv1` integration fixture (a clone child with
-an explicit 16 KiB stack doing a path-bearing open). The kernel signal
-frame alone costs up to ~5 KiB of that (xsave on x86_64, SVE state on
-aarch64), so the entire handler call chain must fit in roughly 10 KiB.
-`sigaltstack` cannot rescue this: it is per-thread state the guest owns
-and can replace, so we can never rely on it being installed.
+Where the handler runs is two-tier, because SIGSYS is registered
+`SA_ONSTACK`:
+
+- **Thread has a `sigaltstack`** → the kernel puts the signal frame, and
+  so our whole handler chain, there. This is what makes Go work at all:
+  goroutine stacks start at 2 KiB and the runtime issues syscalls
+  straight from them, but every M gets a 32 KiB altstack in
+  `runtime.minit`. Without `SA_ONSTACK` each trapped syscall wrote
+  ~6 KiB below a 2 KiB stack into the neighbouring goroutine stacks
+  (Go packs them, so nothing faults) and the process died later inside
+  the GC — `micro`, `fzf`, every Go program (GitHub issue #6).
+- **No altstack** → the kernel silently falls back to the trapping
+  thread's own stack, whatever size the guest's runtime chose. musl's
+  default thread stack is 128 KiB; the supported floor is the 16 KiB
+  pinned by the `static_small_stack_open_argv1` fixture (a clone child
+  with an explicit 16 KiB stack doing a path-bearing open). We can never
+  *rely* on an altstack — it is per-thread state the guest owns — so
+  this floor and the frame cap below still stand.
+
+Measured cost on the OnePlus 9 (no SVE; poison 1 MiB, clone a child
+mid-region, one syscall, scan for the lowest clobbered word): a trapped
+`getpid` writes ~4.7 KiB below SP, a trapped path-resolving `openat`
+~6.2 KiB — about 4.5 KiB of kernel `rt_sigframe` plus ~1.4 KiB of
+handler chain. The kernel half grows with SVE (and xsave on x86_64).
+
+Because of that cost, guest altstacks get a floor (`src/sigalt.c`).
+`sigaltstack` is trapped, and a guest stack under `TAWC_SIGALT_MIN`
+(12 KiB aarch64, 8 KiB x86_64 — chosen so the common `SIGSTKSZ` values
+pass untouched) is swapped for a tawcroot-owned 16 KiB slot from a
+256-slot BSS slab; `sigaltstack(NULL, &old)` still reports the guest's
+own `ss_sp`/`ss_size`. On slab exhaustion the guest's stack is installed
+as-is. Slots free on `SS_DISABLE`, replacement by a big stack, and
+`exit(2)`.
+
+The handler can't forward `sigaltstack`: running on the altstack makes
+the kernel return `-EPERM`, and sigreturn reinstalls `uc_stack` over
+whatever was set anyway. So `handle_sigaltstack` reads and writes
+`uc->uc_stack` — the kernel applies it on handler return, judging
+on-stack-ness by the guest's SP — and replicates `do_sigaltstack`'s
+validation (`EPERM`/`EINVAL`/`ENOMEM`) itself, since that restore
+ignores errors. Same trick as `rt_sigprocmask` and `uc_sigmask`.
+Pinned by `static_sigaltstack{,_small}_open_argv1` and
+`tests/unit/test_sigalt.c`.
 
 The budget is enforced mechanically, not by convention: every
 production object compiles with `-Wframe-larger-than=1024 -Werror`

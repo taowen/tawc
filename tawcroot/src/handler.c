@@ -47,6 +47,9 @@ struct kernel_sigaction {
 #ifndef SA_RESTORER
 # define SA_RESTORER 0x04000000
 #endif
+#ifndef SA_ONSTACK
+# define SA_ONSTACK 0x08000000
+#endif
 
 extern void tawcroot_sigreturn_trampoline(void);
 
@@ -179,7 +182,13 @@ long tawcroot_install_handler(void)
 {
 	struct kernel_sigaction sa;
 	sa.k_sa_handler = sigsys_handler;
-	sa.sa_flags     = SA_SIGINFO | SA_RESTORER;
+	/* SA_ONSTACK: land the ~6 KiB signal frame + handler chain on the
+	 * guest thread's sigaltstack when it has one; the kernel silently
+	 * falls back to the current stack when it doesn't. This is what
+	 * lets small-stack runtimes work at all — Go issues syscalls from
+	 * 2 KiB goroutine stacks and installs a 32 KiB altstack per M.
+	 * handle_sigaltstack keeps guest altstacks big enough for us. */
+	sa.sa_flags     = SA_SIGINFO | SA_RESTORER | SA_ONSTACK;
 	sa.sa_restorer  = tawcroot_sigreturn_trampoline;
 	/* Mask every catchable signal for the handler's duration. The
 	 * kernel auto-masks the trapping signal (SIGSYS) while we run,

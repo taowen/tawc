@@ -1,12 +1,13 @@
 /* Handler stack budget.
  *
- * SIGSYS handlers run on the trapping guest thread's own stack, whose
- * size the guest chose (musl threads default to 128 KiB; the supported
- * floor is the 16 KiB pinned by tests/integration/programs/
+ * SIGSYS is SA_ONSTACK: the handler runs on the guest thread's
+ * sigaltstack when it has one (floored by sigalt.c; this is how Go's
+ * 2 KiB goroutine stacks survive), else on the thread's own stack,
+ * whose size the guest chose (musl threads default to 128 KiB; the
+ * supported floor is the 16 KiB pinned by tests/integration/programs/
  * static_small_stack_open_argv1.S). The kernel signal frame already
- * costs up to ~5 KiB of that (xsave/SVE state), so the whole handler
- * call chain must fit in what remains. sigaltstack can't help: it is
- * per-thread state the guest owns and can replace.
+ * costs ~4.5 KiB of that, more with xsave/SVE state, so the whole
+ * handler call chain must fit in what remains.
  *
  * Enforcement: every production object is compiled with
  * -Wframe-larger-than=1024 -Werror (Makefile TAWC_CFLAGS and build.sh
