@@ -38,10 +38,13 @@ libhybris ships a mixed license set (Apache-2.0, BSD variants, ISC, MIT,
 LGPLv2.1, GPL3). LGPLv2.1 §3 permits use under GPLv2-or-later, so it
 composes with GPLv3 here.
 
-Everything else that ships — 119 compositor crates, the Xwayland stack,
-121 Maven artifacts — is permissive (MIT/Apache-2.0/BSD/ISC/0BSD), plus
-one MPL-2.0 crate (`freedesktop-desktop-entry`, weak per-file copyleft,
-GPL-compatible) and FreeType under the FTL.
+Everything else that ships — 148 compositor crates, the Xwayland stack,
+121 Maven artifacts — is permissive (MIT/Apache-2.0/BSD/ISC/0BSD/Zlib),
+plus one MPL-2.0 crate (`freedesktop-desktop-entry`, weak per-file
+copyleft, GPL-compatible) and FreeType under the FTL. The crate count
+jumped with `resvg` (launcher SVG icons): 29 crates, all
+MIT/Apache-2.0/BSD/Zlib. Recent `resvg` is `MIT OR Apache-2.0`; releases
+before 0.45 were MPL-2.0, so check the license again on a version bump.
 
 ## How the obligations are met
 

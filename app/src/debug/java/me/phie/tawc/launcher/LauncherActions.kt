@@ -22,7 +22,9 @@ import org.json.JSONObject
  * `launcher-list` mirrors what [LauncherActivity] renders: hidden
  * entries are filtered out unless `showHidden=true` (the UI's
  * "Show hidden" toggle). Each element is
- * `{id, name, exec, terminal, path, hidden}`.
+ * `{id, name, exec, terminal, iconPath, path, hidden}` — `iconPath` is
+ * the resolved on-device PNG (empty when nothing resolved), which is
+ * how icon-resolution tests see what `launcher.rs` picked.
  */
 internal object LauncherActions {
 
@@ -53,6 +55,7 @@ internal object LauncherActions {
                     put("name", e.name)
                     put("exec", e.exec)
                     put("terminal", e.terminal)
+                    put("iconPath", e.iconPath)
                     put("path", e.path)
                     put("hidden", isHidden)
                 })

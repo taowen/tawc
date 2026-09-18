@@ -379,7 +379,7 @@ at its definition.
 | `get-gtk3-broken-menus-workaround` | SettingsActions | Print the current GTK3 broken menus workaround setting. |
 | `set-ando` (`installId`, `enabled`) | SettingsActions | Set the per-distro ando (notes/ando.md) test override for `installId` and reconcile the broker (`AndoBrokers.refresh`): enable brings the listener up; disable tears it down and SIGKILLs in-flight ando children. In-memory only (never a metadata write); discarded on process death and cleared by `test-init`. Prints `true`/`false`. |
 | `get-ando` (`installId`) | SettingsActions | Print the effective ando state for `installId` (override if set, else metadata). |
-| `launcher-list` (`installId`, optional `showHidden`) | LauncherActions | Print the launcher entry list as a JSON array (`{id, name, exec, terminal, path, hidden}` per element). Mirrors what `LauncherActivity` renders: hidden entries are filtered out unless `showHidden=true` (notes/launcher.md). |
+| `launcher-list` (`installId`, optional `showHidden`) | LauncherActions | Print the launcher entry list as a JSON array (`{id, name, exec, terminal, iconPath, path, hidden}` per element; `iconPath` is the resolved on-device PNG, empty when nothing resolved). Mirrors what `LauncherActivity` renders: hidden entries are filtered out unless `showHidden=true` (notes/launcher.md). |
 | `set-entry-hidden` (`installId`, `entryId`, `hidden`) | LauncherActions | Persist launcher hide/unhide for a desktop-entry id through the same locked `Installation.hiddenDesktopIds` metadata write the launcher UI uses. Durable — tests must unhide in cleanup. Prints the resulting hidden-id list. |
 
 **Rule for input actions: every driver goes through `TawcInputConnection`.**

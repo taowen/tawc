@@ -22,8 +22,9 @@ The compositor (`compositor/src/`) is split into:
   parses `.desktop` files via the `freedesktop-desktop-entry` crate
   (`default-features = false` to drop gettext-rs's libintl C build, which has no
   pre-built NDK toolchain). Resolves `Icon=` to an absolute on-device PNG path
-  (Adwaita / Papirus / breeze / hicolor at 128 → 96 → 256 → 64 → 48 → pixmaps);
-  SVG/XPM are skipped because Android's `BitmapFactory` can't decode them.
+  by walking the installed icon themes and their `Inherits=` chains; SVG
+  sources are rasterized into a per-install cache by **icon_cache.rs**, XPM is
+  skipped (see notes/launcher.md "Icon resolution").
   Returns a JSON array string to Kotlin (`LauncherActivity`) via the
   `nativeLauncherScan` JNI entry. No compositor-state interaction — just pure
   file I/O, safe to call from any thread.

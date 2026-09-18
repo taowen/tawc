@@ -32,6 +32,14 @@ wayland-protocols = { version = "0.32", features = ["server"] }
 # crate already does covers the common case.
 freedesktop-desktop-entry = { version = "0.8", default-features = false }
 serde_json = "1"
+# SVG icon rasterization for the launcher (launcher.rs). No default
+# features: drops `text` (fontdb + rustybuzz — app icons don't use
+# <text>, and there are no host fonts to find inside a rootfs anyway)
+# and `raster-images` (embedded JPEG/GIF decoding). PNG *encoding*
+# still works: that lives in tiny-skia's `png-format`, which is on by
+# default there. `svgz` is kept: gzipped SVGs do turn up in icon
+# themes, and it only costs a deflate decoder.
+resvg = { version = "0.48", default-features = false, features = ["svgz"] }
 
 # gfxstream-bridge: kumquat server runs as a thread of the compositor
 # process. See notes/gfxstream-bridge.md "Kumquat in-process". The

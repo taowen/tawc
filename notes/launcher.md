@@ -18,7 +18,8 @@ and lets the user search + launch. Reached from the home screen card's
    fake root, so `$HOME` is `/root`), `usr/local/share/applications`,
    `usr/share/applications`, flatpak/snap exports — parses each
    `.desktop` via the `freedesktop-desktop-entry` crate, filters
-   non-Application / NoDisplay / Hidden / Exec-less entries, resolves
+   non-Application / NoDisplay / Hidden / Exec-less entries, and (in
+   `scan_json`, not the entry walk — see "Icon resolution") resolves
    `Icon=` to an on-device PNG path. De-dup by id happens in walk
    order *before* the name sort, and `APPS_SUBDIRS` is ordered
    user-first, so a user's copy of an id shadows the packaged one
@@ -31,7 +32,8 @@ and lets the user search + launch. Reached from the home screen card's
 5. **LauncherActivity** filters hidden entries + the search query, then
    renders rows (icon ImageView + name + comment). `IconLoader`
    async-decodes PNGs with `BitmapFactory.inSampleSize` keeping memory
-   bounded, and holds them in a byte-bounded `LruCache`.
+   bounded, and holds them in a byte-bounded `LruCache`. An entry with
+   no resolvable icon gets `ic_terminal_fallback` or `ic_app_fallback`.
 6. Tap or Enter → `EntryLauncher.launch(appContext, inst, entry)`, the
    shared dispatch point for every launch surface. `Terminal=true`
    entries on tawcroot installs open `TerminalActivity` as a command
@@ -90,8 +92,9 @@ the empty-list message appends a "(N hidden)" hint.
 
 Debug broker actions (notes/exec-broker.md): `launcher-list` returns
 the post-filter list as JSON (optionally including hidden entries with
-`showHidden=true`); `set-entry-hidden` performs the same metadata
-write as the UI. Integration coverage: `launcher::` tests in
+`showHidden=true`), including the resolved `iconPath` so icon tests can
+see what the scanner picked; `set-entry-hidden` performs the same
+metadata write as the UI. Integration coverage: `launcher::` tests in
 `tests/integration/tests/launcher.rs`.
 
 ## Managed dir + .desktop editor
@@ -189,27 +192,110 @@ trampoline).
 
 ## Icon resolution
 
-Search order in `launcher.rs::resolve_icon`, all rooted at the rootfs:
+`iconPath` is always a decodable PNG or empty — that contract is what
+keeps all three Kotlin decoders (`IconLoader.decode`,
+`EntryShortcuts.pinBitmap`, `CompositorActivity.decodeTaskIcon`)
+single-format. SVG sources are rasterized on the Rust side rather than
+handed to Kotlin.
 
-1. Absolute path `Icon=/foo/bar.png` → use directly if PNG.
-2. Bare name `Icon=firefox` → search
-   `usr/share/icons/<theme>/<size>/apps/<name>.png` for
-   themes = `Adwaita`, `Papirus`, `breeze`, `hicolor`,
-   sizes = `128`, `96`, `256`, `64`, `48` (mid-size first because list
-   rows render at ~56 dp).
-3. `usr/share/pixmaps/<name>.png` (legacy fallback).
+Resolution is **lazy**. `scan_entries` keeps the raw `Icon=` value;
+`scan_json` resolves every entry (it runs on `Dispatchers.IO`) and
+`resolve_metadata_for_app_id` matches by id *first* and resolves only
+the winning entry — that one runs on the compositor thread on first
+window map, so it must not walk every icon in every rootfs.
+
+`IconResolver` (built once per scan, holds the theme order and the
+cache) searches, all rooted at the canonicalized rootfs:
+
+1. Absolute `Icon=/foo/bar.png` → used directly. The value is
+   guest-controlled and we now *parse* what we find, so the path is
+   lexically normalized and rejected if `..` climbs out of the rootfs.
+2. Bare name → the theme walk under `usr/share/icons`, below.
+3. `usr/share/pixmaps/<name>.{png,svg,svgz}` (legacy fallback).
 4. `Icon=name.<ext>` strips known image extensions before the search.
 
-PNG-only by design: `BitmapFactory` doesn't decode SVG/XPM, and shipping
-a path Kotlin can't open just produces broken rows. SVG-only icons (some
-modern GNOME apps) end up empty; the row renders without an icon. SVG
-support would mean adding either a Rust SVG renderer (`resvg`, heavy) or
-the `AndroidSVG` jar — defer until users ask.
+The theme walk is spec-*shaped*, not the full fdo size-matching
+algorithm — we want "largest sensible raster, else scalable":
 
-`index.theme` `Inherits=` chains aren't parsed: hicolor catches almost
-everything in practice and the spec walker would 5× the search cost.
-Revisit if real-app testing turns up missing icons that hicolor doesn't
-cover.
+- **Theme order**: seeds `default`, `Adwaita`, `Papirus`, `breeze`,
+  `hicolor`, each expanded breadth-first through its `index.theme`
+  `Inherits=` (minimal line scan, stops at the second group header; no
+  theme crate). De-duplicated, missing themes dropped, `hicolor` forced
+  last so an inherited parent still gets a look in. `default` leads so a
+  distro/user-selected theme wins.
+- **Per theme**: contexts `apps`, then `legacy`, then `categories` —
+  generic names like `utilities-terminal` live outside `apps` in several
+  themes. Sizes `128, 96, 256, 64, 48`, then `scalable`, then
+  `32, 24, 22, 16` (a vector icon beats a 16 px PNG blown up to a 56 dp
+  row). Both layouts are tried: `<size>/<context>` (hicolor, Adwaita)
+  and `<context>/<size>` (breeze), with numeric sizes spelled both
+  `48x48` and bare `48`.
+- Extensions per directory: `png`, then `svg`, then `svgz`. XPM is not
+  searched — we can't decode it and only a couple of `NoDisplay` python
+  entries still ship one.
+- Each theme's immediate subdirectory names are read once
+  (`read_subdir_names`), so the walk skips whole size tiers instead of
+  stat'ing the full contexts × sizes × layouts × extensions grid.
+  Adwaita on sid ships three size dirs, not ten.
+
+### SVG cache
+
+`icon_cache.rs` rasterizes SVG/SVGZ sources with `resvg` into
+`<distros>/<id>/icon-cache/` — a sibling of the rootfs, so it is
+app-owned (uninstall removes it, keys can't collide across installs) and
+reachable without `app_paths`, which `nativeLauncherScan` may run
+before.
+
+- Key: hash of (rootfs-relative source path, mtime, len, render size,
+  format version) → `<hex>.png`. A package upgrade changes mtime/len and
+  lands on a new file.
+- Rendered 192 px square, aspect-preserved, centred, transparent. That
+  covers the ~56 dp row at 3×, the recents icon and the 2/3-safe-zone
+  pin bitmap.
+- Written to `<hex>.<pid>.tmp` then renamed — the launcher and the
+  shortcut trampoline can scan concurrently.
+- Guard rails, since the input is guest-controlled: sources over 1 MiB
+  are skipped, parse+render runs under `catch_unwind`, and any failure
+  leaves a zero-length `<hex>.fail` marker so a bad SVG isn't re-parsed
+  on every scan. One `warn!` per scan with the failure count; never per
+  icon.
+- `scan_json` prunes cache files this scan didn't reference, skipping a
+  scan that returned nothing (a transiently unreadable rootfs must not
+  wipe the cache). `.tmp` files are only swept once older than a minute,
+  so a concurrent scan's in-flight write survives.
+
+Measured on the emulator sid install (13 entries, 6 SVG icons): cold
+`launcher-list` 0.12 s, warm 0.07 s, both including the adb + broker
+round trip. Roughly 8 ms per icon rendered, so even a full desktop
+install stays well inside a second; parallelising the rasterize
+(`std::thread::scope` over the SVG entries) is the lever if that ever
+stops being true.
+
+Entries that still resolve to nothing render the fallback glyph
+(`ic_terminal_fallback` for `Terminal=true`, `ic_app_fallback` — a
+neutral window mark — otherwise), not the TAWC logo. Recents keeps
+`null` → the TAWC app icon: a TAWC-branded recents card is accurate,
+not misleading.
+
+### Symbolic last resort
+
+After every theme, context and size has come up empty, the walk tries
+`<theme>/symbolic/{apps,legacy,categories}/<name>-symbolic.svg`. It is
+last because it loses the app's colours: Konsole on sid asks for
+`utilities-terminal` and the rootfs ships only
+`Adwaita/symbolic/legacy/utilities-terminal-symbolic.svg`.
+
+Symbolic SVGs are a single near-black colour, so they vanish on a dark
+background, and a cached PNG can't follow the app theme. They are baked
+light-on-dark instead: the SVG is rendered at 60 % scale, its **alpha is
+kept as a mask** and repainted white over a black rounded tile with the
+same proportions as `ic_terminal_fallback`. Masking rather than
+string-replacing the fill is deliberate — a symbolic icon's colour can
+come from `fill`, `style`, a class or a `use` reference, so rewriting the
+source is fragile. The cache key carries a `symbolic` bit.
+
+Installing `breeze-icon-theme` still gives Konsole a real colour icon;
+this is the answer for the case where nothing is installed.
 
 ## Access model
 

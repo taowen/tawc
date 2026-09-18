@@ -37,6 +37,7 @@ mod scale;
 mod event_loop;
 mod input;
 mod keymap;
+mod icon_cache;
 mod launcher;
 mod text_input;
 mod xwayland;

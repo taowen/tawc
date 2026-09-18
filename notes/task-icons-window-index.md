@@ -71,10 +71,6 @@ First-pass matching:
 Weak app_id/class matching falls back to title-only metadata and TAWC's default
 icon.
 
-SVG-only icons can stay out of scope for this feature. The launcher already
-returns only PNG paths because Android `BitmapFactory` cannot decode SVG/XPM
-natively.
-
 ## Reverse-JNI Shape
 
 Keep explicit reverse-JNI methods. Do not replace them with a generic opcode or
