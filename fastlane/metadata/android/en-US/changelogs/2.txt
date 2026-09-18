@@ -1,0 +1,9 @@
+- Fix installs failing at the Configure step on some devices
+- Fix pacman "Invalid crypto engine" errors on Android 13 and older
+- Go programs (fzf, micro, ...) and LibreOffice now run
+- Fix Firefox 156 tab crashes
+- Fix GL apps aborting on devices whose GPU driver uses libcrypto
+- Real mouse support: wheel, hover, right/middle click, cursor shapes
+- Root can write into read-only directories, like real root
+- Terminal honors chsh
+- SVG launcher icons

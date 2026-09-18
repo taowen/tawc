@@ -35,9 +35,9 @@ RepoType: git
 Repo: https://github.com/wmww/tawc.git
 
 Builds:
-  - versionName: '1'
-    versionCode: 1
-    commit: v1
+  - versionName: '2'
+    versionCode: 2
+    commit: v2
     subdir: app
     ndk: 27.2.12479018
 
@@ -121,5 +121,5 @@ Builds:
 # `Version v%v` spelling no longer validates against fdroiddata's schema.
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9]+$
-CurrentVersion: '1'
-CurrentVersionCode: 1
+CurrentVersion: '2'
+CurrentVersionCode: 2
