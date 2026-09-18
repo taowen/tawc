@@ -74,4 +74,9 @@ Release builds are deliberately NOT minified, obfuscated, or stripped (release b
 
 ## Release notes
 
+Changelogs are the agent's job, not the maintainer's: the agent writes and
+maintains every `changelogs/<N>.txt` (and any future changelog) without
+being asked, as part of release prep. Descriptions and screenshots stay
+maintainer-written.
+
 No in-repo `CHANGELOG.md`; GitHub release notes are the changelog. Revisit if another distribution channel appears.

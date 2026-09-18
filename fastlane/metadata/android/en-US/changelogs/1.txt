@@ -1,1 +1,7 @@
-TODO(maintainer): changelog for v1, max 500 chars. See fastlane/DRAFTS.md.
+First release.
+
+- Install Arch Linux ARM or Debian sid without root
+- Run CLI and graphical Linux programs, Wayland or X11, GPU accelerated
+- Linux apps appear in the Android app switcher and can be pinned to the home screen
+- Built-in terminal and task manager
+- Android keyboard, touch, mouse and clipboard integration

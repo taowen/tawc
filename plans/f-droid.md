@@ -44,7 +44,8 @@ submit these on their own; agents may prepare inputs only where a step says so.
 ## Progress 2026-08-12
 
 Done: steps 1.1, 1.2, 2.1, 3.1, 3.2 (which subsumed 1.3 — see below).
-All remaining work is human: steps 2.2, 2.3, 2.4, 3.3 and step 4.
+Remaining: a release tag containing this work (2.4; `v1` predates it),
+then human steps 3.3 and 4.
 
 - 1.1 done. `dep_fetch_tarball` in `scripts/lib/deps.sh` downloads and
   sha256-verifies; libmd and talloc pin version+hash in their build
@@ -63,8 +64,9 @@ All remaining work is human: steps 2.2, 2.3, 2.4, 3.3 and step 4.
   drawables and `icon_colors.xml` from `app/icon.svg`, the declared source
   of truth for the mark. Documented in `notes/building.md` ("App icon",
   "Store metadata"); AGENTS.md tells agents not to edit the SVG unasked.
-- 2.2 draft only, per this plan's rule: `fastlane/DRAFTS.md`. Rewrite it
-  and delete it.
+- 2.2, 2.3 done 2026-09-18: maintainer wrote the descriptions and added
+  screenshots. Changelogs are agent-maintained (maintainer's call,
+  overriding step 2.2 for changelogs) — see notes/release.md.
 - 3.1 done, and tested by 3.2 below: `fdroid/me.phie.tawc.yml`. Field
   names checked against the current Build Metadata Reference; `gradleprops` is
   deliberately avoided (it comma-splits, and `tawcGraphics=libhybris,cpu`
