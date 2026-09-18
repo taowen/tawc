@@ -116,7 +116,11 @@ object RootfsCleaner {
         if (!chroot) {
             // App-uid unlink needs write permission on the parent dir;
             // `-f` semantics via `; exit 0` since a partial previous
-            // attempt may have removed some of the tree already.
+            // attempt may have removed some of the tree already. The
+            // wipe runs through toybox find OUTSIDE tawcroot, so
+            // tawcroot's lazy CAP_DAC_OVERRIDE emulation doesn't cover
+            // it — and every ALARM install faithfully contains a 0500
+            // cadir. This chmod stays.
             log("chmod: making $installPath writable")
             val cr = Sh.run("chmod -R u+rwX ${Sh.quote(installPath)} 2>/dev/null; exit 0")
             if (!cr.ok) log("chmod: warning, exit=${cr.exitCode}")

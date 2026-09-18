@@ -14,24 +14,31 @@ import java.io.InputStream
 import java.io.InterruptedIOException
 
 /**
- * In-process tar extractor for the proot install method.
+ * In-process tar extractor for every install method that extracts as
+ * the app uid — tawcroot (the default) and proot. The name is
+ * historical; only the chroot method stays out.
  *
  * The chroot path can lean on toybox `tar` running as root, where
  * directory mode bits in the archive are honoured but DAC is ignored
- * (root writes anywhere). Proot extracts as the app uid, where DAC is
- * real — and the Arch bootstrap contains directories whose recorded
- * mode is 0500 (`/etc/ca-certificates/extracted/cadir/` is the
- * canonical offender). When toybox sees a 0500 dir entry, it sets the
- * mode immediately, then the next regular-file entry inside that dir
- * fails with EPERM. Toybox has no `--no-same-permissions` flag, so
+ * (root writes anywhere). Everyone else extracts as the app uid, where
+ * DAC is real — and the Arch bootstrap contains directories whose
+ * recorded mode is 0500 (`/etc/ca-certificates/extracted/cadir/` is
+ * the canonical offender). When toybox sees a 0500 dir entry, it sets
+ * the mode immediately, then the next regular-file entry inside that
+ * dir fails with EPERM. Toybox has no `--no-same-permissions` flag, so
  * working around this in the shell is a non-starter.
+ *
+ * This runs in the JVM, outside any tawcroot process, so tawcroot's
+ * lazy CAP_DAC_OVERRIDE emulation does not cover it — the deferral
+ * below is still load-bearing. It is also what GNU tar does
+ * (delayed directory permissions), so we are not inventing a policy.
  *
  * Doing the extract in pure Kotlin lets us:
  *   1. Defer applying the archived dir mode until the end (write
  *      everything in the dir first with mode 0700, then chmod the dir
  *      to its archived mode last).
- *   2. Skip ownership entirely — proot lies about uid/gid at stat()
- *      time anyway, so the on-disk owner doesn't matter.
+ *   2. Skip ownership entirely — both methods lie about uid/gid at
+ *      stat() time anyway, so the on-disk owner doesn't matter.
  *   3. Drop the FIFO/zstd-thread dance — we already use zstd-jni for
  *      decompression and commons-compress for tar parsing in other
  *      install paths; no shell, no toybox quirks.

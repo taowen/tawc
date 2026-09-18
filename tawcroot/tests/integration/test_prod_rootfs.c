@@ -541,6 +541,42 @@ test(prod_rootfs_ro_bind_survives_execve)
 	rh_rmrf(FAKE_BINDSRC);
 }
 
+/* Lazy CAP_DAC_OVERRIDE, exec edition. Real root execs a `--x--x--x`
+ * binary fine — the kernel's own override covers the loader's read.
+ * tawcroot's loader has to open the file O_RDONLY as the app uid, so a
+ * 4111-shaped binary was EACCES before the rescue. Two opens have to
+ * work: handle_execve's probe (dispatch wrapper) and the --exec-child
+ * loader's re-open by path (tawcroot_rescue_open_in_view). The fixture
+ * forks, execve's argv[1], and forwards its exit code.
+ *
+ * Vacuous under real uid 0 (rooted adbd), where the open never fails —
+ * the other environments carry it. */
+test(prod_rootfs_guest_execs_exec_only_binary)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+
+	char p[PATH_MAX];
+	snprintf(p, sizeof p, "%s/bin/static_fork_exec_argv1", FAKE_ROOTFS);
+	test_true(rh_copy_file(TAWCROOT_STATIC_FORK_EXEC_ARGV1_BIN, p, 0755));
+	snprintf(p, sizeof p, "%s/bin/exec_only_exit42", FAKE_ROOTFS);
+	test_true(rh_copy_file(TAWCROOT_STATIC_EXIT42_BIN, p, 0111));
+
+	const char *args[] = {
+		"-r", FAKE_ROOTFS, "--", "/bin/static_fork_exec_argv1",
+		"/bin/exec_only_exit42", NULL
+	};
+	test_int_eq(run_with(args), 42);
+
+	/* The guest's mode is unchanged: widen and restore, not widen. */
+	struct stat st;
+	snprintf(p, sizeof p, "%s/bin/exec_only_exit42", FAKE_ROOTFS);
+	test_int_eq(stat(p, &st), 0);
+	test_int_eq((long)(st.st_mode & 07777), 0111);
+
+	rh_rmrf(FAKE_ROOTFS);
+}
+
 /* Malformed third field in a -b spec: exactly "ro" or nothing. */
 test(prod_rootfs_bad_bind_ro_spec_exits_84)
 {

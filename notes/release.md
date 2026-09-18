@@ -57,6 +57,11 @@ The release build cannot be run by the agent: the signing keystore lives in a di
 2. Smoke-test that exact APK on the physical phone: fresh install + launch + distro install + run an app (e.g. lxterminal); for later releases also install *over* the previous release to catch signing/versionCode upgrade breakage. The release build differs from the dev loop (no debug methods, production graphics set), so dev-loop testing does not cover it.
 3. Push `main` and the tag.
 4. `gh release create vN tawc-vN.apk --title "TAWC vN" --notes-file <notes>`.
+5. Close out any upstream issues the release fixes. Pending:
+   [#12](https://github.com/wmww/tawc/issues/12) (`mkdir /test` →
+   Permission denied under a 0555 `/`) — fixed by tawcroot's lazy
+   CAP_DAC_OVERRIDE emulation; the interim workaround for anyone on an
+   older build is `chmod 755 /` inside the guest.
 
 ## Debuggability over size
 

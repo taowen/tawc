@@ -11,6 +11,7 @@ mod pointer_input;
 mod rendering;
 mod settings;
 mod tawcroot;
+mod tawcroot_dac;
 mod tawcroot_prodenv;
 mod text_input;
 mod uninstall_wipe;

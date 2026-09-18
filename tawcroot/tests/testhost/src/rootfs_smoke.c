@@ -1898,6 +1898,66 @@ static int test_fchmodat_swallows_perm_errors(void)
 	return fails;
 }
 
+/* Lazy CAP_DAC_OVERRIDE (rescue.c). The upstream report is exactly
+ * this shape: `whoami` says root, `mkdir /test` says Permission
+ * denied, because the kernel sees the app uid and a mode denying the
+ * OWNER denies "root" too. The rescue widens the app-owned route,
+ * re-runs the handler once, and puts the mode back — so `ls -ld /`
+ * still shows what the guest set.
+ *
+ * Skipped under real uid 0 (rooted adbd): there the kernel never
+ * refuses, so there is nothing under test.
+ * notes/tawcroot/testing.md §"Device-environment sensitivities". */
+static int test_dac_override_on_unwritable_root(void)
+{
+	int fails = 0;
+	long rv;
+	if (smoke_real_euid == 0) {
+		tawc_io_skip("mkdir under a 0555 / -> 0 (DAC override)",
+			     "real euid 0 (rooted adbd): DAC never refuses");
+		return 0;
+	}
+
+	struct stat st;
+	long se = inline_fstatat(AT_FDCWD, "/", &st, 0);
+	fails += tawc_io_step("stat / before chmod", se == 0);
+	if (se != 0) return fails;
+	long orig_mode = (long)(st.st_mode & 07777);
+
+	INLINE_SYS6(TAWC_SYS_fchmodat, AT_FDCWD, "/", 0555, 0, 0, 0, rv);
+	fails += tawc_io_step("chmod 555 /", rv == 0);
+	se = inline_fstatat(AT_FDCWD, "/", &st, 0);
+	fails += tawc_io_step("/ really is 0555",
+			      se == 0 && (st.st_mode & 07777) == 0555);
+
+	INLINE_SYS6(TAWC_SYS_mkdirat, AT_FDCWD, "/dacprobe", 0755, 0, 0, 0, rv);
+	fails += tawc_io_step("mkdir /dacprobe under a 0555 / -> 0", rv == 0);
+	tawc_io_kv_dec("    rv", rv);
+
+	/* `ls -ld /` still shows 555: widen and restore, not widen. */
+	se = inline_fstatat(AT_FDCWD, "/", &st, 0);
+	fails += tawc_io_step("/ still 0555 after the rescue",
+			      se == 0 && (st.st_mode & 07777) == 0555);
+	tawc_io_kv_dec("    mode", se == 0 ? (long)(st.st_mode & 07777) : -1);
+
+	/* `[ -w / ]` answers yes for root. */
+	INLINE_SYS6(TAWC_SYS_faccessat, AT_FDCWD, "/", 2 /*W_OK*/,
+		    0, 0, 0, rv);
+	fails += tawc_io_step("access(\"/\", W_OK) under a 0555 / -> 0",
+			      rv == 0);
+
+	INLINE_SYS6(TAWC_SYS_unlinkat, AT_FDCWD, "/dacprobe", AT_REMOVEDIR,
+		    0, 0, 0, rv);
+	fails += tawc_io_step("rmdir /dacprobe under a 0555 / -> 0", rv == 0);
+
+	INLINE_SYS6(TAWC_SYS_fchmodat, AT_FDCWD, "/", orig_mode, 0, 0, 0, rv);
+	fails += tawc_io_step("restore / mode", rv == 0);
+	se = inline_fstatat(AT_FDCWD, "/", &st, 0);
+	fails += tawc_io_step("/ mode restored",
+			      se == 0 && (long)(st.st_mode & 07777) == orig_mode);
+	return fails;
+}
+
 /* socket(AF_NETLINK, *, NETLINK_AUDIT) must look like a kernel without
  * CONFIG_AUDIT (EPROTONOSUPPORT — netlink family present, protocol
  * unregistered). Android SELinux denies it with EACCES, which libaudit
@@ -5166,6 +5226,7 @@ int tawcroot_rootfs_smoke_main(const char *rootfs)
 	fails += test_fchownat_fake_root();
 	fails += test_fchown_fake_root();
 	fails += test_fchmodat_swallows_perm_errors();
+	fails += test_dac_override_on_unwritable_root();
 	fails += test_identity_dropped_chmod_chown_real_errors();
 	fails += test_socket_netlink_audit_eprotonosupport();
 	fails += test_root_op_errno_shapes();

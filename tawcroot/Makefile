@@ -140,6 +140,7 @@ PROD_C := \
     $(SRC_T)/src/filter_build.c \
     $(SRC_T)/src/handler.c \
     $(SRC_T)/src/dispatch.c \
+    $(SRC_T)/src/rescue.c \
     $(SRC_T)/src/path.c \
     $(SRC_T)/src/path_scratch.c \
     $(SRC_T)/src/path_fold.c \

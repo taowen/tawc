@@ -79,6 +79,7 @@ static const char *const banned[] = {
 static const char *const handler_objs[] = {
 	"handler.c.o",
 	"dispatch.c.o",
+	"rescue.c.o",
 	"syscalls_fs.c.o",
 	"syscalls_fd.c.o",
 	"syscalls_control.c.o",
@@ -198,8 +199,10 @@ test(handler_c_pinned_import_list)
 	static const char *const allowed[] = {
 		/* Linker-internal — every PIE/PIC compile lands this. */
 		"_GLOBAL_OFFSET_TABLE_",
-		/* Hot-path lookup of the dispatch table (pure load, ASS). */
-		"tawcroot_dispatch_get",
+		/* Hot-path dispatch + the lazy DAC-override rescue that wraps
+		 * it (rescue.c). ASS — raw syscalls, fixed static storage,
+		 * lock-free atomics for the slot claim, no allocation. */
+		"tawcroot_dispatch_call",
 		/* The raw-syscall stub. ASS by construction (single SYSCALL/SVC
 		 * with the inline-asm contract documented in raw_sys.h). */
 		"tawcroot_raw_syscall",

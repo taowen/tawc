@@ -40,6 +40,7 @@
 #include "path_scratch.h"
 #include "proc_shadow.h"
 #include "raw_sys.h"
+#include "rescue.h"
 #include "sysnr.h"
 #include "tawc_uapi.h"
 
@@ -774,5 +775,11 @@ tawcroot_path_result tawcroot_path_translate(const char *guest_path,
 			r.err = ro_check_proc_magic_link(mode, intent, r.base_fd,
 							 out_suffix);
 	}
+	/* Hand the finished route to the rescue wrapper (rescue.h). This
+	 * is THE recording point: every path-bearing handler, the AF_UNIX
+	 * sockaddr translation and the exec open all funnel through here,
+	 * so lazy DAC override needs no per-handler wiring. A no-op unless
+	 * a wrapper-owned slot is live on this thread. */
+	if (r.err == 0) tawcroot_rescue_note(r.base_fd, out_suffix);
 	return r;
 }

@@ -216,13 +216,21 @@ foreclose future expansion.
   operations rather than real privilege changes. We
   do **not** provide pid namespaces, mount namespaces, user
   namespace semantics, or a general-purpose privilege model.
-  In particular the guest's virtual root **does not bypass DAC** —
-  the kernel still sees the app uid, so a mode the app can't write
-  blocks "root" too. Concretely: the Arch Linux ARM bootstrap ships
-  `/` as mode 0555, so `touch /foo` fails with EACCES inside an Arch
-  guest despite `id` reporting uid 0 (`chmod 755 /` fixes it; Debian
-  sid's `/` is 0700 and writable). That's a distro-tarball property,
-  not a tawcroot bug — don't go looking for a missing handler.
+
+  **CAP_DAC_OVERRIDE is emulated, lazily.** The kernel sees the app
+  uid on every real syscall, so a mode that denies the *owner* would
+  deny the guest's "root" too — `chmod 555 /` then `mkdir /x` was
+  EACCES. proot's `-0` fixed this by chmod-ing every path component
+  wide before every path syscall; we do the same thing only on the
+  error path. When a handler returns EACCES at virtual euid 0, the
+  dispatch wrapper widens the app-owned inodes along the routes the
+  translator recorded, re-runs the handler once, and restores the old
+  modes — so the guest keeps seeing the mode it set (`pacman -Qkk`,
+  sudo's 0440 sudoers check, ssh StrictModes all stay clean). See
+  notes/tawcroot/path-translation.md §"DAC override" for the rules
+  and limits; the one that bites in practice is a directory with no
+  owner *search* bit, which fails inside path translation before a
+  route exists.
 
   **The identity is cosmetic in both directions, and that matters
   for multi-user guests.** `set*id` writes a shadow struct

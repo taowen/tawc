@@ -185,6 +185,122 @@ Then apply these rules to the guest-absolute path `P`:
    effectively immutable in ALARM. If it bites, invalidate on
    `symlinkat`/`rename`/`unlinkat` of cached prefixes.
 
+### DAC override
+
+tawcroot fakes uid 0, but the kernel sees the app uid on every real
+syscall and `untrusted_app` never holds CAP_DAC_OVERRIDE. A mode that
+denies the **owner** therefore denied the guest's "root" too: with
+`/` at 0555, `mkdir /test` was EACCES (upstream #12) and `[ -w / ]`
+answered no. Nothing else was wrong — `chown` needs CAP_CHOWN we never
+have, so the whole rootfs is app-owned and mode is the only lever; and
+`chmod` needs only ownership, so guest root can set a restrictive mode
+itself and only the *next* write fails. proot's `-0` emulated the
+capability eagerly (`fake_id0`'s HOST_PATH hook chmods every path
+component to u+rw, plus u+x for directories, before the syscall and
+restores at syscall exit), so this was a regression from the proot
+install method, not a distro property.
+
+We emulate it the same way, but only on the error path — the happy
+path must not pay proot's per-syscall stat walk.
+
+- **One wrapper at the dispatch call site** (`rescue.c`,
+  `tawcroot_dispatch_call`), not a retry per handler: unlinkat,
+  renameat2, linkat and openat are multi-step, so "retry the raw
+  syscall" doesn't fit them, and an EACCES can come from a link-store
+  operation on a route the handler never exposed. Instead the
+  translator drops every route it produces (`base_fd` + suffix) into a
+  per-thread rescue slot the wrapper owns, via
+  `tawcroot_rescue_note()` at the single exit of
+  `tawcroot_path_translate` plus the one dirfd-passthrough branch in
+  `translate_local`. New path handlers are covered without touching
+  `rescue.c`.
+- **What gets widened.** Each route's base fd (through
+  `fchmodat(fd, ".")` — base fds are O_PATH, where `fchmod` is EBADF),
+  then each path prefix. Only inodes the app owns (`st_uid` == real
+  uid): directories lacking `u+rwx` get them; the leaf gets `u+rw`
+  only when it is a regular file **and** the syscall actually touches
+  the leaf's own permissions (open, truncate, access, chdir, chroot,
+  exec, utimensat, the path xattr calls — the table in
+  `rescue_needs_leaf`). unlink, mkdir, mknod, symlink, link and rename
+  need the parent only; widening their leaf is wasted work and the
+  by-path restore would then miss, because the name is gone or moved.
+- **Never chmod through a symlink.** Leaves are symlinks under the
+  NOFOLLOW ops and every emulated hardlink name is a
+  `tawcroot:link:<token>` symlink, while `fchmodat` has no
+  `AT_SYMLINK_NOFOLLOW`. The walk stats `AT_SYMLINK_NOFOLLOW` and
+  touches nothing that is not a directory or a regular file.
+- **Never add x to a file.** That is CAP_DAC_OVERRIDE's own rule:
+  root cannot exec a file with no execute bit, and `access(X_OK)` on
+  one is EACCES for root too. The exec handler's "no x bit → EACCES"
+  check (`exec_handler.c`) stays.
+- **Retry only if the walk found an app-owned component** — not "only
+  if something was widened". A concurrent rescuer may have widened the
+  same directory already, and skipping the re-run would turn that race
+  into a spurious EACCES. A denial we cannot own (SELinux, a bind into
+  `/dev` or `/sdcard`) finds nothing and returns the original EACCES
+  with no second handler run.
+- **Restore, do not widen permanently**, deepest first (restoring a
+  parent that loses its search bit before its child would strand the
+  child). The guest keeps seeing the mode it set, so `pacman -Qkk`,
+  sudo's 0440 sudoers check and ssh StrictModes stay clean. A crash
+  between widen and restore leaves the wider mode; harmless.
+- **Gated on virtual euid 0**, read only on the EACCES path. A guest
+  that dropped privileges gets the real EACCES, matching the
+  fchmodat/fchownat gating below — and every other trap avoids the
+  identity seqlock read.
+- **Handlers that never return to the wrapper** must restore first.
+  `handle_exit` forwards `exit(2)`, so the wrapper skips the slot
+  claim for it entirely; execve/execveat call
+  `tawcroot_rescue_restore()` before `tawcroot_exec_handler_commit()`,
+  which `execveat`s away. `--exec-child` then re-opens the guest
+  binary (and its PT_INTERP / shebang interpreters) **by path** in a
+  fresh process, outside any dispatch wrapper, so `loader_exec.c` uses
+  `tawcroot_rescue_open_in_view()` — without it a `--x--x--x` binary
+  (a 4111 sudo) that `handle_execve` just rescued would fail again on
+  the far side of the re-exec.
+- **Re-running a handler that hit EACCES partway is safe.** The
+  link-store mutations are the only multi-syscall ones; every error
+  path in `linkstore.c` clears the intent slot and unlocks before
+  returning, and the design is monotone (count >= live referrers), so
+  a replay costs at worst a +1 overcount — already documented as safe
+  in notes/tawcroot/link-emulation.md.
+
+Fixed caps, all degrading to "no rescue" (the pre-rescue behaviour)
+rather than to a wrong answer: 64 concurrently-rescuable threads, 2
+routes per call (linkat/renameat translate two paths; nothing
+translates more), 1024 bytes per route, 40 widened inodes per call.
+
+Known limits:
+
+- **No owner search bit.** The symlink walker propagates EACCES from
+  `readlinkat` (`path_resolve.c`), so a directory the app cannot
+  *search* fails inside translation, before a complete route exists —
+  nothing to rescue. Directories with x but no w (the `/` case, and
+  the ALARM bootstrap's 0500 `/etc/ca-certificates/extracted/cadir`)
+  are the only ones seen in practice.
+- **Renaming a directory across parents** needs `w` on the directory
+  itself (the `..` update). Rename does not widen leaves, so a u-w
+  directory still fails to move. Not seen in practice; fixing it means
+  restoring at the destination route.
+- **Races**, the same ones proot has: two processes rescuing the same
+  directory can still give one a spurious EACCES (the first restores
+  before the second's re-run), a restore can clobber a concurrent
+  guest chmod of the same inode, and other threads briefly see the
+  wide mode. Acceptable — the rootfs is one security principal
+  (notes/tawcroot/overview.md).
+- **Group/other-only execute bits.** Root's `X_OK`/exec on a file
+  whose only x bits are group or other stays EACCES: the owner bits
+  decide for the app uid.
+- A **fork from a multi-threaded guest** leaves any sibling thread's
+  in-flight slot claimed in the child (clone is not trapped, so the
+  fork never happens inside the wrapper). Bounded, self-healing on tid
+  reuse, and a full table only means no rescue.
+
+Rejected alternative: clamping modes at chmod/mkdir/open time so the
+tree never holds a restrictive owner mode. It changes what the guest
+sees, does not fix modes already on disk, does not cover the faithful
+0500 cadir, and diverges from proot's semantics.
+
 ### Which syscalls need trapping
 
 The minimal set that covers our usage. Numbers are arch-specific;
@@ -234,7 +350,11 @@ the target user. The privilege predicate everywhere is virtual
   matter inside the rootfs and normally apply for real — the app uid
   owns the files), but when virtual euid == 0 swallow a host
   `EPERM`/`EACCES` into success: root doesn't get permission errors
-  from chmod. Concrete consumer: sshd's `pty_setowner()` chmod on
+  from chmod. Same story as the `mknodat` device-node degradation
+  below and the lazy DAC override above: where the app uid cannot do
+  what root would, we either do the nearest real thing or lie in
+  root's favour — never surface a privilege error the guest's
+  identity says is impossible. Concrete consumer: sshd's `pty_setowner()` chmod on
   `/dev/pts/N`, which Android SELinux denies and sshd treats as fatal
   for every TTY login. Non-permission errors pass through; dropped
   processes get the real result. fd-based `fchmod` is trapped for the

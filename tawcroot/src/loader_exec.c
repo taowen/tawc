@@ -20,6 +20,7 @@
 #include "loader_stack.h"
 #include "path.h"
 #include "raw_sys.h"
+#include "rescue.h"
 #include "supervisor.h"
 #include "tawc_uapi.h"
 
@@ -235,7 +236,7 @@ static long resolve_shebangs(int initial_fd,
 		argv_out[*argc_out] = 0;
 
 		/* Open the interpreter, close the previous fd, loop. */
-		long new_fd = tawcroot_open_in_view(new_argv0);
+		long new_fd = tawcroot_rescue_open_in_view(new_argv0);
 		if (new_fd < 0) {
 			tawc_close(bin_fd);
 			return new_fd;
@@ -262,7 +263,7 @@ void tawcroot_loader_exec(const struct tawc_loader_exec_args *args)
 	const size_t PAGE = g_host_page_size;
 
 	/* --- 1. Open + parse the guest binary. --- */
-	long bin_fd = tawcroot_open_in_view(args->guest_path);
+	long bin_fd = tawcroot_rescue_open_in_view(args->guest_path);
 	if (bin_fd < 0) LOADER_FAIL(60);
 
 	/* --- 1.5. Resolve any #! shebang chain into ELF + adjusted argv. ---
@@ -347,7 +348,7 @@ void tawcroot_loader_exec(const struct tawc_loader_exec_args *args)
 		 * file at that host path won't exist (or worse, exists with
 		 * a different ABI); route it through the same translator the
 		 * binary used. */
-		long ld_fd = tawcroot_open_in_view(interp_path);
+		long ld_fd = tawcroot_rescue_open_in_view(interp_path);
 		if (ld_fd < 0) LOADER_FAIL(65);
 
 		struct tawc_loader_image ld_img;

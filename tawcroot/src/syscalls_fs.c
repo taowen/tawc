@@ -44,6 +44,7 @@
 #include "path_scratch.h"
 #include "proc_shadow.h"
 #include "raw_sys.h"
+#include "rescue.h"
 #include "shm.h"
 #include "syscalls_fs.h"
 #include "sysnr.h"
@@ -762,6 +763,9 @@ static long translate_local(struct tawcroot_path_scratch *scratch, int slot,
 			if (ce < 0) return ce;
 			out->fd      = dirfd;
 			out->is_root = 0;
+			/* The one route the translator never sees, so record
+			 * it for the DAC-override rescue here. */
+			tawcroot_rescue_note(dirfd, suffix);
 			return 0;
 		}
 		/* Absolute path: dirfd is ignored by the kernel; fall

@@ -32,6 +32,7 @@
 #include "raw_sys.h"
 #include "dispatch.h"
 #include "errno_neg.h"
+#include "rescue.h"
 #include "usercopy.h"
 
 /* Match kernel `struct sigaction` layout — bionic's struct is the same
@@ -128,14 +129,11 @@ static void sigsys_handler(int sig, siginfo_t *info, void *ucontext)
 
 	/* Dispatch. Empty slots fall through to -ENOSYS — see comment in
 	 * include/dispatch.h about Android's stacked filter potentially
-	 * delivering TRAPs we didn't ask for. */
-	long rv;
-	tawcroot_handler_fn fn = tawcroot_dispatch_get((int)args.nr);
-	if (fn) {
-		rv = fn(&args, uc);
-	} else {
-		rv = TAWC_ENOSYS;
-	}
+	 * delivering TRAPs we didn't ask for. The call goes through the
+	 * rescue wrapper (rescue.h), which owns the lazy DAC-override
+	 * retry; on everything but an -EACCES at virtual root it is a
+	 * plain table lookup plus a slot claim. */
+	long rv = tawcroot_dispatch_call(&args, uc);
 #ifdef TAWCROOT_TRACE
 	{
 		/* Build the trace line into a stack buffer and emit in one

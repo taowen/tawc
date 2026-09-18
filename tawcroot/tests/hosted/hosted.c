@@ -15,6 +15,7 @@
 #include "fdtab.h"
 #include "linkstore.h"
 #include "path.h"
+#include "rescue.h"
 #include "shm.h"
 #include "syscalls_socket.h"
 #include "usercopy.h"
@@ -162,10 +163,12 @@ void th_view_teardown_impl(TestCtx *test_ctx, th_view *v)
 long th_sys_impl(TestCtx *test_ctx, long nr, long a, long b, long c,
 		 long d, long e, long f)
 {
-	tawcroot_handler_fn fn = tawcroot_dispatch_get((int)nr);
-	test_nonnull(fn);
+	test_nonnull(tawcroot_dispatch_get((int)nr));
 	tawcroot_syscall_args args = {
 		.nr = nr, .a = a, .b = b, .c = c, .d = d, .e = e, .f = f,
 	};
-	return fn(&args, NULL);
+	/* Through the rescue wrapper, not the bare handler — that is what
+	 * the SIGSYS handler calls, and the DAC-override retry lives
+	 * there (rescue.h). */
+	return tawcroot_dispatch_call(&args, NULL);
 }

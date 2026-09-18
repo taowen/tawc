@@ -309,6 +309,15 @@ libhybris/AHB syscall coverage.
   chmods/chowns root-owned `/dev/null` fine. The smoke captures the
   real euid pre-filter and `tawc_io_skip`s those steps under real
   root.
+- **Rooted adbd, part two**: the lazy DAC-override tests
+  (`tests/hosted/test_dac_override.c`, and the smoke's
+  `test_dac_override_on_unwritable_root`) need DAC to actually bind.
+  Under real uid 0 the kernel never refuses, so the hosted cases
+  register only when `geteuid() != 0` and the smoke step `tawc_io_skip`s.
+  `dac_not_owned_route_is_not_rescued` also probes for a directory the
+  test uid does not own where `mkdir` gives EACCES specifically — on
+  Android `/` is a read-only rootfs (EROFS), which never reaches the
+  rescue at all.
 - **Unrooted shell (physical device, rootless emulator)**: host
   `link(2)` is SELinux-denied, so linkat surfaces that pass through
   untouched on host/rooted-emulator runs actually engage emulation

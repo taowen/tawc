@@ -26,8 +26,9 @@ The handler structure:
     args = read_args_from_ucontext(uc);   // arch-specific
     pc   = read_pc_from_ucontext(uc);
 
-    handler = dispatch_table[syscall_no];  // small, dense table
-    rv = handler(args);                    // long or -errno
+    rv = tawcroot_dispatch_call(args, uc); // table lookup + handler,
+                                           // wrapped by the lazy
+                                           // DAC-override rescue
 
     write_return_value_to_ucontext(uc, rv);
     // ucontext is restored by the kernel on sigreturn
@@ -43,6 +44,14 @@ future Android versions may TRAP additional syscalls. Aborting on
 an unexpected TRAP would make us fragile to those changes.
 `-ENOSYS` is what the kernel returns for unsupported syscalls and
 is the value programs check to fall back gracefully.
+
+The call goes through `tawcroot_dispatch_call` (`rescue.c`) rather
+than the table directly: it claims a per-thread rescue slot, runs the
+handler, and — only when the handler returns `-EACCES` at virtual euid
+0 — widens the app-owned inodes along the routes the translator
+recorded and re-runs the handler once. See
+notes/tawcroot/path-translation.md §"DAC override"; on every other
+outcome it is the table lookup plus a `gettid` and a CAS.
 
 ### Guest memory access
 
