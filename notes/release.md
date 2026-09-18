@@ -91,7 +91,9 @@ Signing cannot be run by the agent: the keystore lives in a different user accou
 
    It checks the APK is already aligned, signs it with v2/v3 only, and
    gates on `apksigcopier compare`, which is the same check F-Droid runs.
-   Output: `app/build/outputs/apk/release/tawc-vN.apk`. Needs
+   The signed `tawc-vN.apk` lands **next to the APK you passed in** — so
+   handing the unsigned APK over in a shared directory and signing it
+   there works without a checkout path in the middle. Needs
    `apksigcopier` and build-tools 35+.
 2. Optionally run F-Droid's own verification end to end before anything is
    public (no key needed, so the agent can do this given the signed APK):

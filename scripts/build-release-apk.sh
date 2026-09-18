@@ -19,9 +19,11 @@
 #              our signature. Signing must change nothing but the
 #              signing block, so the file is verified already-aligned
 #              rather than re-aligned, and `apksigcopier compare`
-#              gates the result.
+#              gates the result. The signed APK lands next to the
+#              unsigned one, which is usually outside this checkout.
 #
-# Output: app/build/outputs/apk/release/tawc-v<version>.apk
+# Output: tawc-v<version>.apk, in app/build/outputs/apk/release/ or,
+# with --apk, beside the APK that was passed in.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -112,7 +114,6 @@ fi
 
 UNSIGNED="${PREBUILT_APK:-$ROOT_DIR/app/build/outputs/apk/release/app-release-unsigned.apk}"
 ALIGNED="$ROOT_DIR/app/build/outputs/apk/release/app-release-aligned.apk"
-SIGNED="$ROOT_DIR/app/build/outputs/apk/release/app-release.apk"
 
 if [ "$DO_BUILD" -eq 1 ]; then
     echo "=== Building release APK (graphics=$GRAPHICS) ==="
@@ -120,6 +121,16 @@ if [ "$DO_BUILD" -eq 1 ]; then
 fi
 
 [ -f "$UNSIGNED" ] || { echo "ERROR: $UNSIGNED not found (drop --no-build to build it)" >&2; exit 1; }
+
+# The signed APK lands beside the unsigned one. With --apk that is
+# wherever the caller put it — typically a handoff dir shared with the
+# signing user, not this checkout. Sign to a hidden temp name first so
+# the input can never be the output, then rename once it has passed
+# every check.
+OUT_DIR="$(cd "$(dirname "$UNSIGNED")" 2>/dev/null && pwd)" \
+    || { echo "ERROR: cannot resolve $(dirname "$UNSIGNED")" >&2; exit 1; }
+[ -w "$OUT_DIR" ] || { echo "ERROR: $OUT_DIR is not writable" >&2; exit 1; }
+SIGNED="$OUT_DIR/.tawc-signing-$$.apk"
 
 echo "=== Checking for dev-only code ==="
 "$SCRIPT_DIR/check-no-dev-code.sh" "$UNSIGNED"
@@ -181,8 +192,12 @@ fi
 
 VERSION="$("$AAPT2" dump badging "$SIGNED" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)"
 [ -n "$VERSION" ] || { echo "ERROR: could not read versionName from $SIGNED" >&2; exit 1; }
-FINAL="$(dirname "$SIGNED")/tawc-v$VERSION.apk"
+FINAL="$OUT_DIR/tawc-v$VERSION.apk"
 mv "$SIGNED" "$FINAL"
+# v4 signing drops an .idsig next to --out; it is for incremental adb
+# install, not distribution, and would otherwise be left behind under
+# the temp name.
+rm -f "$SIGNED.idsig"
 
 echo
 echo "Signed APK: $FINAL"
