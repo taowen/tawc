@@ -33,6 +33,10 @@ SourceCode: https://github.com/wmww/tawc
 IssueTracker: https://github.com/wmww/tawc/issues
 AuthorName: Sophie Winter
 
+# `fdroid checkupdates` derives this from the app's manifest and writes it
+# in if absent, which fails fdroiddata CI's `git diff --exit-code` check.
+AutoName: TAWC
+
 RepoType: git
 Repo: https://github.com/wmww/tawc.git
 
