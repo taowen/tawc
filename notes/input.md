@@ -127,7 +127,7 @@ once a mouse has ever been seen.
 
 ## Cursor
 
-Android draws the pointer sprite itself, above the app's surfaces, so tawc
+Android draws the pointer sprite itself, above the app's surfaces, so TAWC
 does not render a second cursor into the Wayland scene. `SeatHandler::
 cursor_image` maps the client's request onto the Activity SurfaceView's
 `PointerIcon` (`compositor/src/cursor.rs` -> `NativeBridge.setPointerIcon` /

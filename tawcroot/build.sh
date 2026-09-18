@@ -12,7 +12,7 @@
 #
 # This script lives in `tawcroot/` (with the rest of the tawcroot project)
 # but stages production binaries into `app/src/main/jniLibs/` —
-# that staging is the tawc-app integration. Strip it if you ever split
+# that staging is the TAWC-app integration. Strip it if you ever split
 # tawcroot into its own repo.
 #
 # # Two-binary split

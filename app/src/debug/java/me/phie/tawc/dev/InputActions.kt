@@ -36,7 +36,7 @@ import me.phie.tawc.tasks.ProcessScanner
  * There is intentionally **no broker action that calls `NativeBridge.native*`
  * directly**. The test path = the production path, and the wayland client
  * (wayland-debug-app) is the other endpoint. Tests assert Android contract
- * results and what the client sees on the wire, not tawc private state.
+ * results and what the client sees on the wire, not TAWC private state.
  *
  * Why this matters: an earlier version of this file exposed bypass
  * actions (`inject-text`, `set-composing`, `key-event`, …) that called
@@ -602,7 +602,7 @@ internal object InputActions {
             }
             return ctx.fail(
                 "focus-activity: $activityId did not gain window focus within 5s " +
-                    "(Android blocks activity starts while tawc is backgrounded)"
+                    "(Android blocks activity starts while TAWC is backgrounded)"
             )
         }
     }

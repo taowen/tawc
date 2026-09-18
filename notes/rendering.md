@@ -13,7 +13,7 @@ rendered black while AHB/external surfaces worked, with zero GL errors
 sampling failed). It reproduces in the app process but not in a minimal
 standalone binary using identical GL calls, so probe results can mislead.
 
-This is an emulator driver bug, and tawc currently ships no workaround
+This is an emulator driver bug, and TAWC currently ships no workaround
 — SHM surfaces are known-black on the emulator and the affected tests
 fail there. A verified fix (resolving `#if defined(X)` blocks against
 each variant's define list in the smithay fork's `texture_program`
@@ -58,14 +58,14 @@ Both wlegl and SHM surfaces now use Smithay's desktop render-element path.
 `WaylandSurfaceRenderElement`s, so Smithay owns the parent/subsurface/popup
 ordering. Firefox must still render the WebRender subsurface above the
 toplevel placeholder; the integration pixel tests cover this through the
-Smithay element path rather than tawc's old reversed draw list.
+Smithay element path rather than TAWC's old reversed draw list.
 
 ## Smithay Renderer State
 
-tawc feeds committed renderable buffers into Smithay's `RendererSurfaceState`
+TAWC feeds committed renderable buffers into Smithay's `RendererSurfaceState`
 with `on_commit_buffer_handler`. The Smithay fork has a compositor-provided
 external buffer hook under
-`smithay::backend::renderer`: tawc wraps `android_wlegl` and
+`smithay::backend::renderer`: TAWC wraps `android_wlegl` and
 `tawc_gfxstream` AHB buffers in `ExternalBufferData`, reports their size,
 alpha, and y-inversion metadata, and imports them through
 `GlesRenderer::import_buffer`.
@@ -75,35 +75,35 @@ AHB import still lives in tawc. `WleglBufferData` owns the
 from `ExternalGlesBuffer::import_gles`. This keeps Smithay generic: it sees a
 renderable external `wl_buffer`, not Android allocation details.
 
-SHM buffers also use Smithay's renderer import helper. tawc no longer keeps
+SHM buffers also use Smithay's renderer import helper. TAWC no longer keeps
 parallel per-surface SHM or WLEGL texture maps; diagnostics that need attached
 buffer counts read Smithay renderer surface state for mapped desktop windows.
 
 Rendering asks a host-local Smithay `Space<Window>` projection for that
-host's render elements, then wraps each `WaylandSurfaceRenderElement` in tawc's custom
+host's render elements, then wraps each `WaylandSurfaceRenderElement` in TAWC's custom
 `RenderElement<GlesRenderer>` to preserve SHM/AHB tinting and forced-opaque
 shader policy. Smithay owns window ordering, popup/subsurface collection,
-surface geometry, viewport handling, and damage inside those elements; tawc
+surface geometry, viewport handling, and damage inside those elements; TAWC
 still owns Android host selection and the final shader uniforms. The
 frame/output transform owns the framebuffer Y flip; the wrapper leaves Smithay
 element geometry and buffer transforms intact.
 
-tawc maintains one `Space<Window>` projection per Android host for xdg and X11
+TAWC maintains one `Space<Window>` projection per Android host for xdg and X11
 windows. Android foreground/background events map the advertised Smithay
 `Output` only into the foreground host's space and keep that output sized to
 the foreground host. The render loop draws only that foreground host; frame
 callbacks are sent only through `Window::send_frame` for windows in that visible
 space. Smithay owns popup/subsurface traversal and output visibility
-bookkeeping while tawc keeps Android Activity policy.
+bookkeeping while TAWC keeps Android Activity policy.
 
-Smithay `Space` locations are window-geometry locations. tawc maps each window
+Smithay `Space` locations are window-geometry locations. TAWC maps each window
 at `window.geometry().loc` so the underlying `wl_surface` origin remains at
 the Android output origin; this preserves popup placement for clients that set
 non-zero xdg window geometry.
 
 For input, touch picking asks the mapped Smithay desktop windows via
 `Window::surface_under(WindowSurfaceType::ALL)`. Keyboard and text-input focus
-policy remains tawc-owned after the surface has been picked.
+policy remains TAWC-owned after the surface has been picked.
 
 `tests/integration/tests/rendering.rs` contains a raw-screenshot pixel test
 for a deterministic SHM pattern. It catches output-scale, y-orientation, and
@@ -118,11 +118,11 @@ basic placement regressions in the Smithay element path.
    The renderer works in physical pixels. Convert logical edges through
    `OutputScale` and round the physical edges.
 
-2. **Y-axis flip:** tawc creates the `GlesFrame` with
+2. **Y-axis flip:** TAWC creates the `GlesFrame` with
    `Transform::Flipped180`, so Smithay render-element geometry stays in normal
    top-left desktop coordinates. Do not flip each element's destination rect.
    Per-surface buffer transforms stay owned by `WaylandSurfaceRenderElement`
-   and are passed through when the wrapper draws with tawc's tint shader.
+   and are passed through when the wrapper draws with TAWC's tint shader.
 
 3. **Surface size follows the wl_surface spec:**
    - `surface_logical_size = wp_viewport.dst` if set, otherwise
@@ -163,12 +163,12 @@ EGL fallback paths all use `wl_shm`.
 falls back to SHM instead of using hardware-accelerated AHB buffers.
 
 The render wrapper detects SHM buffers from Smithay's `buffer_type` metadata
-and applies tawc's magenta shader policy. AHB buffers are detected from
+and applies TAWC's magenta shader policy. AHB buffers are detected from
 `WleglBufferData` attached to the `wl_buffer`.
 
 ## Alpha and Opaque Regions
 
-`wl_surface.set_opaque_region` is a protocol optimization hint. tawc's custom
+`wl_surface.set_opaque_region` is a protocol optimization hint. TAWC's custom
 AHB draw path currently ignores it for correctness: RGBA buffers render using
 their sampled alpha. Android no-alpha formats (`RGBX_8888`, `RGB_888`,
 `RGB_565`) are still treated as implicit full-surface opaque buffers because the

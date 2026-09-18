@@ -1,6 +1,6 @@
 # F-Droid Publication
 
-Goal: get tawc into the main F-Droid repo (f-droid.org), built by their
+Goal: get TAWC into the main F-Droid repo (f-droid.org), built by their
 buildserver from https://github.com/wmww/tawc.
 
 Steps marked **HUMAN** must be done by the user, not an agent. They involve

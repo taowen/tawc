@@ -36,7 +36,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 
 /**
  * Foreground service that owns the Rust Wayland compositor thread for the
- * lifetime of the tawc process. The compositor outlives any single
+ * lifetime of the TAWC process. The compositor outlives any single
  * [CompositorActivity], which is the prerequisite for the multi-window
  * design (see notes/multi-activity.md).
  *

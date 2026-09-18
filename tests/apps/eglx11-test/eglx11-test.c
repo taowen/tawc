@@ -1,6 +1,6 @@
 /*
  * Phase 2 step 4 verification: EGL-on-X11 client driving libhybris's
- * tawc x11 platform plugin (eglplatform_x11.so).
+ * TAWC x11 platform plugin (eglplatform_x11.so).
  *
  *   - XOpenDisplay(:0)
  *   - XCreateSimpleWindow + XMapWindow
@@ -10,7 +10,7 @@
  *   - GLES draw + eglSwapBuffers loop
  *
  * The plugin allocates an AHardwareBuffer per dequeued frame and
- * ships it to the Xwayland (tawc fork) X server via TAWCDRIPresentBuffer.
+ * ships it to the Xwayland (TAWC fork) X server via TAWCDRIPresentBuffer.
  * Xwayland forwards it to the compositor via android_wlegl. Compositor
  * imports it as a GL texture. End-to-end zero-readback for client GL
  * via X11.
@@ -175,7 +175,7 @@ int main(void)
         XCloseDisplay(xdpy);
         return 1;
     }
-    XStoreName(xdpy, xwin, "tawc EGL X11 test");
+    XStoreName(xdpy, xwin, "TAWC EGL X11 test");
     XClassHint class_hint = {
         .res_name = "eglx11-test",
         .res_class = "TawcX11Debug",

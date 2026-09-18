@@ -201,4 +201,4 @@ profile's `user.js` before launching — see
 `helpers::firefox_profile_cleanup`. A real user whose Firefox is
 repeatedly killed un-cleanly (app swiped away, Android lowmem) gets
 the safe-mode relaunch by design; that's upstream behavior, not a
-tawc bug.
+TAWC bug.

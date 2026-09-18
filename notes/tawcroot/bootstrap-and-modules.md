@@ -195,7 +195,7 @@ tawcroot/                            # everything tawcroot-specific lives here
 ```
 
 The directory is laid out so it could be lifted into its own repo (no
-external paths inside `tawcroot/`). The one tawc-app coupling is in
+external paths inside `tawcroot/`). The one TAWC-app coupling is in
 `tawcroot/build.sh`, which stages the production binary into
 `app/src/main/jniLibs/<abi>/libtawcroot.so` for APK packaging,
 and in `tawcroot/test.sh --device` which sources `scripts/lib/select-device.sh`

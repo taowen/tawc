@@ -23,7 +23,7 @@ Android permission and lifecycle rules.
 
 ## Preferred Direction: PipeWire Over Pipe Tunnel
 
-Prototype a PipeWire-first audio stack in the rootfs and connect it to tawc
+Prototype a PipeWire-first audio stack in the rootfs and connect it to TAWC
 with `libpipewire-module-pipe-tunnel`.
 
 Steady-state playback:
@@ -34,7 +34,7 @@ Linux app
   -> pipewire daemon
   -> libpipewire-module-pipe-tunnel sink
   -> /usr/share/tawc/audio-out-0
-  -> tawc Android audio bridge
+  -> TAWC Android audio bridge
   -> AudioTrack or AAudio
 ```
 
@@ -42,7 +42,7 @@ Steady-state capture:
 
 ```text
 AudioRecord or AAudio
-  -> tawc Android audio bridge
+  -> TAWC Android audio bridge
   -> /usr/share/tawc/audio-in-0
   -> libpipewire-module-pipe-tunnel source
   -> pipewire daemon
@@ -67,7 +67,7 @@ Start with fixed-format PCM:
 - capture: `s16le`, mono or stereo, 48000 Hz; mono is enough for a first mic
   bridge.
 
-PipeWire can resample and remix for clients. tawc should avoid accepting a
+PipeWire can resample and remix for clients. TAWC should avoid accepting a
 large format matrix until fixed-format playback and capture are stable.
 
 ## Process Model
@@ -81,13 +81,13 @@ rootfs:
   pipewire-pulse
 
 Android app:
-  tawc process with audio bridge threads
+  TAWC process with audio bridge threads
 ```
 
 `pipewire` is the graph/server and loads `libpipewire-module-pipe-tunnel`.
 
 `wireplumber` is the session/policy manager. It should create defaults and link
-streams to the tawc pipe sink/source. It may be possible to replace it with
+streams to the TAWC pipe sink/source. It may be possible to replace it with
 static/manual links for a controlled smoke test, but that should be treated as
 a shortcut, not the default desktop design.
 
@@ -106,7 +106,7 @@ that valuable.
 
 ## Endpoint Ownership
 
-The tawc app should own endpoint creation and cleanup.
+The TAWC app should own endpoint creation and cleanup.
 
 Candidate endpoint names:
 
@@ -124,7 +124,7 @@ Open questions for implementation:
 - FIFO vs Unix socket vs regular pipe exposed through a helper. PipeWire's
   pipe-tunnel module is designed around FIFO/pipe-style raw PCM; start with
   FIFOs unless testing shows bad blocking behavior.
-- Which side creates the FIFO. Prefer tawc creating it so stale endpoints and
+- Which side creates the FIFO. Prefer TAWC creating it so stale endpoints and
   permissions are under app control.
 - Open ordering. FIFOs can block on open until the other side appears. The
   bridge should handle this deliberately instead of relying on incidental daemon
@@ -151,7 +151,7 @@ context.modules = [
       audio.rate = 48000
       audio.channels = 2
       node.name = "tawc_output"
-      node.description = "tawc Android output"
+      node.description = "TAWC Android output"
       stream.props = {
         media.class = "Audio/Sink"
       }
@@ -167,7 +167,7 @@ context.modules = [
       audio.rate = 48000
       audio.channels = 1
       node.name = "tawc_input"
-      node.description = "tawc Android microphone"
+      node.description = "TAWC Android microphone"
       stream.props = {
         media.class = "Audio/Source"
       }
@@ -177,7 +177,7 @@ context.modules = [
 ```
 
 The PipeWire docs state that the module defaults to 16-bit stereo 48 kHz when
-format is not specified, but tawc should specify it anyway so the Android bridge
+format is not specified, but TAWC should specify it anyway so the Android bridge
 and logs have a stable contract.
 
 `pipewire-pulse` should listen on an in-rootfs Unix socket under
@@ -232,7 +232,7 @@ contract should not depend on which Android API is used internally.
    - verify Firefox or another real desktop app.
 
 3. Lifecycle:
-   - start/stop the audio stack with the tawc session or install runtime.
+   - start/stop the audio stack with the TAWC session or install runtime.
    - make repeated sessions not leave stale FIFOs/daemons.
    - log underruns, daemon failures, and missing modules.
 
@@ -244,7 +244,7 @@ contract should not depend on which Android API is used internally.
 5. Tuning:
    - reduce latency after correctness is stable.
    - decide whether the Android bridge should use AAudio/Oboe.
-   - decide whether WirePlumber policy needs a tawc-specific profile/rule.
+   - decide whether WirePlumber policy needs a TAWC-specific profile/rule.
 
 ## Pure PulseAudio Option
 
@@ -253,9 +253,9 @@ The simpler non-PipeWire alternative is:
 ```text
 PulseAudio clients
   -> pulseaudio daemon
-  -> PulseAudio pipe sink/source or tawc-specific Pulse module
+  -> PulseAudio pipe sink/source or TAWC-specific Pulse module
   -> /usr/share/tawc/audio-{out,in}
-  -> tawc Android bridge
+  -> TAWC Android bridge
 ```
 
 ALSA-only clients can route into PulseAudio through `alsa-plugins`.
@@ -275,9 +275,9 @@ behavior becomes a blocker.
 
 ## Options We Are Not Starting With
 
-### Custom PulseAudio Server In tawc
+### Custom PulseAudio Server In TAWC
 
-tawc could implement the server side of the PulseAudio native protocol and map
+TAWC could implement the server side of the PulseAudio native protocol and map
 client streams to Android `AudioTrack`s, letting Android mix them.
 
 Lean away from this. A useful Pulse server is not just PCM over a socket. It
@@ -314,13 +314,13 @@ PipeWire has `libpipewire-module-pulse-tunnel`, which can expose a PipeWire
 source/sink backed by a PulseAudio server.
 
 This is not needed for the preferred plan. `pipe-tunnel` lets PipeWire connect
-directly to tawc's PCM endpoint, and `pipewire-pulse` handles PulseAudio clients
+directly to TAWC's PCM endpoint, and `pipewire-pulse` handles PulseAudio clients
 on top of PipeWire.
 
 ### Network PulseAudio
 
 PulseAudio can listen over TCP, and PipeWire's Pulse server can also expose TCP
-sockets. Avoid this for tawc's local bridge. Unix-domain endpoints under the
+sockets. Avoid this for TAWC's local bridge. Unix-domain endpoints under the
 app-private shared namespace are easier to permission, clean up, and keep off
 the network.
 
@@ -328,7 +328,7 @@ the network.
 
 - Android may kill rootfs daemons under memory/lifecycle pressure. This is a
   lower priority than proving audio, but the stack should be restartable.
-- FIFO blocking semantics may be awkward across tawc session start/stop. Test
+- FIFO blocking semantics may be awkward across TAWC session start/stop. Test
   early with daemon restarts and missing reader/writer cases.
 - PipeWire's pipe tunnel may not provide enough latency/clock feedback for good
   video sync or low-latency audio. If this becomes the limit, a real PipeWire

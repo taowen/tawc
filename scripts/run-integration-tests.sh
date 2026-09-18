@@ -334,7 +334,7 @@ adb shell "am force-stop me.phie.tawc"
 sleep 0.3
 "$TAWC_EXEC" --in-rootfs "$INSTALL_ID" -- true >/dev/null
 
-# Wait until the tawc process is alive, the wayland socket exists, AND
+# Wait until the TAWC process is alive, the wayland socket exists, AND
 # the compositor event loop answers a broker state query. `am force-stop`
 # leaves the previous run's socket file behind, so the stat alone would
 # falsely match a stale socket while the new compositor is still in early init.

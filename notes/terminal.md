@@ -140,7 +140,7 @@ Doze firewall about a minute after screen-off; see
 Tab labels are the session's xterm window title (OSC 0/2, parsed by
 the vendored emulator, surfaced via `TerminalSession.getTitle()` /
 `onTitleChanged`), and apps that set their own title (vim, htop, ssh)
-show through while running. tawc's shipped shell defaults
+show through while running. TAWC's shipped shell defaults
 (`ShellDefaults`) set a cwd-only title (user@host carries no info —
 always root@localhost) by embedding the escape in PS1, which is
 emitted after any distro PROMPT_COMMAND title each prompt, so it wins

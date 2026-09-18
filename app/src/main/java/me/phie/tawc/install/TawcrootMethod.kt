@@ -339,7 +339,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
      *
      * The extract's `.version` stamp file becomes guest-visible inside
      * the bound dirs (the copy path skipped it). Read-only dotfile in a
-     * tawc-owned namespace; harmless.
+     * TAWC-owned namespace; harmless.
      */
     private fun assetBinds(): List<BindSpec> = buildList {
         // No EnabledGraphicsBackends.libhybris gate: LibhybrisInstallProvider
@@ -430,7 +430,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
         /** The full bind list, in declared order.
          *
          * Order: /dev → /proc → /sys → libhybris dirs → app asset dirs
-         * → tawc share → ando → X11 → external.
+         * → TAWC share → ando → X11 → external.
          * No `/dev/shm` bind: tawcroot's SIGSYS handler emulates POSIX
          * shm in-process via memfd_create (`tawcroot/src/shm.c`).
          *
@@ -445,7 +445,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
          * them: same RO dlopen-source role, and still ahead of the
          * external binds so a user bind can't shadow them.
          *
-         * The tawc share bind exposes JUST `<appData>/share/` (wayland
+         * The TAWC share bind exposes JUST `<appData>/share/` (wayland
          * socket, Xwayland's xtmp dir) at the in-rootfs canonical path
          * `/usr/share/tawc/`. Deliberately not the whole `<appData>` —
          * that would expose the libhybris asset extract, the proot

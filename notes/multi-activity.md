@@ -435,7 +435,7 @@ per-host counters surfaced in `nativeQueryState`.
 - `onCreate`: render installed rootfs cards and app-level tools.
   Compositor startup is deferred until a user launches a rootfs command.
 - Stays the only Activity in `category.LAUNCHER` so the recents view
-  doesn't get a confusing "tawc home" entry.
+  doesn't get a confusing "TAWC home" entry.
 - It does NOT host a SurfaceView; the bootstrap path goes:
   Service starts → first chroot client connects → first toplevel arrives
   → policy spawns first `CompositorActivity`.

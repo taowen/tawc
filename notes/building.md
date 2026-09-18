@@ -1,4 +1,4 @@
-# Building tawc
+# Building TAWC
 
 > **Source of truth for build dependencies and the fresh-system build flow.**
 > Keep this file in sync with the `scripts/build-*.sh` scripts and Gradle config.
@@ -584,7 +584,7 @@ Regular builds never run it: the output is checked in. Re-run it after
 changing a Gradle dependency, a `deps/` pin, or a compositor crate, and
 commit the result. Inputs, all read from the working tree:
 
-- `LICENSE` / `LICENSE.MIT` — the GPLv3 text and tawc's own terms
+- `LICENSE` / `LICENSE.MIT` — the GPLv3 text and TAWC's own terms
 - `deps/**/{LICENSE,COPYING}*` — vendored native and Java sources
 - `cargo metadata` for `compositor/`, with per-crate texts read out of
   the local `~/.cargo` registry checkout

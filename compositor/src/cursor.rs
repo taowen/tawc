@@ -1,7 +1,7 @@
 //! Cursor presentation.
 //!
 //! When a real mouse is attached, Android draws the pointer sprite itself,
-//! above the app's surfaces. tawc must not render a second cursor into the
+//! above the app's surfaces. TAWC must not render a second cursor into the
 //! Wayland scene, so a client's cursor request is mapped onto the Activity
 //! SurfaceView's `PointerIcon` instead. See notes/input.md ("Cursor").
 //!

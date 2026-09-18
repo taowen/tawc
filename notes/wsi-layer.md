@@ -178,8 +178,8 @@ the fds and frees the backing gralloc buffer.
 
 Texture import is lazy and goes through Smithay's renderer import path while
 Smithay builds `WaylandSurfaceRenderElement`s for mapped desktop windows.
-Smithay recognizes tawc's external buffer, calls
-`WleglBufferData::import_gles`, and tawc runs
+Smithay recognizes TAWC's external buffer, calls
+`WleglBufferData::import_gles`, and TAWC runs
 `AhbTextureImporter::import_ahb` (`eglGetNativeClientBufferANDROID` →
 `eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID)` →
 `glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES)`). The texture

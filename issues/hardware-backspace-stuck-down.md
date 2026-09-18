@@ -7,7 +7,7 @@ client is restarted.
 ## Current state
 
 - Soft-keyboard Backspace works through `TawcInputConnection`.
-- tawc now has a real hardware-key path for mapped Android key down/up events:
+- TAWC now has a real hardware-key path for mapped Android key down/up events:
   focused view key callbacks -> `nativeOnHardwareKeyEvent` -> `SurfaceEvent::HardwareKey`
   -> real `wl_keyboard` press/release.
 - The compositor tracks accepted held hardware keys so repeat `ACTION_DOWN`s do

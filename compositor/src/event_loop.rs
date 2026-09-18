@@ -767,7 +767,7 @@ pub fn run(
     loop_handle.insert_source(state_query_channel, move |event, _, data: &mut TawcState| {
         if let ChannelEvent::Msg(response) = event {
             let clients = data.client_count.load(std::sync::atomic::Ordering::Relaxed);
-            // Report smithay's live pointer, not tawc's tracked copy: a grab
+            // Report smithay's live pointer, not TAWC's tracked copy: a grab
             // can hold focus somewhere other than the last resolved hit test.
             let pointer = data.seat.get_pointer();
             let bound_hosts = data

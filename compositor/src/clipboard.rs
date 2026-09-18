@@ -1,7 +1,7 @@
 //! Text clipboard bridge between Android and Wayland selections.
 //!
 //! Smithay owns the Wayland data-device protocol mechanics. This module
-//! owns tawc's platform bridge policy: text MIME selection, eager
+//! owns TAWC's platform bridge policy: text MIME selection, eager
 //! mirroring of client-owned selections into Android, and paste-time
 //! fetches for compositor-owned Android selections (announces are
 //! content-free so Android's paste toast only fires on actual pastes).
@@ -83,7 +83,7 @@ pub enum ClipboardEvent {
     /// Android's clipboard holds a text clip; only its description was
     /// read. `ts` is the clip's `ClipDescription.getTimestamp()` (0 on
     /// OEM builds that don't stamp clips); `own_write` means the clip
-    /// was written by tawc's own Wayland→Android mirror.
+    /// was written by TAWC's own Wayland→Android mirror.
     AndroidClipAvailable { ts: i64, own_write: bool },
     PullSelection {
         source: PullSource,

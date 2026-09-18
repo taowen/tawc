@@ -234,7 +234,7 @@ pub struct TawcState {
 
     /// Set by the compositor commit handler when any surface commits. Smithay
     /// imports textures while building render elements; this flag only wakes
-    /// tawc's render loop for new buffers, damage, viewport changes, or
+    /// TAWC's render loop for new buffers, damage, viewport changes, or
     /// same-buffer reattaches with fresh client-written content.
     pub buffer_commit_pending: bool,
 
@@ -310,7 +310,7 @@ impl TawcState {
         ViewporterState::new::<Self>(&dh);
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "tawc");
-        // Advertise only input devices tawc actually has. Android touch
+        // Advertise only input devices TAWC actually has. Android touch
         // should not appear as a Wayland pointer; toolkits must use wl_touch
         // for touchscreen interactions.
         let xkb_root = crate::app_paths::get().xkb_config_root.clone();
@@ -344,7 +344,7 @@ impl TawcState {
         // wp_cursor_shape_v1 turns the common cursor request into an enum
         // instead of a bitmap upload, which is exactly what maps onto an
         // Android PointerIcon. Its device dispatch needs TabletSeatHandler;
-        // tawc has no tablet seat, so the default impl is enough. The
+        // TAWC has no tablet seat, so the default impl is enough. The
         // returned state has no Drop impl — the global lives for the
         // lifetime of the Display.
         CursorShapeManagerState::new::<Self>(&dh);
@@ -1203,7 +1203,7 @@ impl SeatHandler for TawcState {
     }
 }
 
-// tawc has no zwp_tablet_v2 seat; this exists only because
+// TAWC has no zwp_tablet_v2 seat; this exists only because
 // wp_cursor_shape_v1's device dispatch is shared with tablet tools.
 impl TabletSeatHandler for TawcState {}
 

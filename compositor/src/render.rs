@@ -38,7 +38,7 @@ use crate::host::OutputHost;
 use crate::scale::OutputScale;
 use crate::wlegl::{wlegl_buffer_data, BufferOrigin};
 
-/// Tawc dark window surface (#1B1B22) — matches the home/install/distro-info
+/// TAWC dark window surface (#1B1B22) — matches the home/install/distro-info
 /// activities so the compositor's empty space looks like the rest of the app.
 /// Mirror any change here in `app/src/main/res/values-night/colors.xml`'s
 /// `tawc_window_bg`.
@@ -529,7 +529,7 @@ pub fn render_frame(
 // ---------------------------------------------------------------------------
 
 /// Send frame-done callbacks for windows Smithay currently considers mapped
-/// on tawc's desktop output. Android host foreground/background transitions
+/// on TAWC's desktop output. Android host foreground/background transitions
 /// update the visible desktop projection; Smithay owns the popup/subsurface traversal.
 pub fn send_frame_callbacks(state: &TawcState, time: u32) {
     let output = &state.output;

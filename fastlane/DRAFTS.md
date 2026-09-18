@@ -1,7 +1,7 @@
 # DRAFT store copy — not for publication
 
 **Everything below was written by an agent and must be rewritten by the
-maintainer before tawc is submitted to F-Droid.** This is store copy in the
+maintainer before TAWC is submitted to F-Droid.** This is store copy in the
 maintainer's own voice; the point of this file is to give you something to
 react to, not something to ship.
 
@@ -26,7 +26,7 @@ longer (e.g. "Tess's Android Wayland Compositor").
 
 ## `full_description.txt` (max 4000 characters)
 
-> tawc runs CLI and graphical Linux programs on Android without root.
+> TAWC runs CLI and graphical Linux programs on Android without root.
 > Graphical apps get hardware acceleration through the phone's own graphics
 > stack.
 >
@@ -40,7 +40,7 @@ longer (e.g. "Tess's Android Wayland Compositor").
 >
 > * A familiar terminal, using Termux's terminal widget (the Termux app
 >   itself is not required)
-> * Graphical apps launch from tawc's menu, and can be pinned to the Android
+> * Graphical apps launch from TAWC's menu, and can be pinned to the Android
 >   home screen
 > * Xwayland is included, so X11 apps run hardware-accelerated too
 > * A built-in task manager for viewing and killing Linux processes

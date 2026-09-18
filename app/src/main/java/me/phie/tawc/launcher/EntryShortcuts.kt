@@ -105,7 +105,7 @@ object EntryShortcuts {
 
     private fun pinIcon(context: Context, entry: LauncherEntry): IconCompat {
         // No usable entry icon → same fallbacks as the launcher list:
-        // ">_" badge for terminal entries, the tawc app icon otherwise.
+        // ">_" badge for terminal entries, the TAWC app icon otherwise.
         // Black backdrop so the badge's own black square extends over the
         // whole adaptive bitmap — launcher masks show a margin around the
         // safe zone, and the neutral grey reads as stripes there.

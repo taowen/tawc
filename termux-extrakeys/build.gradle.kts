@@ -10,7 +10,7 @@
 // License: these classes are GPLv3-only (termux-shared/LICENSE.md puts
 // com/termux/shared/termux/* under GPLv3; the Apache-2.0 exception
 // covers only terminal-emulator/terminal-view). Shipping them makes
-// distributed APKs subject to GPLv3 even though the tawc sources are
+// distributed APKs subject to GPLv3 even though the TAWC sources are
 // MIT. See notes/terminal.md.
 plugins {
     id("com.android.library")

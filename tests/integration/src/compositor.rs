@@ -305,11 +305,11 @@ pub fn assert_running() {
     match is_running() {
         Ok(true) => {}
         Ok(false) => panic!(
-            "tawc compositor is not running on the device — run the suite via \
+            "TAWC compositor is not running on the device — run the suite via \
              `scripts/run-integration-tests.sh` (which starts the compositor) \
              instead of invoking `cargo test` directly"
         ),
-        Err(e) => panic!("failed to check whether tawc compositor is running: {e}"),
+        Err(e) => panic!("failed to check whether TAWC compositor is running: {e}"),
     }
 }
 

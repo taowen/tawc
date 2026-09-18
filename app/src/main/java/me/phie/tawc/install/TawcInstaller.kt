@@ -63,7 +63,7 @@ internal object TawcInstaller {
 
     /**
      * Make the rootfs at [Installation.id] match the current app
-     * version's tawc-installed file set. No-op when
+     * version's TAWC-installed file set. No-op when
      * `installation.tawcStamp == CompositorService.currentExtractStamp`.
      * Otherwise:
      *

@@ -101,7 +101,7 @@ Kotlin side (`app/src/main/java/me/phie/tawc/`):
   `EventLoop::drop` does not clear that list — so any source callback that
   captures a handle clone leaks every source (Display, client fds, the X11
   lock) past compositor stop, until Android kills the cached process. Two
-  guards: tawc callbacks must reach the loop via `TawcState::loop_handle()`
+  guards: TAWC callbacks must reach the loop via `TawcState::loop_handle()`
   instead of capturing clones (convention only — nothing enforces it), and
   the smithay fork's `X11Wm` stores its `RegistrationToken`s plus a
   type-erased remover and deregisters its sources (event channel, focus
@@ -112,7 +112,7 @@ Kotlin side (`app/src/main/java/me/phie/tawc/`):
   logs smithay's "Cleaning up X11 lock.".
 - Renderable xdg and X11 windows live in Smithay `Window`s mapped into
   `Space<Window>`. Smithay renderer surface state owns committed buffer
-  metadata and texture import; tawc wraps the resulting render elements only
+  metadata and texture import; TAWC wraps the resulting render elements only
   to preserve Android buffer tinting and forced-opaque shader policy.
 
 ## Wayland Protocols Implemented
@@ -142,7 +142,7 @@ cargo build` requires running `scripts/ensure-deps.sh smithay` first.
 backends (DRM, GBM, libinput, udev, libseat).
 
 **Patches:** Android loads `libEGL.so` instead of `libEGL.so.1`
-(`src/backend/egl/ffi.rs`), and tawc adds a generic external-buffer renderer
+(`src/backend/egl/ffi.rs`), and TAWC adds a generic external-buffer renderer
 hook so AHB-backed `wl_buffer`s can populate Smithay renderer state without
 Smithay linking Android APIs.
 
@@ -151,7 +151,7 @@ feature -- no `libwayland-server.so` needed).
 
 **Key APIs used:**
 - `EGLContext::from_raw(display, config_id, context)` -- wraps pre-existing EGL context
-- `GlesRenderer` -- composites GL textures. AHB import still lives in tawc
+- `GlesRenderer` -- composites GL textures. AHB import still lives in TAWC
   (`gl_import.rs`), exposed to Smithay as an external buffer import hook.
 - `DisplayHandle::insert_client(stream, data)` -- accepts new Wayland client connections
 
@@ -165,7 +165,7 @@ feature -- no `libwayland-server.so` needed).
 
 ## Toplevel Lifecycle
 
-Smithay owns xdg toplevel lifetime in `XdgShellState`; tawc reads
+Smithay owns xdg toplevel lifetime in `XdgShellState`; TAWC reads
 `toplevel_surfaces()` when it needs to configure or close host-local windows and
 uses `XdgShellHandler::toplevel_destroyed` for cleanup. Do not add a parallel
 xdg toplevel list in `TawcState`.

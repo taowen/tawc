@@ -54,7 +54,7 @@ fn test_hidden_entry_filtering() {
 
     let plant = format!(
         "mkdir -p \"$(dirname '{path}')\" && printf '%s\\n' \
-         '[Desktop Entry]' 'Type=Application' 'Name=Tawc Hide Test' 'Exec=true' \
+         '[Desktop Entry]' 'Type=Application' 'Name=TAWC Hide Test' 'Exec=true' \
          > '{path}'",
         path = desktop_path()
     );
@@ -163,28 +163,28 @@ fn test_scan_dirs_precedence_and_terminal() {
     plant_desktop(
         "root/.local/share/applications",
         USER_ID,
-        "Tawc Scan User",
+        "TAWC Scan User",
         "tawc-scan-user-exec",
         true,
     );
     plant_desktop(
         "usr/local/share/applications",
         LOCAL_ID,
-        "Tawc Scan Local",
+        "TAWC Scan Local",
         "tawc-scan-local-exec",
         false,
     );
     plant_desktop(
         "root/.local/share/applications",
         DUP_ID,
-        "Tawc Scan Dup User",
+        "TAWC Scan Dup User",
         "tawc-scan-dup-user-exec",
         false,
     );
     plant_desktop(
         "usr/share/applications",
         DUP_ID,
-        "Tawc Scan Dup Packaged",
+        "TAWC Scan Dup Packaged",
         "tawc-scan-dup-packaged-exec",
         false,
     );
@@ -211,7 +211,7 @@ fn test_scan_dirs_precedence_and_terminal() {
     let dup = entry_object(&list, DUP_ID)
         .unwrap_or_else(|| panic!("duplicated-id entry missing from launcher-list: {list}"));
     assert!(
-        dup.contains("tawc-scan-dup-user-exec") && dup.contains("Tawc Scan Dup User"),
+        dup.contains("tawc-scan-dup-user-exec") && dup.contains("TAWC Scan Dup User"),
         "duplicated id did not resolve to the per-user copy: {dup}"
     );
 }

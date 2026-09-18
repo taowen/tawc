@@ -79,11 +79,11 @@ Why the broker and not the client or a new command:
 ## Semantics and limits (document in notes/ando.md when built)
 
 - **Background-activity-launch rules apply.** `startActivity` from the
-  app process is allowed while tawc is foreground (the terminal-user
+  app process is allowed while TAWC is foreground (the terminal-user
   case) and blocked by Android 10+ BAL rules otherwise — and the block
   does not throw, it's silently dropped by the system. Best effort:
   check our own foreground/importance state first and print a warning
-  ("tawc is backgrounded; Android will likely block this launch") so
+  ("TAWC is backgrounded; Android will likely block this launch") so
   the user isn't debugging a ghost.
 - **App privilege envelope.** Broadcasts/services run as uid
   me.phie.tawc: permission-gated and protected broadcasts, other apps'
@@ -114,6 +114,6 @@ explicitly as a behavior change.
     (expect the platform 255 — asserts the escape hatch).
   - Bad args → usage error on stderr, nonzero (not silent).
 - Emulator/manual: `ando am start -a android.settings.SETTINGS` with
-  tawc foregrounded → Settings comes forward (screenshot).
+  TAWC foregrounded → Settings comes forward (screenshot).
 - Update `plans/usecase_tests/android-ando-broker.md` step 5 to test
   the unrooted path once this ships.

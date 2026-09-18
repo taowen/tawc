@@ -9,7 +9,7 @@
 //! Filtering matches what a normal Linux app menu shows: `Type=Application`,
 //! not `NoDisplay`, not `Hidden`, has an `Exec`. The `OnlyShowIn` /
 //! `NotShowIn` machinery is intentionally ignored — a desktop session inside
-//! the chroot has no canonical name (we're "tawc", not "GNOME"), and almost
+//! the chroot has no canonical name (we're "TAWC", not "GNOME"), and almost
 //! every entry that uses these keys still works fine.
 //!
 //! Icon resolution: we map `Icon=` to an absolute on-device path inside

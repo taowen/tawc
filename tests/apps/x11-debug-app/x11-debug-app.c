@@ -1,5 +1,5 @@
 /*
- * x11-debug-app: small Xlib probe for tawc's XWayland tests.
+ * x11-debug-app: small Xlib probe for TAWC's XWayland tests.
  *
  * Commands:
  *   paste         Read CLIPBOARD as UTF8_STRING and print TAWC_DEBUG

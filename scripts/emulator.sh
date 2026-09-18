@@ -1,5 +1,5 @@
 #!/bin/bash
-# Manage the tawc AVDs: start one (windowed, with post-boot setup) or stop it.
+# Manage the TAWC AVDs: start one (windowed, with post-boot setup) or stop it.
 # See notes/emulator.md for one-time setup (SDK, AVD, Magisk).
 #
 # Variants are passed positionally so new ones can be added (and the
@@ -9,7 +9,7 @@
 #   rootless  -> AVD 'tawc-rootless'  (stock; for testing tawcroot/proot
 #                                      install methods on a non-rooted image)
 #
-# `start` with no variant refreshes the currently running tawc AVD when
+# `start` with no variant refreshes the currently running TAWC AVD when
 # exactly one is running. If none is running, it starts rootless.
 # Override the AVD name with TAWC_AVD=<name>.
 #
@@ -21,17 +21,17 @@
 # the post-boot setup. Post-boot setup:
 #   - rooted only: drops SELinux to permissive (rootAVD's Magisk has no
 #     magiskpolicy, so the SHM type_transition can't be installed)
-#   - rooted only, if the tawc APK is installed: grants Magisk `su` to the
+#   - rooted only, if the TAWC APK is installed: grants Magisk `su` to the
 #     app's uid (so InstallationService can call `su` without a prompt)
 #   - either: suppresses the immersive-mode education popup
 #   - either: enables Gboard as the active IME and suppresses its stylus UI
-#   - either, if the tawc APK is installed: grants POST_NOTIFICATIONS
+#   - either, if the TAWC APK is installed: grants POST_NOTIFICATIONS
 #     (so the install foreground-service notification displays).
 # Per-app grants are no-ops when the APK isn't there yet — first install
 # the APK with `scripts/app-build-install.sh`, then re-run `start` (or
 # grant by hand; see notes/installation.md).
 #
-# `stop` with no variant stops every tawc AVD that is running. `rooted` /
+# `stop` with no variant stops every TAWC AVD that is running. `rooted` /
 # `rootless` filter to only that one. (TAWC_AVD overrides to a single
 # explicit name.)
 
@@ -172,7 +172,7 @@ serial_for_avd() {
 
 cmd_start() {
     # First positional is an optional variant name. With no variant, use
-    # the running tawc AVD if there is exactly one; otherwise start the
+    # the running TAWC AVD if there is exactly one; otherwise start the
     # rootless AVD, which matches tawcroot's normal no-root path.
     local variant=""
     if [ "$#" -ge 1 ]; then
@@ -201,7 +201,7 @@ cmd_start() {
                     esac
                     ;;
                 *)
-                    echo "ERROR: multiple tawc AVDs are running; pass rooted or rootless explicitly." >&2
+                    echo "ERROR: multiple TAWC AVDs are running; pass rooted or rootless explicitly." >&2
                     exit 1
                     ;;
             esac
@@ -338,7 +338,7 @@ cmd_start() {
     "$ADB" -s "$serial" shell 'settings put secure show_ime_with_hard_keyboard 1' >/dev/null 2>&1 || \
         echo "WARNING: failed to show IME with hardware keyboard" >&2
 
-    # tawc-app-specific runtime setup (no-op if APK isn't installed yet).
+    # TAWC-app-specific runtime setup (no-op if APK isn't installed yet).
     # Grants reset on emulator wipe; setenforce 0 (rooted) resets every boot
     # — re-run `start` after `adb install` to refresh them all.
     local pkg=me.phie.tawc
@@ -412,7 +412,7 @@ cmd_stop() {
         if [ "${#candidates[@]}" -eq 1 ]; then
             echo "==> no AVD '${candidates[0]}' running"
         else
-            echo "==> no tawc AVDs running"
+            echo "==> no TAWC AVDs running"
         fi
     fi
 }

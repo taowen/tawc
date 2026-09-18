@@ -2,12 +2,12 @@
 <protocol name="tawc_gfxstream">
 
   <copyright>
-    Copyright (c) tawc authors.
+    Copyright (c) TAWC authors.
 
     SPDX-License-Identifier: MIT
   </copyright>
 
-  <description summary="tawc gfxstream-bridge present protocol">
+  <description summary="TAWC gfxstream-bridge present protocol">
     Custom Vulkan WSI hand-off for the gfxstream backend. The chroot
     presents a gfxstream ColorBuffer id; the compositor resolves it to
     an AHardwareBuffer and reuses the android_wlegl texture import path.

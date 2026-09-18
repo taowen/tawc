@@ -5,7 +5,7 @@
  * Same shaders as the Wayland/glibc version, but built with the
  * Android NDK and run directly from `adb shell` against the vendor's
  * native EGL/GLES libraries (no libhybris, no glibc, no Wayland, no
- * tawc compositor). Uses an EGL pbuffer surface so it doesn't need a
+ * TAWC compositor). Uses an EGL pbuffer surface so it doesn't need a
  * window system at all.
  *
  * Modes (--mode=struct|array): identical to the Wayland version.

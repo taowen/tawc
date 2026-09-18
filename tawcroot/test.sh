@@ -29,9 +29,9 @@
 #                as host mode (unit / handler / integration), same filter
 #                syntax, same exit code semantics — `--device` just changes
 #                where the orchestrator runs. Selection within device mode
-#                follows the rest of the tawc tree: `.tawctarget` /
+#                follows the rest of the TAWC tree: `.tawctarget` /
 #                `TAWC_TARGET=physical|emulator` (sourced from
-#                `scripts/lib/select-device.sh` — the only tawc-app coupling
+#                `scripts/lib/select-device.sh` — the only TAWC-app coupling
 #                in this script).
 #
 # Usage:
@@ -59,7 +59,7 @@ for arg in "$@"; do
 done
 
 # `TAWC_TARGET=physical|emulator` flips device mode on without `--device`,
-# matching the convention other tawc scripts use. An explicit
+# matching the convention other TAWC scripts use. An explicit
 # `--host` / `--device` flag wins over the env var.
 if [ "$MODE_EXPLICIT" = "0" ]; then
     case "${TAWC_TARGET:-}" in
@@ -87,7 +87,7 @@ fi
 # the same shape as host mode. PASSTHROUGH filters work everywhere; pass/fail
 # detection is the orchestrator's exit code, not adb-grep heuristics.
 # shellcheck disable=SC1091
-source "$REPO_DIR/scripts/lib/select-device.sh"   # sets ANDROID_SERIAL (tawc-app glue)
+source "$REPO_DIR/scripts/lib/select-device.sh"   # sets ANDROID_SERIAL (TAWC-app glue)
 # shellcheck disable=SC1091
 source "$REPO_DIR/scripts/lib/tawc-scratch.sh"    # sets TAWC_SCRATCH, ensures it
 

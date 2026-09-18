@@ -34,7 +34,7 @@ import me.phie.tawc.ui.tonalIconButton
 import me.phie.tawc.ui.verticalLp
 
 /**
- * Home screen for the tawc app. Renders a card for each currently-installed
+ * Home screen for the TAWC app. Renders a card for each currently-installed
  * Linux environment with two actions: Info (opens [DistroInfoActivity]) and
  * Run (opens [LauncherActivity] to pick an app). The compositor starts lazily
  * when a user launches a rootfs command, so a broken graphics backend doesn't

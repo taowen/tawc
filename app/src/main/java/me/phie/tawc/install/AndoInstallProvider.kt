@@ -16,7 +16,7 @@ import java.io.File
  * everything in the rootfs runs as the app uid, so owner-exec is all
  * that matters).
  *
- * `/usr/local/bin/ando` is a tawc-owned file in user-namespace
+ * `/usr/local/bin/ando` is a TAWC-owned file in user-namespace
  * territory (it's on every distro profile's PATH, which is the point).
  * If it ever conflicts with a user install, move to
  * `/usr/lib/tawc/bin/ando` + a symlink.

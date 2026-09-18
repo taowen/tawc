@@ -41,9 +41,9 @@ eagerly:
   thread that reverse-JNIs `NativeBridge.fetchClipboardText()` →
   `ClipboardBridge.getTextForPaste()` — the real `getPrimaryClip()`
   read, so the OS toast fires exactly once per actual paste. A null
-  fetch (read denied because tawc isn't focused, non-text clip, over the
+  fetch (read denied because TAWC isn't focused, non-text clip, over the
   1MB cap) drops the fd: the client sees EOF / empty paste. Known
-  regression, accepted: pasting while tawc has no Android input focus
+  regression, accepted: pasting while TAWC has no Android input focus
   yields an empty paste instead of stale mirrored text.
 - The fetch thread writes into the client pipe with a 5s deadline
   (nonblocking + poll), so a client that pastes and never reads can't
@@ -56,7 +56,7 @@ eagerly:
 
 ## A backgrounded app must not be able to paste
 
-Android's own foreground rule bounds clipboard reads to "while some tawc
+Android's own foreground rule bounds clipboard reads to "while some TAWC
 window is focused". Two compositor-side gates narrow that to the app the
 user is actually looking at. Both refuse by closing the client's pipe /
 answering with no property, which reads as an empty paste.
@@ -74,14 +74,14 @@ selection under a fresh one at the end of every `set_input_focus`, and
 `send_selection` serves only offers whose serial is current. Only the
 focused client is ever handed an offer, so "current serial" means "the
 client focus went to"; focus leaving for another app — or for nothing,
-when tawc is backgrounded — invalidates the lot. Refocusing hands out a
+when TAWC is backgrounded — invalidates the lot. Refocusing hands out a
 current offer again, so nothing is permanently poisoned. Cooperative
 toolkits drop stale offers by themselves and never notice.
 
 **X11 — `allow_selection_access`.** X11 has no offer objects to age out;
 clients convert the selection live, so xwayland.rs just refuses unless an
 X11 window holds focus. That covers the case that matters — a guest can't
-read behind a Wayland window or behind no tawc window at all — but it is
+read behind a Wayland window or behind no TAWC window at all — but it is
 deliberately coarse: smithay reports *that* a selection was requested,
 not by which X client, so any X11 client can read while any X11 window is
 focused. One Xwayland serves every distro, so that includes across

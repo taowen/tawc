@@ -1,7 +1,7 @@
 package me.phie.tawc.install
 
 /**
- * tawc's default interactive-shell config (colored prompt, color
+ * TAWC's default interactive-shell config (colored prompt, color
  * aliases), split across two ownership domains:
  *
  *  - [GUEST_BASHRC_PATH] — app-owned, shipped by
@@ -23,7 +23,7 @@ package me.phie.tawc.install
  * [RootfsEnv] on every spawn.
  */
 internal object ShellDefaults {
-    /** App-owned defaults file inside the rootfs (tawc namespace).
+    /** App-owned defaults file inside the rootfs (TAWC namespace).
      *  NOT under `/usr/share/tawc/` — that dir is bind-mounted over
      *  with `<appData>/share` (wayland socket) at runtime, which
      *  would shadow anything the installer writes there. */
@@ -40,7 +40,7 @@ internal object ShellDefaults {
      * htop) still show through while running.
      */
     val GUEST_BASHRC_CONTENT = """
-        # tawc shell and prompt defaults:
+        # TAWC shell and prompt defaults:
         case ${'$'}- in *i*) ;; *) return ;; esac
         PS1='\[\e[1;32m\]\w\[\e[0m\] \${'$'} '
         case ${'$'}TERM in xterm*) PS1='\[\e]0;\w\a\]'${'$'}PS1 ;; esac
@@ -57,7 +57,7 @@ internal object ShellDefaults {
         appendLine("# One-time shell-defaults stubs; user-owned after this.")
         appendLine("mkdir -p \"\$ROOTFS/root\"")
         appendLine("cat > \"\$ROOTFS/root/.bashrc\" <<'TAWC_BASHRC_EOF'")
-        appendLine("# tawc shell and prompt defaults:")
+        appendLine("# TAWC shell and prompt defaults:")
         appendLine("[ -f $GUEST_BASHRC_PATH ] && . $GUEST_BASHRC_PATH")
         appendLine("TAWC_BASHRC_EOF")
         appendLine("cat > \"\$ROOTFS/root/.bash_profile\" <<'TAWC_BASH_PROFILE_EOF'")

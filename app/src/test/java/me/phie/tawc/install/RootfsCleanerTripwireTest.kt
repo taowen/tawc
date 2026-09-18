@@ -32,7 +32,7 @@ class RootfsCleanerTripwireTest {
         // assets under <filesDir>; never touches <distros>.
         "compositor/CompositorService.kt" to "xwayland asset staging",
         // removeFromRootfs: targeted removal of previously-installed
-        // tawc files inside a live rootfs, driven by the recorded
+        // TAWC files inside a live rootfs, driven by the recorded
         // tawcInstalls list — not slot deletion.
         "install/TawcInstaller.kt" to "tawc-file uninstall inside rootfs",
         // Age sweep inside a live rootfs's /tmp — never slot deletion.

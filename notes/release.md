@@ -56,7 +56,7 @@ The release build cannot be run by the agent: the signing keystore lives in a di
 1. `scripts/build-release-apk.sh` — builds `assembleRelease` (default graphics `libhybris,cpu`), zipaligns, signs, verifies, and renames the artifact to `app/build/outputs/apk/release/tawc-vN.apk` (version read from the APK via aapt2).
 2. Smoke-test that exact APK on the physical phone: fresh install + launch + distro install + run an app (e.g. lxterminal); for later releases also install *over* the previous release to catch signing/versionCode upgrade breakage. The release build differs from the dev loop (no debug methods, production graphics set), so dev-loop testing does not cover it.
 3. Push `main` and the tag.
-4. `gh release create vN tawc-vN.apk --title "tawc vN" --notes-file <notes>`.
+4. `gh release create vN tawc-vN.apk --title "TAWC vN" --notes-file <notes>`.
 
 ## Debuggability over size
 

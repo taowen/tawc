@@ -1,13 +1,13 @@
 # Tess's Android Wayland Compositor
-tawc runs CLI and graphical Linux programs on Android without root. Graphical apps get hardware acceleration with the phone's native graphics stack. The project consists of tawcroot (a performant alternative to PRoot), a Wayland compositor, and the UI to put it all together.
+TAWC runs CLI and graphical Linux programs on Android without root. Graphical apps get hardware acceleration with the phone's native graphics stack. The project consists of tawcroot (a performant alternative to PRoot), a Wayland compositor, and the UI to put it all together.
 
 This project is agent-built, primarily using Claude Code and latest Anthropic models.
 
-**I won't be working on tawc for a few weeks, thanks for your patience! I'm so glad people are trying it out and the bug reports are genuinely useful. Keep 'em coming and I'll go through them all when I'm back.**
+**I won't be working on TAWC for a few weeks, thanks for your patience! I'm so glad people are trying it out and the bug reports are genuinely useful. Keep 'em coming and I'll go through them all when I'm back.**
 
 ## Features
 - The app embeds Termux's widget for a familiar terminal UI (the Termux app itself is not required)
-- When graphical apps are installed they can be run from tawc's launcher menu
+- When graphical apps are installed they can be run from TAWC's launcher menu
 - Linux apps can be added to the phone's home screen and are presented alongside Android apps in the app switcher
 - XWayland is included and wired up for hardware accelerated X11 support
 - A built-in task manager lets you view and kill running Linux processes
@@ -39,7 +39,7 @@ Issues are preferred over PRs. I welcome bug reports and feature requests, but n
 
 > ## Issue title: program foo crashes
 >
-> I'm using Arch on tawc v1 on my Pixel 10 running stock Android 17.
+> I'm using Arch on TAWC v1 on my Pixel 10 running stock Android 17.
 >
 > I installed foo v1.2 with pacman but it crashes on launch. I asked fable about the problem, and it said:
 >

@@ -350,7 +350,7 @@ fn test_ando_node_present_but_dead_reports_broker_not_running() {
     // The non-ENOENT connect-failure branch: a node that exists but
     // refuses (here /dev/null — connect(2) to a non-socket inode gives
     // ECONNREFUSED) means an *enabled* distro whose broker/app died,
-    // so the client must keep the "is the tawc app alive?" diagnosis,
+    // so the client must keep the "is the TAWC app alive?" diagnosis,
     // not send the user to a toggle that is already on. Client-side
     // only — no broker state needed.
     let (rc, _, err) = run("TAWC_ANDO_SOCKET=/dev/null ando true");
@@ -367,7 +367,7 @@ fn test_ando_disabled_prints_enable_instructions() {
     let (rc, _, err) = run("ando true");
     assert_eq!(rc, 127, "stderr: {err:?}");
     assert!(err.contains("ando is disabled for this distro"), "stderr: {err:?}");
-    assert!(err.contains("Enable it in the tawc app"), "stderr: {err:?}");
+    assert!(err.contains("Enable it in the TAWC app"), "stderr: {err:?}");
 }
 
 #[test]

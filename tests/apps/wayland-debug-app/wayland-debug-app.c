@@ -1,5 +1,5 @@
 /*
- * wayland-debug-app: toolkitless Wayland client for tawc integration tests.
+ * wayland-debug-app: toolkitless Wayland client for TAWC integration tests.
  *
  * Subcommand CLI; output is the TAWC_DEBUG: protocol parsed by the Rust
  * integration harness.
@@ -2749,7 +2749,7 @@ static uint32_t text_input_content_purpose_from_env(void)
 static int cmd_text_input(int argc, char **argv)
 {
     struct wayland_mode mode = {
-        .title = "tawc wayland text-input debug",
+        .title = "TAWC wayland text-input debug",
         .app_id = "wayland-debug-app",
         .use_text_input = 1,
         .editable = 1,
@@ -2783,7 +2783,7 @@ static int cmd_text_input(int argc, char **argv)
 static int cmd_text_input_no_surrounding(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland text-input no-surrounding debug",
+        .title = "TAWC wayland text-input no-surrounding debug",
         .app_id = "wayland-debug-app-no-surrounding",
         .use_text_input = 1,
         .editable = 0,
@@ -2816,7 +2816,7 @@ static int cmd_text_input_no_surrounding(int argc, char **argv)
 static int cmd_text_input_stale_newline(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland text-input stale-newline debug",
+        .title = "TAWC wayland text-input stale-newline debug",
         .app_id = "wayland-debug-app-stale-newline",
         .use_text_input = 1,
         .editable = 1,
@@ -2850,7 +2850,7 @@ static int cmd_text_input_stale_newline(int argc, char **argv)
 static int cmd_text_input_echo_preedit(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland text-input echo-preedit debug",
+        .title = "TAWC wayland text-input echo-preedit debug",
         .app_id = "wayland-debug-app-echo-preedit",
         .use_text_input = 1,
         .editable = 1,
@@ -2887,7 +2887,7 @@ static int run_clipboard_copy(int argc, char **argv, int double_set)
 {
     char text[MAX_TEXT];
     struct wayland_mode mode = {
-        .title = "tawc wayland clipboard copy debug",
+        .title = "TAWC wayland clipboard copy debug",
         .app_id = "wayland-debug-app-clipboard-copy",
         .use_data_device = 1,
         .clipboard_double_set = double_set,
@@ -2925,7 +2925,7 @@ static int cmd_clipboard_copy_double(int argc, char **argv)
 static int cmd_clipboard_copy_overcap(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland clipboard overcap debug",
+        .title = "TAWC wayland clipboard overcap debug",
         .app_id = "wayland-debug-app-clipboard-overcap",
         .use_data_device = 1,
         .clipboard_generated_bytes = CLIPBOARD_OVERCAP_BYTES,
@@ -2941,7 +2941,7 @@ static int cmd_clipboard_copy_overcap(int argc, char **argv)
 static int cmd_clipboard_copy_timeout(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland clipboard timeout debug",
+        .title = "TAWC wayland clipboard timeout debug",
         .app_id = "wayland-debug-app-clipboard-timeout",
         .use_data_device = 1,
         .clipboard_copy_text = "clipboard source should time out",
@@ -2958,7 +2958,7 @@ static int cmd_clipboard_copy_timeout(int argc, char **argv)
 static int cmd_clipboard_paste(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland clipboard paste debug",
+        .title = "TAWC wayland clipboard paste debug",
         .app_id = "wayland-debug-app-clipboard-paste",
         .use_data_device = 1,
         .clipboard_paste = 1,
@@ -2974,7 +2974,7 @@ static int cmd_clipboard_paste(int argc, char **argv)
 static int cmd_touch(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland touch debug",
+        .title = "TAWC wayland touch debug",
         .app_id = "wayland-debug-app-touch",
         .use_text_input = 0,
         .editable = 0,
@@ -3010,7 +3010,7 @@ static int cmd_touch(int argc, char **argv)
 static int cmd_scale(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland scale debug",
+        .title = "TAWC wayland scale debug",
         .app_id = "wayland-debug-app-scale",
         .use_text_input = 0,
         .editable = 0,
@@ -3044,7 +3044,7 @@ static int cmd_scale(int argc, char **argv)
 static int cmd_render_pattern(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland render pattern",
+        .title = "TAWC wayland render pattern",
         .app_id = "wayland-debug-app-render-pattern",
         .use_text_input = 0,
         .editable = 0,
@@ -3061,7 +3061,7 @@ static int cmd_render_pattern(int argc, char **argv)
 static int cmd_initial_configure(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland initial configure debug",
+        .title = "TAWC wayland initial configure debug",
         .app_id = "wayland-debug-app-initial-configure",
         .use_text_input = 0,
         .editable = 0,
@@ -3105,7 +3105,7 @@ static int run_scene_command(const struct wayland_mode *mode)
 static int cmd_clipboard_paste_retained(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland clipboard retained-offer debug",
+        .title = "TAWC wayland clipboard retained-offer debug",
         .app_id = "wayland-debug-app-clipboard-paste-retained",
         .use_data_device = 1,
         .editable = 0,
@@ -3152,7 +3152,7 @@ static int cmd_clipboard_paste_retained(int argc, char **argv)
 static int cmd_subsurface(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland subsurface debug",
+        .title = "TAWC wayland subsurface debug",
         .app_id = "wayland-debug-app-subsurface",
         .use_text_input = 0,
         .editable = 0,
@@ -3169,7 +3169,7 @@ static int cmd_subsurface(int argc, char **argv)
 static int cmd_subsurface_input_empty(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland subsurface input-empty debug",
+        .title = "TAWC wayland subsurface input-empty debug",
         .app_id = "wayland-debug-app-subsurface-input-empty",
         .use_text_input = 0,
         .editable = 0,
@@ -3187,7 +3187,7 @@ static int cmd_subsurface_input_empty(int argc, char **argv)
 static int cmd_popup(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland popup debug",
+        .title = "TAWC wayland popup debug",
         .app_id = "wayland-debug-app-popup",
         .use_text_input = 0,
         .editable = 0,
@@ -3204,7 +3204,7 @@ static int cmd_popup(int argc, char **argv)
 static int cmd_popup_switch(int argc, char **argv)
 {
     static const struct wayland_mode mode = {
-        .title = "tawc wayland popup switch debug",
+        .title = "TAWC wayland popup switch debug",
         .app_id = "wayland-debug-app-popup-switch",
         .use_text_input = 0,
         .editable = 0,

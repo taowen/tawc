@@ -283,7 +283,7 @@ object NativeBridge {
 
     /** Announce that Android's clipboard holds a text clip, without reading
      *  it. [timestampMs] is the ClipDescription timestamp (0 if the OEM
-     *  build doesn't stamp clips); [ownWrite] marks tawc's own
+     *  build doesn't stamp clips); [ownWrite] marks TAWC's own
      *  Wayland→Android mirror writes. Content is fetched lazily at paste
      *  time via [fetchClipboardText]. */
     external fun nativeOnAndroidClipAvailable(timestampMs: Long, ownWrite: Boolean)
@@ -408,7 +408,7 @@ object NativeBridge {
      * hides the cursor.
      *
      * Android draws the pointer sprite itself when a real mouse is attached,
-     * so tawc maps the request onto the SurfaceView's PointerIcon rather than
+     * so TAWC maps the request onto the SurfaceView's PointerIcon rather than
      * rendering a second cursor into the Wayland scene. `View.setPointerIcon`
      * must run on the UI thread.
      */
@@ -579,7 +579,7 @@ object NativeBridge {
     /** Called from a native clipboard-fetch thread when a client pastes the
      *  compositor-owned Android selection. Runs the real clipboard read —
      *  deliberately not posted to the main thread, the fetch thread blocks
-     *  on the result. Null when the clip is unreadable (tawc not focused),
+     *  on the result. Null when the clip is unreadable (TAWC not focused),
      *  not text, or over the size cap. Never throws: some OEM builds throw
      *  SecurityException instead of returning null for unfocused reads, and
      *  an exception left pending on the fetch thread would kill the process

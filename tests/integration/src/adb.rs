@@ -9,7 +9,7 @@
 //! no broker action that does so either. Tests act as a keyboard or as a
 //! wayland client (assertions go through `wayland-debug-app`'s observed
 //! events). Tests assert the two public ends — Android contract results and
-//! client-visible Wayland behavior — not private tawc state. See
+//! client-visible Wayland behavior — not private TAWC state. See
 //! `notes/text-input.md` ("Test infrastructure note") for the rationale.
 //!
 //! Tap / cursor events come from [`inject_touch`] / [`inject_touch_logical`],
@@ -453,7 +453,7 @@ pub fn ic_finish_hidden_composing() -> io::Result<Output> {
 }
 
 /// Call `TawcInputConnection.setSelection(start, end)` on the active
-/// IC. text-input-v3 has no wayland-side equivalent, so tawc rejects
+/// IC. text-input-v3 has no wayland-side equivalent, so TAWC rejects
 /// cursor movement unless the request is already a no-op.
 pub fn ic_set_selection(start: u32, end: u32) -> io::Result<Output> {
     let s = start.to_string();
@@ -572,7 +572,7 @@ fn hardware_key(action: &str, keycode: u32, repeat: u32) -> io::Result<Output> {
     )
 }
 
-/// Set Android's real ClipboardManager text through tawc's debug broker.
+/// Set Android's real ClipboardManager text through TAWC's debug broker.
 /// This is intentionally app-side rather than `adb shell` clipboard poking:
 /// Android exposes clipboard APIs to the foreground app, while shell access
 /// varies across OS versions and device builds.
@@ -586,7 +586,7 @@ pub fn clipboard_set_html_text(text: &str) -> io::Result<Output> {
     broker_action("clipboard-set-text", &[("text", text), ("html", "1")])
 }
 
-/// Read Android's real ClipboardManager text through tawc's debug broker.
+/// Read Android's real ClipboardManager text through TAWC's debug broker.
 pub fn clipboard_get_text() -> io::Result<String> {
     let output = broker_action("clipboard-get-text", &[])?;
     Ok(String::from_utf8_lossy(&output.stdout)

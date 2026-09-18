@@ -313,7 +313,7 @@ matching a real Magisk-rooted device.
     adb -s emulator-5554 install -r app/build/outputs/apk/debug/app-debug.apk
     TAWC_TARGET=emulator scripts/tawc-exec.sh --foreground-app --action install --arg id=arch
 
-This installs the tawc app and triggers its in-app installer, which
+This installs the TAWC app and triggers its in-app installer, which
 downloads the Arch x86_64 bootstrap tarball, extracts it to
 `/data/data/me.phie.tawc/distros/arch/rootfs/`, configures pacman,
 and installs `base-devel` + Wayland + GTK3 inside the chroot. Takes a
@@ -356,23 +356,23 @@ note.
 
 Launch / shut down:
 
-    scripts/emulator.sh start                 # refresh running tawc AVD, else rootless
+    scripts/emulator.sh start                 # refresh running TAWC AVD, else rootless
     scripts/emulator.sh start rooted          # explicit rooted
     scripts/emulator.sh start rootless        # stock AVD
     scripts/emulator.sh start rooted --cold   # skip snapshot, full cold boot
-    scripts/emulator.sh stop                  # stops every running tawc AVD
+    scripts/emulator.sh stop                  # stops every running TAWC AVD
     scripts/emulator.sh stop rootless         # only stop the rootless one
     scripts/emulator.sh stop rooted           # only stop the rooted one
 
 The variant is positional so callers (test scripts, CI, etc.) can name
 exactly which AVD they want. With no variant, `start` refreshes the
-currently running tawc AVD when exactly one is running; if none is
+currently running TAWC AVD when exactly one is running; if none is
 running, it starts `tawc-rootless`. If both are running, pass a variant.
 
 You can run both AVDs at once — the script resolves the right adb
 serial via `adb emu avd name`, so `start rootless` always targets the
 rootless one even if the rooted one is already on `emulator-5554`.
-Bare `stop` with no variant stops whichever tawc AVDs are currently
+Bare `stop` with no variant stops whichever TAWC AVDs are currently
 running (both, if both are up).
 
 `start` always runs the emulator windowed against an X display. There's
@@ -400,7 +400,7 @@ any meaningful guest activity (kswapd / zRAM churn especially). The
 trade-off is a slower snapshot save on exit (it copies 2 GB instead of
 relying on the file mapping); ongoing disk writes drop to ~zero.
 
-Post-boot it also brings the AVD into a known-good state for tawc dev:
+Post-boot it also brings the AVD into a known-good state for TAWC dev:
 
 - `setenforce 0` — rootAVD's Magisk has no `magiskpolicy` binary, so
   the SELinux `type_transition` that lets the compositor mmap memfds

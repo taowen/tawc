@@ -1,5 +1,5 @@
 #!/bin/bash
-# Regenerate every derived form of the tawc app icon from its one source,
+# Regenerate every derived form of the TAWC app icon from its one source,
 # `app/icon.svg` (an Inkscape document — edit it there).
 #
 # Generated outputs, all checked in:
@@ -274,7 +274,7 @@ colors = ('<?xml version="1.0" encoding="utf-8"?>\n'
           '    <color name="tawc_icon_bg">%s</color>\n'
           "</resources>\n" % (GENERATED, bg))
 
-logo_note = ("The tawc mark at full size (ic_launcher_foreground without\n"
+logo_note = ("The TAWC mark at full size (ic_launcher_foreground without\n"
              "     the adaptive-icon safe-zone scale). Launcher-row "
              "fallback icon\n     for graphical entries with no usable "
              "icon.\n\n     ")

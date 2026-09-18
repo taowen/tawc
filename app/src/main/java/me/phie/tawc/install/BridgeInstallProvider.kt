@@ -31,7 +31,7 @@ internal object BridgeInstallProvider : TawcInstallProvider {
 
     /** Where Mesa's gfxstream-vk lands inside the rootfs. The
      *  matching `VK_ICD_FILENAMES` value lives in [RootfsEnv]; keep
-     *  these two strings in sync. `/usr/lib/gfxstream/` is a tawc-owned
+     *  these two strings in sync. `/usr/lib/gfxstream/` is a TAWC-owned
      *  namespace, matching `/usr/lib/hybris/` — see
      *  notes/installation.md "Install paths in the rootfs". The .so
      *  and the ICD JSON co-locate; the ICD JSON's internal

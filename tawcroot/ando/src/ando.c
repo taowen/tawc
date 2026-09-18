@@ -1,7 +1,7 @@
 // ando — run an Android command from inside the rootfs.
 //
 // Named like sudo, but for Android: `ando [flags] <cmd> [args…]` asks
-// the tawc app process (which never had tawcroot's seccomp filter) to
+// the TAWC app process (which never had tawcroot's seccomp filter) to
 // spawn <cmd> as a plain Android process, wired to this client's real
 // stdin/stdout/stderr (passed via SCM_RIGHTS — tty semantics survive)
 // and started in the caller's cwd (passed as an O_PATH fd; tawcroot
@@ -238,16 +238,16 @@ static int connect_broker(void) {
         // because enabling only takes effect on the next rootfs spawn.
         // ECONNREFUSED (node present, nobody listening) is a different
         // failure — an enabled distro whose broker/app died — so keep
-        // the old "is the tawc app alive?" diagnosis for it and every
+        // the old "is the TAWC app alive?" diagnosis for it and every
         // other errno. See notes/ando.md.
         if (err == ENOENT) {
             fprintf(stderr,
                 "ando: cannot reach the ando broker — ando is disabled for this distro.\n"
                 "ando allows running Android commands outside the Linux environment.\n"
-                "Enable it in the tawc app (distro settings), then open a new\n"
+                "Enable it in the TAWC app (distro settings), then open a new\n"
                 "terminal/session.\n");
         } else {
-            fprintf(stderr, "ando: broker not running at %s (%s) — is the tawc app alive?\n",
+            fprintf(stderr, "ando: broker not running at %s (%s) — is the TAWC app alive?\n",
                     name, strerror(err));
         }
         close(fd);

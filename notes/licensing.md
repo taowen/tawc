@@ -2,11 +2,11 @@
 
 ## Position
 
-tawc's own source is **MIT** (`LICENSE.MIT`). The **distributed APK is
+TAWC's own source is **MIT** (`LICENSE.MIT`). The **distributed APK is
 GPL-3.0-only** (`LICENSE`), because it links GPLv3 code. Both statements
 are true at once and neither replaces the other:
 
-- Anyone reusing tawc's *sources* gets them under MIT.
+- Anyone reusing TAWC's *sources* gets them under MIT.
 - Anyone receiving a *built APK* receives it under GPLv3.
 
 `LICENSE` holds the GPLv3 text rather than the MIT text so GitHub's

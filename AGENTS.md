@@ -1,4 +1,4 @@
-Tess's Android Wayland Compositor (tawc) is an Android app plus rootfs/build scripts for running desktop Linux programs on Android.
+Tess's Android Wayland Compositor (TAWC) is an Android app plus rootfs/build scripts for running desktop Linux programs on Android.
 
 ## Quick Reference
 - Build APK: `scripts/build-app.sh`

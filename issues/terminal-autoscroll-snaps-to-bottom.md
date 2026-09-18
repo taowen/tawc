@@ -38,7 +38,7 @@ from the optional `SCROLL` extra key
 `terminal-emulator/.../TerminalEmulator.java:2532`), and that key is
 not in our `EXTRA_KEYS_CONFIG`
 (`app/src/main/java/me/phie/tawc/terminal/TerminalActivity.kt:550`),
-so in tawc there is no way to stop the snap at all.
+so in TAWC there is no way to stop the snap at all.
 
 The caller is ours: `TerminalActivity.onTextChanged`
 (`TerminalActivity.kt:461`) calls the no-arg `onScreenUpdated()`, which

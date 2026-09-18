@@ -53,7 +53,7 @@ The struct version compiles and links cleanly on Adreno, no
 
 | File | Build | Runs as |
 |------|-------|---------|
-| `adreno-struct-varying.c` | Wayland + glibc, see `tests/apps/Makefile` | a Wayland client (xdg_toplevel) — used in tawc's chroot via libhybris |
+| `adreno-struct-varying.c` | Wayland + glibc, see `tests/apps/Makefile` | a Wayland client (xdg_toplevel) — used in TAWC's chroot via libhybris |
 | `adreno-struct-varying-bionic.c` | NDK aarch64 clang, `-lEGL -lGLESv3` | direct `adb shell` binary, no Wayland (EGL pbuffer) |
 
 Both implement the same `--mode={struct,array}` switch and use

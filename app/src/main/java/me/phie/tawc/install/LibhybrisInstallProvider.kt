@@ -6,7 +6,7 @@ import java.io.File
 
 /**
  * Lays the APK-bundled libhybris tree into a rootfs at
- * `/usr/lib/hybris/` (a tawc-owned namespace; `/usr/local/lib/` stays
+ * `/usr/lib/hybris/` (a TAWC-owned namespace; `/usr/local/lib/` stays
  * free for the user's own installs inside the rootfs).
  *
  * Under [TawcrootMethod] the tree itself is not copied at all —

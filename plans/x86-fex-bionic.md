@@ -63,7 +63,7 @@ candidate shapes — pick after prototyping, not now:
 2. **FEX replaces tawcroot for these installs.** FEX's overlay is the
    only filesystem layer; no SIGSYS machinery at all. But then nobody
    provides fake-root, Android-blocked-syscall fixups, or /proc
-   synthesis — FEX would need to grow tawc-specific patches for
+   synthesis — FEX would need to grow TAWC-specific patches for
    exactly the things tawcroot already solved, and raw FEX on Android
    is what upstream's FAQ warns about (raw syscall usage vs zygote
    seccomp). Cleaner in theory, likely more patching in practice.

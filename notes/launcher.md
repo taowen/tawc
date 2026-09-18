@@ -167,7 +167,7 @@ trampoline).
   pinned-shortcut intents may target non-exported components of the
   publishing app; translucent DialogHost theme, `noHistory`,
   `excludeFromRecents`, `taskAffinity=""` so a tap doesn't yank the
-  main tawc task forward): gate install exists + state READY → scan →
+  main TAWC task forward): gate install exists + state READY → scan →
   find by id → `EntryLauncher.launch`. Any gate failure shows
   `LaunchErrorActivity` instead of crashing, which is the whole
   stale-pin story: uninstalling a distro leaves pins behind, and a
@@ -180,7 +180,7 @@ trampoline).
 - **Icon**: entry PNG decoded via `IconLoader.decode`, centered on a
   neutral square at 2/3 edge (adaptive-icon safe zone) and wrapped
   with `IconCompat.createWithAdaptiveBitmap` so it masks correctly on
-  every launcher shape; no/undecodable icon falls back to the tawc app
+  every launcher shape; no/undecodable icon falls back to the TAWC app
   icon. Geometry (`pinIconFit`) + id mapping are JVM-unit-tested
   (`EntryShortcutsTest`); pinning itself is a launcher-UI interaction,
   so end-to-end coverage is manual.

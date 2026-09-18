@@ -2,7 +2,7 @@
 
 The app declares no `WAKE_LOCK` permission and never acquires one —
 `AndroidManifest.xml` has zero `WAKE_LOCK` entries, and `dumpsys power`
-shows no tawc-owned wakelock (only transient
+shows no TAWC-owned wakelock (only transient
 `NotificationManagerService:post:me.phie.tawc` ones owned by uid 1000).
 
 The only thing keeping the device awake during terminal work is

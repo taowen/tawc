@@ -48,7 +48,7 @@ object AndoBrokers {
                 // stops, so a node left by an unclean app shutdown
                 // would sit forever once the distro is disabled — and
                 // a still-bound guest session connecting to it would
-                // get ECONNREFUSED ("is the tawc app alive?") instead
+                // get ECONNREFUSED ("is the TAWC app alive?") instead
                 // of ENOENT (the ando-disabled instructions).
                 store.andoSocket(inst.id).delete()
                 continue

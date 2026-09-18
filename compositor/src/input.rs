@@ -47,7 +47,7 @@ pub fn send_touch_event(event: TouchEvent) {
 // ---------------------------------------------------------------------------
 
 /// Where a scroll frame came from. Mirrors the subset of
-/// `wl_pointer.axis_source` tawc can actually distinguish on Android.
+/// `wl_pointer.axis_source` TAWC can actually distinguish on Android.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PointerAxisSource {
     /// A mouse wheel with discrete detents.

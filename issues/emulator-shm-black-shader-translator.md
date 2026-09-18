@@ -7,10 +7,10 @@ unaffected. Replaces the old `render-pattern-emulator-black.md`.
 
 ## Root cause (2026-07-06, fully diagnosed)
 
-Emulator driver bug, not a tawc bug. The guest GL driver ("Android
+Emulator driver bug, not a TAWC bug. The guest GL driver ("Android
 Emulator OpenGL ES Translator") scans shader source textually without
 honouring the preprocessor. Smithay's texture fragment shader (and
-tawc's tint/plain shaders, same template) declare the sampler as:
+TAWC's tint/plain shaders, same template) declare the sampler as:
 
     #if defined(EXTERNAL)
     uniform samplerExternalOES tex;
@@ -40,7 +40,7 @@ Resolve `#if defined(X)`/`#else`/`#endif` against each variant's define
 list before the source reaches the driver, in the smithay fork's
 `texture_program` (`src/backend/renderer/gles/shaders/mod.rs`), so
 disabled branches are never seen. One helper covers smithay's stock
-shader and tawc's custom shaders (both compile through
+shader and TAWC's custom shaders (both compile through
 `compile_custom_texture_shader` → `texture_program`); semantically a
 no-op on correct drivers. Implemented and verified 2026-07-06: all
 `rendering::` and `xwayland::` tests pass on the emulator with it

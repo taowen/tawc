@@ -1,5 +1,5 @@
 //! XWayland integration: spawning the bionic-built `Xwayland` binary,
-//! routing X11 surfaces through tawc's host/toplevel model, and feeding
+//! routing X11 surfaces through TAWC's host/toplevel model, and feeding
 //! the X11 window manager loop.
 //!
 //! The Xwayland binary, xkbcomp, and their DT_NEEDED libs are shipped
@@ -524,7 +524,7 @@ impl XWaylandShellHandler for TawcState {
 // ---------------------------------------------------------------------------
 // XwmHandler — X11 window manager events. Mirrors the parts of
 // `anvil/src/shell/x11.rs` that are relevant to a no-decoration,
-// touch-driven, single-output compositor like tawc; everything around
+// touch-driven, single-output compositor like TAWC; everything around
 // pointer move/resize grabs and selection bridging is left as stubs
 // because we don't have an X11-aware seat path yet.
 // ---------------------------------------------------------------------------
@@ -708,7 +708,7 @@ impl XwmHandler for TawcState {
     /// all of them. Distinguishing them needs a smithay patch to forward
     /// the requesting window, judged not worth it: what matters is that a
     /// backgrounded app can't read behind a *Wayland* app or behind no
-    /// tawc window at all, and that this gate does give us.
+    /// TAWC window at all, and that this gate does give us.
     fn allow_selection_access(&mut self, xwm: XwmId, _selection: SelectionTarget) -> bool {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return false;

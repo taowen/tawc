@@ -38,7 +38,7 @@ recorded method from `metadata.json` and dispatches to the matching
 [InstallationMethod.startInside], which builds the bind table and
 chroot exec fresh in Kotlin on every call. There is no on-disk
 wrapper script and no `adb shell su` in this path — chroot installs
-fork `su` from inside the JVM. Generic tawc Wayland env vars come
+fork `su` from inside the JVM. Generic TAWC Wayland env vars come
 from `RootfsEnv.kt` via a `/usr/bin/env -i KEY=VAL …` wrapper around
 the in-rootfs `bash -lc`, so nothing inside the rootfs needs to be
 on disk between calls.

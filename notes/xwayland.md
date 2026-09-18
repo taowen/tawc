@@ -1,7 +1,7 @@
 # Xwayland support
 
 Goal: run X11 clients (xeyes, xterm, GIMP, … anything still X-only)
-inside the chroot, displayed via tawc's Wayland compositor through an
+inside the chroot, displayed via TAWC's Wayland compositor through an
 Xwayland server. Smithay supports the compositor side of XWayland out
 of the box.
 
@@ -421,7 +421,7 @@ definitions Xwayland needs at the type level.
 The original plan's "Phase 1 = GLAMOR + Phase 2 = EGL-on-X11" framing
 chased a desktop-Linux abstraction (GBM render-nodes, dmabuf-fds,
 `zwp_linux_dmabuf_v1`) that doesn't fit the device. After several
-days exploring it, the cleaner shape — informed by what tawc already
+days exploring it, the cleaner shape — informed by what TAWC already
 does on the Wayland side — is:
 
 > Every X-server-managed buffer that lives on the GPU is an
@@ -486,7 +486,7 @@ GPU app on the device.
      buffer-id) to the X server.
    - Server side wraps the AHB as a pixmap, hands off to
      `xwayland-tawc.c` for compositor delivery.
-   - Why a tawc-specific extension and not stock DRI3: DRI3's wire
+   - Why a TAWC-specific extension and not stock DRI3: DRI3's wire
      format passes a dmabuf fd plus stride/format/modifier. AHB
      handles aren't dmabuf fds (the gralloc fd isn't publicly
      exposed); modifier semantics are made-up if we tried to fake
@@ -506,7 +506,7 @@ GPU app on the device.
 conditional on `-Dtawc=true`):
 
 - `xwayland-pixmap.c:xwl_pixmap_get_wl_buffer` — extra branch
-  that routes AHB-backed pixmaps through the tawc path before the
+  that routes AHB-backed pixmaps through the TAWC path before the
   existing GLAMOR/SHM split.
 - `xwayland-screen.c:registry_global` — bind `android_wlegl` and
   stash on `xwl_screen->tawc_wlegl`.
@@ -805,7 +805,7 @@ that Kotlin exports before `nativeStartCompositor`. No `su`, no
   when Xwayland is enabled, then socket-activates the Xwayland process
   when the first X11 client connects. Xwayland gets `-terminate 5`, so
   it exits after its last real X11 client has been gone for five seconds;
-  tawc then recreates the activation socket. See "Idle termination"
+  TAWC then recreates the activation socket. See "Idle termination"
   below for the startup race this depends on us having patched. The same module wires
   `X11Wm` on `XWaylandEvent::Ready` and implements `XwmHandler` +
   `XWaylandShellHandler` directly on `TawcState` (the calloop data type).

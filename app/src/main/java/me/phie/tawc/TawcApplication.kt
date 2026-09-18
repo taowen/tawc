@@ -59,7 +59,7 @@ class TawcApplication : Application() {
             } catch (t: Throwable) {
                 Log.w(TAG, "Bootstrap cache sweep failed", t)
             }
-            // Refresh tawc-installed files in every existing rootfs
+            // Refresh TAWC-installed files in every existing rootfs
             // when the app version stamp has changed since the last
             // install/refresh. No-op on cold app starts that follow a
             // run with the same `versionCode + lastUpdateTime` pair

@@ -73,36 +73,36 @@ compares the SDK's `javap android.view.inputmethod.InputConnection`
 surface against a pinned method list; update this table and the script
 together when the SDK changes.
 
-| InputConnection method | Class | tawc decision |
+| InputConnection method | Class | TAWC decision |
 |---|---|---|
-| `beginBatchEdit()` | batch | Explicitly accepted. Keeps BaseInputConnection batch state; each tawc edit still emits its own Wayland `done` today. |
+| `beginBatchEdit()` | batch | Explicitly accepted. Keeps BaseInputConnection batch state; each TAWC edit still emits its own Wayland `done` today. |
 | `endBatchEdit()` | batch | Explicitly accepted. See `beginBatchEdit()`. |
-| `clearMetaKeyStates(states)` | non-text action | Rejected (`false`). No tawc meta-key mirror exists behind the IC. |
+| `clearMetaKeyStates(states)` | non-text action | Rejected (`false`). No TAWC meta-key mirror exists behind the IC. |
 | `closeConnection()` | lifecycle | Clears the active IC if this instance owns it, then delegates to base. |
 | `commitCompletion(info)` | text mutation | If `info.text` exists, delegates to `commitText(text, 1)`. Null text returns `false`. |
 | `commitContent(info, flags, opts)` | rich content | Rejected (`false`). No text-input-v3 equivalent. |
 | `commitCorrection(info)` | text mutation | Requires valid offset, old text, and mirror old-text match; delegates to `replaceText`. |
 | `commitText(text, pos)` | text mutation | Emits optional atomic delete for marked committed regions, then `commit_string(text)` + `done`. Null text, unsupported cursor positions, or unrepresentable composing-region replacements return `false` before base mutation. |
-| `commitText(text, pos, attr)` | text mutation | Delegates to `commitText(text, pos)`; tawc ignores styling attributes. |
+| `commitText(text, pos, attr)` | text mutation | Delegates to `commitText(text, pos)`; TAWC ignores styling attributes. |
 | `deleteSurroundingText(before, after)` | text mutation | Negative counts return `false`; otherwise updates base Editable and emits Backspace/Delete `wl_keyboard` events. |
 | `deleteSurroundingTextInCodePoints(before, after)` | text mutation | Negative counts or missing Editable return `false`; converts code point counts to UTF-16 counts around the wire cursor, then uses `deleteSurroundingText`. |
 | `finishComposingText()` | text mutation | Delegates to base, emits `nativeFinishComposingText`; compositor commits tracked preedit or no-ops if none. |
 | `setComposingRegion(start, end)` | local annotation | Delegates to base. Marks committed mirror text so the next commit/preedit can emit an atomic delete if representable. |
-| `setComposingRegion(start, end, attr)` | local annotation | Delegates to `setComposingRegion(start, end)`; tawc ignores styling attributes. |
+| `setComposingRegion(start, end, attr)` | local annotation | Delegates to `setComposingRegion(start, end)`; TAWC ignores styling attributes. |
 | `setComposingText(text, pos)` | text mutation | Delegates to base, then emits optional atomic delete plus `preedit_string(text)` + `done`. Null text is treated as empty preedit. Unsupported cursor positions or unrepresentable composing-region replacements return `false` before base mutation. |
-| `setComposingText(text, pos, attr)` | text mutation | Delegates to `setComposingText(text, pos)`; tawc ignores styling attributes. |
+| `setComposingText(text, pos, attr)` | text mutation | Delegates to `setComposingText(text, pos)`; TAWC ignores styling attributes. |
 | `replaceText(start, end, text, pos, attr)` | text mutation | Requires an in-bounds range containing the wire cursor; emits atomic delete plus `commit_string(text)`. Non-representable ranges return `false` before base mutation. |
-| `setSelection(start, end)` | local cursor | Rejected (`false`) unless the requested selection already matches the Editable selection. text-input-v3 cannot move the client cursor, so tawc must not accept mirror-only cursor movement. |
+| `setSelection(start, end)` | local cursor | Rejected (`false`) unless the requested selection already matches the Editable selection. text-input-v3 cannot move the client cursor, so TAWC must not accept mirror-only cursor movement. |
 | `performEditorAction(action)` | non-text action | Emits Enter as a `wl_keyboard` key. |
 | `sendKeyEvent(event)` | non-text action | Key-down events become `wl_keyboard` key events; key-up events return `true` and are ignored to avoid double processing. |
 | `performContextMenuAction(id)` | editor command | Rejected (`false`). Cut/copy/paste/select-all would otherwise be mirror-only or incomplete. |
-| `performPrivateCommand(action, data)` | private command | Rejected (`false`). No tawc command namespace. |
+| `performPrivateCommand(action, data)` | private command | Rejected (`false`). No TAWC command namespace. |
 | `performSpellCheck()` | IME command | Rejected (`false`). Spellcheck is an IME/editor service, not representable in text-input-v3. |
-| `reportFullscreenMode(enabled)` | status | Rejected (`false`). tawc uses `IME_FLAG_NO_FULLSCREEN` and has no extracted fullscreen editor. |
+| `reportFullscreenMode(enabled)` | status | Rejected (`false`). TAWC uses `IME_FLAG_NO_FULLSCREEN` and has no extracted fullscreen editor. |
 | `requestCursorUpdates(mode)` | cursor monitoring | Rejected (`false`). Cursor geometry is not currently reported back through Android's cursor-update API. |
 | `requestCursorUpdates(mode, filter)` | cursor monitoring | Rejected (`false`). See `requestCursorUpdates(mode)`. |
-| `requestTextBoundsInfo(bounds, executor, consumer)` | query/cursor geometry | Default unsupported behavior; no tawc text bounds provider. |
-| `setImeConsumesInput(consumes)` | status | Rejected (`false`). tawc does not track this Android-side hint. |
+| `requestTextBoundsInfo(bounds, executor, consumer)` | query/cursor geometry | Default unsupported behavior; no TAWC text bounds provider. |
+| `setImeConsumesInput(consumes)` | status | Rejected (`false`). TAWC does not track this Android-side hint. |
 | `performHandwritingGesture(gesture, executor, consumer)` | handwriting | Default unsupported behavior. No text-input-v3 equivalent. |
 | `previewHandwritingGesture(gesture, cancellation)` | handwriting | Default unsupported behavior. No text-input-v3 equivalent. |
 | `getTextBeforeCursor(n, flags)` | query | Served by BaseInputConnection's Editable mirror. |
@@ -112,7 +112,7 @@ together when the SDK changes.
 | `getExtractedText(request, flags)` | query | Served by BaseInputConnection's Editable mirror. |
 | `getCursorCapsMode(reqModes)` | query | Served by BaseInputConnection's Editable mirror. |
 | `getHandler()` | threading | Inherited base behavior. |
-| `takeSnapshot()` | query | Default snapshot behavior; tawc has no custom snapshot provider. |
+| `takeSnapshot()` | query | Default snapshot behavior; TAWC has no custom snapshot provider. |
 
 ### sendKeyEvent mapping
 
@@ -299,7 +299,7 @@ The wire-side `delete_surrounding_text` is relative to the *Wayland client's cur
 
 They desync in two ways:
 
-**1. The IME tries to move the Editable cursor via `setSelection`.** Wayland text-input-v3 has no "move the cursor" request, so tawc rejects `setSelection` unless it is already a no-op. Accepting it would make the Editable say cursor=N while the client still has cursor=M. If a committed composing region later cannot be represented around the current wire cursor, `commitText` / `setComposingText` return `false` before mutating the Editable. There is no fallback insertion path.
+**1. The IME tries to move the Editable cursor via `setSelection`.** Wayland text-input-v3 has no "move the cursor" request, so TAWC rejects `setSelection` unless it is already a no-op. Accepting it would make the Editable say cursor=N while the client still has cursor=M. If a committed composing region later cannot be represented around the current wire cursor, `commitText` / `setComposingText` return `false` before mutating the Editable. There is no fallback insertion path.
 
 **2. The Wayland buffer's cursor moves past the client's reported context.** GTK's `set_surrounding_text` is allowed to be a "context window" — it can report the full text with a cursor before trailing newlines when the real cursor is on a fresh empty line. After we send `commit_string("\n")`, the wire cursor advances by one but GTK's next `set_surrounding_text` may report the old line cursor. The IC tracks `wireCursor` separately from `lastSyncedCursor`: it is reset from client reports, except for the immediate echo of a trailing-newline commit where the reported cursor is behind only by newline characters, then advanced by outbound commits, committed preedits, and standalone deletes. `deleteSurroundingText` translates key counts around `wireCursor`, so broad deletes after stale newline context land at the client's actual cursor while still counting surrogate pairs as one key.
 

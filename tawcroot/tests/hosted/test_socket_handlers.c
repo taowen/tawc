@@ -338,7 +338,7 @@ test(hosted_so_peercred_reports_virtual_root)
  * the adb shell uid) may well get a real netlink socket from the
  * kernel, in which case this pins that the handler did not break it.
  * The stub itself is only reachable where the kernel refuses, i.e. the
- * app uid — covered by `test_prodenv_uevent_socket_stub` in the tawc
+ * app uid — covered by `test_prodenv_uevent_socket_stub` in the TAWC
  * integration suite, which runs production tawcroot in the
  * untrusted_app domain. */
 test(hosted_uevent_monitor_sequence_completes)

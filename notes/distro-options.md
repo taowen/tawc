@@ -246,7 +246,7 @@ glue we'd just have to disable.
   manager"** instead of "chroot with a real Linux userspace". That's a
   bigger architectural shift than porting libhybris to musl would be.
 - Sidesteps libhybris (everything is bionic-linked), but at the cost of
-  the model the rest of tawc is built around.
+  the model the rest of TAWC is built around.
 
 ### "Are there any bionic Linux distros?"
 

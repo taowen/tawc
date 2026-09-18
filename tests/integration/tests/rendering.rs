@@ -98,7 +98,7 @@ fn test_shm_render_pattern_orientation_pixels() {
     assert_eq!(shot.format, 1, "expected RGBA_8888 screencap format");
 
     // The debug app draws four 80x80 logical color blocks with centers 136
-    // logical pixels from each edge, outside tawc's 150-physical-pixel tint
+    // logical pixels from each edge, outside TAWC's 150-physical-pixel tint
     // fade band on the standing physical target. Sampling these centers
     // catches y-flips, x-flips, scale errors, and basic SHM draw placement.
     let inset_center = 136;

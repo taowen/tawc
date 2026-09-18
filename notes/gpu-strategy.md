@@ -217,10 +217,10 @@ libhybris has built-in Vulkan support: loads stock `libvulkan.so` via `android_d
 performs surface extension swap (`VK_KHR_android_surface` <-> `VK_KHR_wayland_surface`)
 in `vulkanplatform_wayland.so`, presents via `android_wlegl`. Used in Sailfish OS.
 
-**Status on tawc (OnePlus 9 / Adreno 660 / Android 16 LineageOS):** ✅ working.
+**Status on TAWC (OnePlus 9 / Adreno 660 / Android 16 LineageOS):** ✅ working.
 - `scripts/build-libhybris.sh` builds the `vulkan` subdir and stages
   `libvulkan.so.1` and `libhybris/vulkanplatform_wayland.so` in the APK asset
-  tree; each rootfs sees them at `/usr/lib/hybris/` (a tawc-owned
+  tree; each rootfs sees them at `/usr/lib/hybris/` (a TAWC-owned
   namespace) via the tawcroot RO bind, or a copy under proot/chroot.
 - `vulkaninfo --summary` works end-to-end: `android_dlopen("libvulkan.so")` succeeds,
   the Adreno Vulkan driver enumerates as GPU0, `VK_KHR_wayland_surface` is advertised.
@@ -233,7 +233,7 @@ in `vulkanplatform_wayland.so`, presents via `android_wlegl`. Used in Sailfish O
 Two fixes were needed:
 
 1. **`NATIVE_WINDOW_BUFFER_AGE=0`** — landed as a Firefox flicker fix
-   (libhybris commit `59b9a58`, tawc companion commit `12bca6b`).
+   (libhybris commit `59b9a58`, TAWC companion commit `12bca6b`).
    Upstream hardcoded age=2; Adreno's Vulkan WSI used that as a hint to
    preserve 2-frame-old content and did `LOAD_OP_LOAD` on images still
    in `VK_IMAGE_LAYOUT_UNDEFINED`, so the frame was effectively

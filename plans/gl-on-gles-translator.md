@@ -106,7 +106,7 @@ Three layers:
 Ships like the other client-side GL options: cross-built per ABI with
 the `aarch64-linux-gnu` toolchain + host sysroot (the gl4es spike
 recipe: X11 via a stub libdir, `-idirafter` for headers), packed as an
-asset, installed into the rootfs under a tawc-owned path, opt-in per
+asset, installed into the rootfs under a TAWC-owned path, opt-in per
 spawn via env (`LD_LIBRARY_PATH` prefix), same pattern as
 `GRAPHICS`-header backend selection. Not a new `GraphicsBackend`.
 

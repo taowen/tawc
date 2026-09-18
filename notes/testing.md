@@ -217,7 +217,7 @@ scripts/tawc-exec.sh --action hardware-key --arg keycode=67
 Every call goes through the same Kotlin entry points Android uses to dispatch
 Gboard / OpenBoard / AOSP-latin or physical keyboard events. Tests assert
 Android contract results and `wayland-debug-app` observations, not private
-tawc Rust/Kotlin state.
+TAWC Rust/Kotlin state.
 
 Broker actions connect to an already-running `LocalServerSocket` and complete in <10ms each, vs. 100–300ms per `am broadcast` JVM cold start (the broadcast channel was retired entirely). More reliable than `adb shell input text` (which gets intercepted by the IME).
 

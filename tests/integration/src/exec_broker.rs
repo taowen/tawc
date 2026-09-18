@@ -884,7 +884,7 @@ fn read_exact_cancelable(
     Ok(())
 }
 
-/// True if the tawc app process is alive on the device. Uses `pidof`
+/// True if the TAWC app process is alive on the device. Uses `pidof`
 /// over plain `adb shell` (no privilege needed — pidof walks /proc).
 fn app_running(serial: Option<&str>) -> bool {
     let mut cmd = Command::new("adb");
@@ -984,7 +984,7 @@ fn exit_status_from_broker(code: i32) -> std::process::ExitStatus {
     #[cfg(not(unix))]
     {
         let _ = code;
-        unimplemented!("tawc integration tests require a Unix host")
+        unimplemented!("TAWC integration tests require a Unix host")
     }
 }
 

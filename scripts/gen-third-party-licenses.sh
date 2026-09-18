@@ -3,7 +3,7 @@
 # in-app Settings > About > Licenses screen.
 #
 # Sources, all read from the working tree (no network):
-#   - LICENSE / LICENSE.MIT      tawc's own terms and the GPLv3 text
+#   - LICENSE / LICENSE.MIT      TAWC's own terms and the GPLv3 text
 #   - deps/**/{LICENSE,COPYING}* vendored native + Java source licenses
 #   - cargo metadata             compositor crates, texts from the
 #                                local ~/.cargo registry checkout
@@ -72,9 +72,9 @@ SOURCE_URL = "https://github.com/wmww/tawc"
 # Native/vendored components whose code, headers, or data end up in the
 # APK. Value is the checkout dir; license files are globbed out of it.
 NATIVE = {
-    "libhybris (tawc fork)": "deps/libhybris",
+    "libhybris (TAWC fork)": "deps/libhybris",
     "libxkbcommon": "deps/libxkbcommon",
-    "smithay (tawc fork)": "deps/smithay",
+    "smithay (TAWC fork)": "deps/smithay",
     "cleat": "deps/cleat",
     "termux-app (terminal-emulator, terminal-view, termux-shared extra-keys)": "deps/termux-app",
 }
@@ -326,7 +326,7 @@ def section(title, subtitle, entries):
 
 
 section(
-    "tawc's own code",
+    "TAWC's own code",
     "MIT",
     [{"components": [], "blocks": reflow(read_text(ROOT / "LICENSE.MIT") or "")}],
 )
@@ -368,7 +368,7 @@ if declared_only:
 
 doc = {
     "intro": [
-        "tawc's own source code is MIT licensed. The app also bundles the "
+        "TAWC's own source code is MIT licensed. The app also bundles the "
         "extra-keys widget from termux-shared, which is GPLv3-only, so the "
         "distributed app as a whole is conveyed under the GNU General Public "
         "License version 3.",

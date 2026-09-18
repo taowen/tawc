@@ -506,7 +506,7 @@ class CompositorActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** Apply a cursor the compositor derived from the client's cursor
-     *  request. Android draws the sprite; tawc never renders one itself. */
+     *  request. Android draws the sprite; TAWC never renders one itself. */
     fun setPointerIconFromCompositor(icon: PointerIcon) {
         if (!initialized) return
         surfaceView.pointerIcon = icon

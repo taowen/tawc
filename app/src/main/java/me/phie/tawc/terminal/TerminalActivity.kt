@@ -55,7 +55,7 @@ import java.io.IOException
  * shows the selected session via `attachSession` (termux-app's own
  * multi-session pattern — background sessions keep a stale pty size
  * until selected). Tab labels follow the session's xterm window title
- * (OSC 0/2; tawc's shipped bashrc defaults set a cwd-only title —
+ * (OSC 0/2; TAWC's shipped bashrc defaults set a cwd-only title —
  * see ShellDefaults); unset and `~` titles show as "Term <n>".
  *
  * tawcroot-only: chroot spawns via su and proot is dev-only, so the

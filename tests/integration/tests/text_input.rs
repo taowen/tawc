@@ -10,7 +10,7 @@
 //!   [`TawcInputConnection`] via `adb::ic_*` helpers — the same Kotlin
 //!   surface the system IMM dispatches Gboard / OpenBoard / AOSP-latin
 //!   events through. Tests assert Android contract results and
-//!   client-visible Wayland behavior, not tawc private state.
+//!   client-visible Wayland behavior, not TAWC private state.
 //! - **As an app**: assertions go through `wayland-debug-app`'s observed
 //!   `TAWC_DEBUG:…` events (`TEXT_CHANGED`, `PREEDIT`, `CURSOR_POS`,
 //!   `KEY`, `COMMIT`, `DELETE_SURROUNDING`). That's what a real wayland

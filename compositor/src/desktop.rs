@@ -17,7 +17,7 @@ use crate::host::{ActivityId, OutputHost};
 
 pub fn desktop_window_map_location(window: &Window) -> Point<i32, Logical> {
     // Smithay `Space` locations identify a window's xdg window-geometry
-    // origin. tawc's Android host model keeps the wl_surface origin at the
+    // origin. TAWC's Android host model keeps the wl_surface origin at the
     // output origin, so map each window at its current geometry offset.
     window.geometry().loc
 }

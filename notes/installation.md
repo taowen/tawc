@@ -1,6 +1,6 @@
 # In-app installation system
 
-The tawc Android app includes a Kotlin re-implementation of the
+The TAWC Android app includes a Kotlin re-implementation of the
 install/run/destroy logic that previously lived only in the
 `client/arch-chroot-*` shell scripts. This lets the app:
 
@@ -335,7 +335,7 @@ replaces them and rejoins at stage 5.
      three whole app-owned dirs — `/usr/lib/hybris/{*.so,gl-shims/,libhybris/}`
      from `LibhybrisInstallProvider`, `/usr/lib/gfxstream/` from
      [BridgeInstallProvider], `/usr/lib/mesa-zink/` from
-     [MesaZinkInstallProvider] (all tawc-owned namespaces;
+     [MesaZinkInstallProvider] (all TAWC-owned namespaces;
      `/usr/local/lib/` stays free for the user's own installs) — are
      copied only under proot/chroot and RO-**bound** under tawcroot
      (see *Copy vs bind* below). `/usr/share/glvnd/egl_vendor.d/00_libhybris.json`
@@ -1387,7 +1387,7 @@ migration can fully repair it:
   fall back to defaults gracefully, so a rename only resets the
   user's choice — avoid anyway.
 
-Tawc-owned rootfs paths shipped via [TawcInstaller]
+TAWC-owned rootfs paths shipped via [TawcInstaller]
 (`/usr/lib/hybris/`, `/usr/lib/gfxstream/`, `/usr/lib/mesa-zink/`)
 are *not* frozen at this level — the persisted install manifest
 wipes old dests and lays new ones on upgrade — but user scripts may

@@ -1,4 +1,4 @@
-//! Server bindings for tawc-internal Wayland protocols:
+//! Server bindings for TAWC-internal Wayland protocols:
 //!   * `android_wlegl` — used by libhybris's Wayland EGL platform to
 //!     ship gralloc buffer handles.
 //!   * `tawc_gfxstream` — optional gfxstream-bridge custom Vulkan WSI (chroot

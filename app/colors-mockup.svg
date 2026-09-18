@@ -30,10 +30,10 @@
      inkscape:window-maximized="0"
      inkscape:current-layer="svg77" />
   <title
-     id="title1">tawc color mockup</title>
+     id="title1">TAWC color mockup</title>
   <desc
      id="desc1">
-    Side-by-side light/dark mockup of the tawc Android app for iterating on
+    Side-by-side light/dark mockup of the TAWC Android app for iterating on
     colors in Inkscape. Every named color is a solid Inkscape swatch
     defined in &lt;defs&gt;. Open the Swatches panel (Object &gt; Swatches,
     or Shift+Ctrl+W) or simply double-click a tile in the &quot;Palette&quot; row at
@@ -383,7 +383,7 @@
      font-weight="bold"
      text-anchor="middle"
      fill="#fff"
-     id="text15">tawc color mockup</text>
+     id="text15">TAWC color mockup</text>
   <!-- ========================================================================
        LIGHT phone mockup
        ======================================================================== -->

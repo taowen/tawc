@@ -81,7 +81,7 @@ internal object RootfsEnv {
             GraphicsBackend.LIBHYBRIS -> {
                 // libhybris is laid down by [TawcInstaller] /
                 // [LibhybrisInstallProvider] as real files under /usr/lib/hybris/
-                // (a tawc-owned namespace — /usr/local/lib/ stays free for the
+                // (a TAWC-owned namespace — /usr/local/lib/ stays free for the
                 // user's own installs). gl-shims first so the libGL/libGLESv2
                 // wrappers shadow any distro-shipped libs.
                 put("LD_LIBRARY_PATH",

@@ -99,7 +99,7 @@ tawcroot doesn't trap `recvmsg` at all.
   the test override), and calls the native sync; for *disabled*
   installs it also unlinks any stale socket node an unclean app
   shutdown left behind (else a still-bound guest session would get
-  ECONNREFUSED — "is the tawc app alive?" — instead of ENOENT's
+  ECONNREFUSED — "is the TAWC app alive?" — instead of ENOENT's
   ando-disabled instructions). Called from `TawcApplication.onCreate`'s
   startup thread (which also unlinks the legacy
   `<appData>/share/ando.sock` node from older versions), from
@@ -119,7 +119,7 @@ tawcroot doesn't trap `recvmsg` at all.
   → disabled) the client prints multi-line enable instructions before
   exit 127; other errnos, including **ECONNREFUSED** (node present, no
   listener → an *enabled* distro whose broker/app died), keep the
-  "broker not running — is the tawc app alive?" diagnosis.
+  "broker not running — is the TAWC app alive?" diagnosis.
   `TAWC_ANDO_SOCKET` overrides the path (test hook — no production flow
   sets it).
 

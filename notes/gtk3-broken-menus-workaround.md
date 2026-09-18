@@ -2,14 +2,14 @@
 
 ## Summary
 
-tawc has a compatibility workaround for GTK3 native Wayland menubars on
+TAWC has a compatibility workaround for GTK3 native Wayland menubars on
 touch-only Android devices. The Settings screen exposes it as **GTK3 broken
 menus workaround**, with the description:
 
 > Spoof a pointer briefly entering each window, allows GTK3 menus to work correctly
 
 It is enabled by default. When enabled, the workaround asks for the
-`wl_pointer` seat capability and tawc briefly sends pointer enter/leave at the
+`wl_pointer` seat capability and TAWC briefly sends pointer enter/leave at the
 center of each new xdg toplevel. When disabled, it drops its request and stops
 sending these synthetic pointer events.
 
@@ -21,7 +21,7 @@ capability"). Calling `add_pointer` on a seat that already has one replaces the
 seat itself.
 
 This is intentionally a contained workaround, not a touch-to-pointer input
-path. Android touchscreen input still goes through `wl_touch`; tawc does not
+path. Android touchscreen input still goes through `wl_touch`; TAWC does not
 translate finger taps into pointer buttons. Real mouse input is a separate,
 real `wl_pointer` path.
 
@@ -52,7 +52,7 @@ The installed packages on the physical device were:
 - GTK3: `gtk3 1:3.24.52-1`
 - GTK4: `gtk4 1:4.22.4-1`
 
-This matters because GTK MR !8240 was included in GTK 3.24.49, so the tawc
+This matters because GTK MR !8240 was included in GTK 3.24.49, so the TAWC
 failure is not the already-fixed KDE/GTK crossing bug by itself.
 
 ## What Actually Triggers It
@@ -66,7 +66,7 @@ the first tap:
 - `POPUP 1 anchor_rect=51,37 39x46`
 - no second leftmost popup
 
-The same harness reproduced tawc's failure after adding the legacy KDE
+The same harness reproduced TAWC's failure after adding the legacy KDE
 server-decoration protocol and answering `SERVER` mode. In that mode GTK
 removes client-side chrome, the menubar moves to window-local y=0, and the
 same touch-only `bar` tap creates:
@@ -84,7 +84,7 @@ at window-local `(0,0)`.
 
 ## Ruled Out
 
-These did not explain or fix the specific tawc failure:
+These did not explain or fix the specific TAWC failure:
 
 - Output scaling or coordinate translation. The touch coordinates and first
   popup request were correct.
@@ -176,7 +176,7 @@ re-testing both cases on a physical device.
 
 ## Removal Map
 
-If GTK3 or tawc's decoration policy changes enough that this workaround is no
+If GTK3 or TAWC's decoration policy changes enough that this workaround is no
 longer needed, remove:
 
 - the Settings key/property and Settings screen checkbox;

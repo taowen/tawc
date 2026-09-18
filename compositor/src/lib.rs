@@ -928,7 +928,7 @@ pub fn update_ime_content_type_from_native(activity_id: &str, input_type: i32, i
 /// Reverse-JNI: the real Android clipboard read backing a paste of the
 /// compositor-owned Android selection. Runs on a clipboard-fetch thread,
 /// never the event loop (ClipboardManager is a binder proxy, safe off the
-/// main thread). `None` means no readable text clip: read denied (tawc
+/// main thread). `None` means no readable text clip: read denied (TAWC
 /// not focused), non-text clip, or over the size cap.
 pub fn fetch_android_clipboard_text() -> Option<String> {
     with_native_bridge_result("fetchClipboardText", |env, class| {
@@ -946,7 +946,7 @@ pub fn fetch_android_clipboard_text() -> Option<String> {
 }
 
 /// Reverse-JNI: push compositor/Wayland-owned text into Android's real
-/// ClipboardManager. Kotlin's announce path tags the write with tawc's
+/// ClipboardManager. Kotlin's announce path tags the write with TAWC's
 /// own clip label so the resulting clipboard-changed announce doesn't
 /// replace the live Wayland owner with our own mirror.
 pub fn set_android_clipboard_text(text: &str) {
