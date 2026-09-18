@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher-row fallback icon for entries with no usable icon: the same
+     rounded black tile as ic_terminal_fallback, around a generic
+     "window" glyph (title bar + empty body). Fixed colors on purpose —
+     it stands in for an app icon, not a themed control. Used instead of
+     the TAWC logo so an icon-less app doesn't look like TAWC itself. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M4.5,1 h15 a3.5,3.5 0 0 1 3.5,3.5 v15 a3.5,3.5 0 0 1 -3.5,3.5 h-15 a3.5,3.5 0 0 1 -3.5,-3.5 v-15 a3.5,3.5 0 0 1 3.5,-3.5 z"/>
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:scaleX="0.62"
+        android:scaleY="0.62">
+        <!-- Window frame: outer rounded rect minus the body, so the
+             title bar stays solid and the body reads as an outline. -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M4,4 h16 a1.5,1.5 0 0 1 1.5,1.5 v13 a1.5,1.5 0 0 1 -1.5,1.5 h-16 a1.5,1.5 0 0 1 -1.5,-1.5 v-13 a1.5,1.5 0 0 1 1.5,-1.5 z M3.9,8.4 v9.7 a0.6,0.6 0 0 0 0.6,0.6 h15 a0.6,0.6 0 0 0 0.6,-0.6 v-9.7 z"/>
+        <!-- Title-bar dots, knocked out of the solid bar. -->
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M5.8,6.2 m-0.95,0 a0.95,0.95 0 1,0 1.9,0 a0.95,0.95 0 1,0 -1.9,0 z M8.8,6.2 m-0.95,0 a0.95,0.95 0 1,0 1.9,0 a0.95,0.95 0 1,0 -1.9,0 z M11.8,6.2 m-0.95,0 a0.95,0.95 0 1,0 1.9,0 a0.95,0.95 0 1,0 -1.9,0 z"/>
+    </group>
+</vector>

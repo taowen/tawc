@@ -105,14 +105,16 @@ object EntryShortcuts {
 
     private fun pinIcon(context: Context, entry: LauncherEntry): IconCompat {
         // No usable entry icon → same fallbacks as the launcher list:
-        // ">_" badge for terminal entries, the TAWC app icon otherwise.
-        // Black backdrop so the badge's own black square extends over the
+        // ">_" badge for terminal entries, the neutral window glyph
+        // otherwise. Not the TAWC app icon: a pinned icon-less app would
+        // then be indistinguishable from TAWC itself on the home screen.
+        // Black backdrop so the badge's own black tile extends over the
         // whole adaptive bitmap — launcher masks show a margin around the
         // safe zone, and the neutral grey reads as stripes there.
+        val fallbackRes =
+            if (entry.terminal) R.drawable.ic_terminal_fallback else R.drawable.ic_app_fallback
         val bmp = pinBitmap(entry.iconPath)
-            ?: if (entry.terminal) {
-                drawablePinBitmap(context, R.drawable.ic_terminal_fallback, 0xFF000000.toInt())
-            } else null
+            ?: drawablePinBitmap(context, fallbackRes, 0xFF000000.toInt())
         return if (bmp != null) IconCompat.createWithAdaptiveBitmap(bmp)
         else IconCompat.createWithResource(context, R.mipmap.ic_launcher)
     }

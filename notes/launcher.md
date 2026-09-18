@@ -180,8 +180,10 @@ trampoline).
 - **Icon**: entry PNG decoded via `IconLoader.decode`, centered on a
   neutral square at 2/3 edge (adaptive-icon safe zone) and wrapped
   with `IconCompat.createWithAdaptiveBitmap` so it masks correctly on
-  every launcher shape; no/undecodable icon falls back to the TAWC app
-  icon. Geometry (`pinIconFit`) + id mapping are JVM-unit-tested
+  every launcher shape; no/undecodable icon falls back to the same
+  glyph the list row uses (`ic_terminal_fallback` for `Terminal=true`,
+  `ic_app_fallback` otherwise) on a black backdrop — not the TAWC app
+  icon, which would make a pinned icon-less app look like TAWC itself. Geometry (`pinIconFit`) + id mapping are JVM-unit-tested
   (`EntryShortcutsTest`); pinning itself is a launcher-UI interaction,
   so end-to-end coverage is manual.
 

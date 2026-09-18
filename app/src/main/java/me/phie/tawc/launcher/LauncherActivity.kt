@@ -441,7 +441,7 @@ class LauncherActivity : AppCompatActivity() {
         iconLoader.load(
             entry.iconPath,
             icon,
-            if (entry.terminal) R.drawable.ic_terminal_fallback else R.drawable.ic_tawc_logo,
+            if (entry.terminal) R.drawable.ic_terminal_fallback else R.drawable.ic_app_fallback,
         )
         row.addView(
             icon,
