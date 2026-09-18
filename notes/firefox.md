@@ -20,7 +20,8 @@ fixed by the in-handler `/dev/shm` memfd emulation in `tawcroot/src/shm.c`.
 scripts/rootfs-run.sh 'firefox --no-remote'
 ```
 
-No Firefox-specific env vars or autoconfig prefs. `GDK_GL=gles:always` is
+No autoconfig prefs; the only Firefox-specific env var is
+`MOZ_SHM_NO_SEALS=1` (see below). `GDK_GL=gles:always` is
 set on every spawn by the in-rootfs `env -i` wrapper (see
 `RootfsEnv.kt` and "Why GDK_GL=gles:always" below). Wayland backend
 and hardware acceleration are auto-selected when `WAYLAND_DISPLAY` is set
@@ -67,6 +68,21 @@ backed segment and hands a fresh dup back to the guest. Cross-process
 visibility for fork+exec patterns (Mozilla parent → content IPC) is
 preserved via the non-CLOEXEC internal fd surviving `execveat` and
 the `exec_state` ferry rebuilding the (name → fd) map in the child.
+
+### MOZ_SHM_NO_SEALS
+
+Set on every spawn by `RootfsEnv.kt`. Android SELinux denies `open` on
+`/proc/self/fd/<memfd>` (`appdomain_tmpfs`), so the parent's
+`HaveMemfd()` read-only-reopen probe fails and it creates IPC shm via
+`shm_open` (our emulation; unsealed). Children skip that probe, conclude
+memfd+seals are in use, and since Firefox 156 `IsSafeToMap` rejects any
+handle without `F_SEAL_SHRINK`: "Shared memory PlatformHandle is not
+safe to map", every content process SEGVs, "Gah. Your tab just crashed"
+even on `about:blank`. The env var makes all processes skip seals
+(upstream's own testing opt-out in
+`ipc/glue/SharedMemoryPlatform_posix.cpp`). The `avc: denied { open }
+... memfd:org.mozilla.ipc.*` logcat lines are the same SELinux rule
+hitting `shm.c::reopen_for_guest`, which falls back to `F_DUPFD`; benign.
 
 ### Why GDK_GL=gles:always
 
