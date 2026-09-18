@@ -19,6 +19,7 @@ import me.phie.tawc.compositor.RecordingImeOutput
 import me.phie.tawc.compositor.TawcInputConnection
 import me.phie.tawc.install.ChrootMethod
 import me.phie.tawc.install.InstallationStore
+import me.phie.tawc.install.Sh
 import me.phie.tawc.ops.LogScreenActivity
 import me.phie.tawc.tasks.ProcessScanner
 
@@ -96,6 +97,7 @@ import me.phie.tawc.tasks.ProcessScanner
  * | Action | Calls |
  * |--------|-------|
  * | `query-state` | `NativeBridge.nativeQueryState()` (no main-loop hop, no focused activity required) |
+ * | `host-sh` | `Sh.run(script)` — the production host-side shell path |
  * | `app-info` | prints `nativeLibraryDir=<path>` (host-side tawcroot prod-env tests exec `libtawcroot.so` from there) |
  */
 internal object InputActions {
@@ -120,6 +122,7 @@ internal object InputActions {
 
         ActionRegistry.register("query-state", QueryStateAction)
         ActionRegistry.register("app-info", AppInfoAction)
+        ActionRegistry.register("host-sh", HostShAction)
         ActionRegistry.register("input-ready", InputReadyAction)
         ActionRegistry.register("focused-editor-info", FocusedEditorInfoAction)
         ActionRegistry.register("ime-selection-updates", ImeSelectionUpdatesAction)
@@ -512,6 +515,18 @@ internal object InputActions {
         override fun run(args: Map<String, String>, ctx: ActionContext): Int {
             ctx.out("nativeLibraryDir=${ctx.appContext.applicationInfo.nativeLibraryDir}")
             return 0
+        }
+    }
+
+    /**
+     * `host-sh` (`script`) — run a script through [Sh.run], the path
+     * install `runOutside` scripts take. Unlike an ARGV-form `sh -c`,
+     * this covers the environment [Sh] sets up (writable `TMPDIR`).
+     */
+    private object HostShAction : BrokerAction {
+        override fun run(args: Map<String, String>, ctx: ActionContext): Int {
+            val script = args["script"] ?: return ctx.fail("host-sh: --arg script=... required")
+            return Sh.run(script, onLine = ctx.out).exitCode
         }
     }
 

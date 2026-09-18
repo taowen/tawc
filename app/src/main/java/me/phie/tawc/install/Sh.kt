@@ -1,6 +1,7 @@
 package me.phie.tawc.install
 
 import android.util.Log
+import java.io.File
 import java.io.IOException
 
 /**
@@ -14,6 +15,10 @@ import java.io.IOException
  * others want the last command's code as the verdict. Prepend it
  * yourself for multi-step abort-on-failure scripts (see
  * [ProotMethod.runOutside]).
+ *
+ * Every child gets a writable `TMPDIR`: app processes have none, and
+ * mksh spills each here-document to a temp file there, falling back
+ * to the app-unwritable `/data/local` (wmww/tawc#13, #16).
  */
 object Sh {
     private const val TAG = "tawc-install"
@@ -24,6 +29,7 @@ object Sh {
         env: Map<String, String> = emptyMap(),
     ): MethodResult {
         val pb = ProcessBuilder(listOf("/system/bin/sh")).redirectErrorStream(true)
+        tmpDir()?.let { pb.environment()["TMPDIR"] = it }
         pb.environment().putAll(env)
         val proc = pb.start()
         proc.outputStream.bufferedWriter().use { w ->
@@ -54,6 +60,18 @@ object Sh {
         }
         readerThread.join(2000)
         return MethodResult(proc.exitValue(), sb.toString())
+    }
+
+    /**
+     * `java.io.tmpdir`: the framework points it at the app cache dir in
+     * every app process. Recreated per run (the OS may clear the cache);
+     * mksh silently ignores a `TMPDIR` that isn't an existing writable
+     * directory.
+     */
+    private fun tmpDir(): String? {
+        val dir = File(System.getProperty("java.io.tmpdir") ?: return null)
+        dir.mkdirs()
+        return dir.absolutePath.takeIf { dir.isDirectory && dir.canWrite() }
     }
 
     /** Quote [s] for inclusion in a shell script as one word. */

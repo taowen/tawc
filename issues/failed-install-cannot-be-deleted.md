@@ -1,8 +1,8 @@
 # A failed install can be left undeletable from the UI
 
 Reported in https://github.com/wmww/tawc/issues/13: after the Configure
-step failed (the `/data/local` heredoc bug, see
-`plans/host-shell-tmpdir.md`), the distro stayed in `failed` state and
+step failed (the `/data/local` heredoc bug, since fixed by `Sh`
+setting `TMPDIR`), the distro stayed in `failed` state and
 "Delete" reported `rootfs delete failed`. Force-stop, reboot and
 reinstalling the app did not help; only clearing app data did, which
 takes every other distro with it.

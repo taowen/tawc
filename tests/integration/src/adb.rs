@@ -756,6 +756,13 @@ pub fn native_lib_dir() -> io::Result<String> {
         .ok_or_else(|| io::Error::other(format!("app-info missing nativeLibraryDir: {stdout:?}")))
 }
 
+/// Run `script` through the app's `Sh.run` (broker `host-sh` action) —
+/// the host-side shell path install `runOutside` scripts take. Raw
+/// result: the script's exit code is the action's.
+pub fn host_sh(script: &str) -> io::Result<Output> {
+    broker_action_raw("host-sh", &[("script", script)])
+}
+
 /// Dynamically update the compositor output scale through the same broker
 /// action used by Settings tests. Value is snapped by the app to 0.25x.
 pub fn set_output_scale(scale: f32) -> io::Result<Output> {

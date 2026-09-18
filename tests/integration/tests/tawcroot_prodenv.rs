@@ -242,3 +242,20 @@ fn test_prodenv_legacy_nr_trapset_audit() {
     );
     assert_guest_exit("dynamic_legacy_nr_probe", &out, 42);
 }
+
+/// Host-side `Sh.run` scripts can use here-documents. mksh spills each
+/// heredoc to a file under `$TMPDIR`; app processes have none, and the
+/// `/data/local` fallback is unwritable by the app uid, which failed
+/// every install at Configure (wmww/tawc#13, #16).
+#[test]
+fn test_prodenv_host_sh_heredoc() {
+    test_init();
+    let out = tawc_integration::adb::host_sh("set -eu\ncat <<'EOF'\nheredoc-ok\nEOF\n")
+        .expect("broker host-sh");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("heredoc-ok"),
+        "host-sh heredoc failed: {:?} stdout={stdout:?}",
+        out.status,
+    );
+}
