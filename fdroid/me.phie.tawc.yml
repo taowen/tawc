@@ -121,5 +121,9 @@ Builds:
 # `Version v%v` spelling no longer validates against fdroiddata's schema.
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9]+$
+# checkupdates reads versions by regex and cannot evaluate our derived
+# `versionCode = versionName!!.toInt()`, so point both at versionName.
+# Without this it fails with "Couldn't find any version information".
+UpdateCheckData: app/build.gradle.kts|versionName\s*=\s*"(\d+)"|.|versionName\s*=\s*"(\d+)"
 CurrentVersion: '2'
 CurrentVersionCode: 2

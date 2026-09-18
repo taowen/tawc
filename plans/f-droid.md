@@ -110,6 +110,30 @@ then human steps 3.3 and 4.
   and `fdroid rewritemeta` will strip the recipe's comments on
   submission.
 
+## Progress 2026-09-18
+
+- 2.4 done: `v2` (`ef2ae6b`) is tagged, pushed and released; the rig
+  built that exact commit first (`1 build succeeded`).
+- Recipe pushed to the maintainer's fork (gitlab.com/sphi/fdroiddata,
+  branch `me.phie.tawc`); fdroiddata CI ran there. `fdroid build`
+  passes on GitLab's shared runner in ~15 min. Two jobs failed:
+    - `checkupdates`: "Couldn't find any version information" —
+      fdroidserver regex-parses `build.gradle.kts` and cannot evaluate
+      `versionCode = versionName!!.toInt()`. Fixed recipe-side with an
+      `UpdateCheckData` line reading both from `versionName`; verified
+      with `fdroid checkupdates --auto` in the buildserver image
+      ("updating to version 2").
+    - `check apk`: not ours. Its R8-marker probe
+      (`strings | grep ~~R8 | … | jq` under `set -e -o pipefail`) exits
+      before reaching its own "R8 is not used → minor" branch for any
+      unminified APK. Ours is unminified on purpose (notes/release.md).
+      Mention it in the MR rather than working around it.
+- No existing RFP/fdroiddata issue or MR mentions the app.
+- 3.3 is on hold pending [reproducible-builds.md](reproducible-builds.md):
+  F-Droid cannot switch an app to the developer's signature after first
+  publication, so that call comes before the MR. If it goes ahead, the
+  MR targets v3, not v2.
+
 ## Step 1 — repo hygiene fixes (agent, in this repo)
 
 1. Pin and verify the tarball deps: add sha256 checks to the libmd fetch in
