@@ -141,10 +141,21 @@ then human steps 3.3 and 4.
       still fails once upstream has touched that code. Reporting it
       upstream is the maintainer's call (human-only, as with the MR).
 - No existing RFP/fdroiddata issue or MR mentions the app.
-- 3.3 is on hold pending [reproducible-builds.md](reproducible-builds.md):
+- 3.3 was on hold pending [reproducible-builds.md](reproducible-builds.md):
   F-Droid cannot switch an app to the developer's signature after first
-  publication, so that call comes before the MR. If it goes ahead, the
-  MR targets v3, not v2.
+  publication, so that call came before the MR. It went ahead — the MR
+  targets v3, with "Enable Reproducible Builds" ticked.
+- Per-ABI APKs (F-Droid's "multiple APKs for native code" suggestion):
+  declined, nothing to split. A release APK carries exactly one ABI —
+  `tawcAbis` defaults to `arm64-v8a` and the recipe does not override it.
+  x86_64 is built only for the emulator dev loop and never released;
+  32-bit ARM is not built at all. Even if two ABIs ever shipped together,
+  native code is 7 MB of a 30.6 MB APK — the unminified dex is 17.6 MB,
+  and that trade is deliberate (notes/release.md, "Debuggability over
+  size"). With reproducible builds the cost also rises: each variant
+  needs its own `Builds` entry with an offset versionCode plus its own
+  published, signed, verified asset, while `Binaries:` is one URL
+  pattern.
 
 ## Step 1 — repo hygiene fixes (agent, in this repo)
 

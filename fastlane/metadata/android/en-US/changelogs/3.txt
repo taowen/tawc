@@ -1,0 +1,7 @@
+No changes to the app itself.
+
+This release makes TAWC's build reproducible: F-Droid rebuilds the v3 tag
+from source, checks the result against the APK published on GitHub, and
+distributes that APK signed with the developer's key. One signing key
+across both channels means you never have to uninstall — and lose your
+installed distros — to move between them.

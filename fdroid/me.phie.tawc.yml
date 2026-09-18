@@ -3,12 +3,14 @@
 # It lives here so it can be reviewed and revised alongside the code it
 # builds; nothing in this repo reads it.
 #
-# Status: TESTED. `fdroid build --verbose --test --refresh-scanner
-# --on-server --no-tarball me.phie.tawc:1` builds a release APK in
+# Status: TESTED, including the reproducible-build path. The rig in
+# scripts/fdroid/ runs `fdroid build` on this recipe in
 # registry.gitlab.com/fdroid/fdroidserver:buildserver-trixie — F-Droid's
 # own buildserver image, driven the way fdroiddata's CI drives it. The
 # host-package list below is what that build actually needed, from an
-# image with none of it preinstalled.
+# image with none of it preinstalled. `prepare.sh reproduce` additionally
+# exercises the Binaries:/AllowedAPKSigningKeys: verification below
+# against a signed APK, and it passes.
 #
 # Before submitting, run `fdroid rewritemeta me.phie.tawc` in the
 # fdroiddata fork: their CI enforces canonical formatting, which sorts
@@ -45,17 +47,17 @@ Repo: https://github.com/wmww/tawc.git
 # must never be replaced: F-Droid pins what it verified.
 #
 # NB: only a version cut through that process can be listed under Builds
-# below. v2 was built on Arch and cannot reproduce, so v3 has to replace
-# it before this is submitted.
+# below. v1 and v2 were built on Arch and cannot reproduce, so v3 is the
+# first — and, here, the only — entry.
 Binaries: https://github.com/wmww/tawc/releases/download/v%v/tawc-v%v.apk
 # SHA-256 of the release signing certificate (`apksigner verify
 # --print-certs`), pinned so a different key cannot slip a binary in.
 AllowedAPKSigningKeys: 0b2262d221a951b57d847b288324004ce3b2fefe1ef52a1140f2fbc1fbb990be
 
 Builds:
-  - versionName: '2'
-    versionCode: 2
-    commit: v2
+  - versionName: '3'
+    versionCode: 3
+    commit: v3
     subdir: app
     ndk: 27.2.12479018
 
@@ -143,5 +145,5 @@ UpdateCheckMode: Tags ^v[0-9]+$
 # `versionCode = versionName!!.toInt()`, so point both at versionName.
 # Without this it fails with "Couldn't find any version information".
 UpdateCheckData: app/build.gradle.kts|versionName\s*=\s*"(\d+)"|.|versionName\s*=\s*"(\d+)"
-CurrentVersion: '2'
-CurrentVersionCode: 2
+CurrentVersion: '3'
+CurrentVersionCode: 3
