@@ -135,6 +135,13 @@ that the binary corresponds to the tagged source.
    "Enable Reproducible Builds" box ticked and v3 as the only Builds
    entry.
 
+   v3 is cut and tagged (`0b356e0`). `release` mode worked on its first
+   real run; the unsigned APK is
+   `app/build/outputs/apk/release/me.phie.tawc_3-unsigned.apk`
+   (sha256 `2d227298…`), and a second build with cold caches on six
+   cores reproduced it exactly. Remaining: maintainer signs, smoke-tests,
+   pushes and publishes, then the MR (human — plans/f-droid.md 3.3).
+
 ## Risks
 
 - **Image drift.** The release is built against trixie's packages on
@@ -145,7 +152,11 @@ that the binary corresponds to the tagged source.
   stay on the previous one, fix is vN+1. Seen in practice already: a
   libssl 3.5.6 → 3.5.7 update landed between the determinism sweep and
   the step-5 verification an hour later, and the rebuild still matched —
-  most trixie updates touch nothing this build links against.
+  most trixie updates touch nothing this build links against. The v3
+  pair then straddled a libc6 2.41-12+deb13u3 → u4 upgrade and still
+  matched, and the v3 build itself ran on a newer openjdk (21.0.12 vs
+  21.0.11) and libexpat than the sweep did. A JDK point release is the
+  drift most likely to bite, since it feeds javac; nothing has yet.
 - **CI image vs production buildserver.** fdroiddata CI and the rig use
   the container image; production builds run in a VM provisioned from
   the same base. Differences (core count, kernel, locale, umask) are
