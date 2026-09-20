@@ -112,6 +112,9 @@ class LogScreenActivity : AppCompatActivity() {
         setContentView(scaffold.root)
 
         panel.onCancelClicked = { dispatchCancel() }
+        // Shown in place of Cancel once the op is done or failed:
+        // finishing pops back to whatever screen started it.
+        panel.onCloseClicked = { finish() }
 
         lifecycleScope.launch {
             currentOpId

@@ -17,6 +17,7 @@
     <string name="licenses_variant_heading">Text %1$d of %2$d — covers %3$d components</string>
 
     <string name="action_cancel">Cancel</string>
+    <string name="action_close">Close</string>
     <string name="action_delete">Delete</string>
     <string name="action_install">Install</string>
     <string name="action_install_new_distro">Install new distro</string>

@@ -26,7 +26,8 @@ import me.phie.tawc.ui.tonalButton
 
 /**
  * Reusable "operation in progress" UI: bold status line + accent-tinted
- * progress bar + scrolling log + subdued tonal Cancel button.
+ * progress bar + scrolling log + a subdued tonal button at the bottom
+ * that is Cancel while the op runs and Close once it has finished.
  *
  * Owners attach [view] into their layout, then call [bind] with an
  * [Operation] when one is available and [unbind] when leaving the
@@ -49,6 +50,7 @@ class OperationLogPanel(private val activity: Activity) {
     private val logText: TextView
     private val logScroll: ScrollView
     private val cancelButton: MaterialButton
+    private val closeButton: MaterialButton
 
     private var collectScope: CoroutineScope? = null
 
@@ -62,6 +64,13 @@ class OperationLogPanel(private val activity: Activity) {
      * wrap with a confirm dialog (driven by [Operation.cancelConfirmation]).
      */
     var onCancelClicked: (() -> Unit)? = null
+
+    /**
+     * Tap handler for the Close button, shown in place of Cancel once
+     * the op reaches a terminal stage. Left `null` by owners that have
+     * nothing to close, in which case the button stays hidden.
+     */
+    var onCloseClicked: (() -> Unit)? = null
 
     init {
         val pad = (16 * activity.resources.displayMetrics.density).toInt()
@@ -107,6 +116,15 @@ class OperationLogPanel(private val activity: Activity) {
         cancelButton = activity.tonalButton(activity.getString(R.string.action_cancel)) { onCancelClicked?.invoke() }
         cancelButton.visibility = View.GONE
         view.addView(cancelButton, lp(MATCH_PARENT, WRAP_CONTENT, bottomMargin = 0).apply {
+            topMargin = pad / 2
+        })
+
+        // Takes Cancel's place once the op is done or has failed, so
+        // the bottom of the screen always offers the one action that
+        // makes sense at that moment.
+        closeButton = activity.tonalButton(activity.getString(R.string.action_close)) { onCloseClicked?.invoke() }
+        closeButton.visibility = View.GONE
+        view.addView(closeButton, lp(MATCH_PARENT, WRAP_CONTENT, bottomMargin = 0).apply {
             topMargin = pad / 2
         })
     }
@@ -169,9 +187,11 @@ class OperationLogPanel(private val activity: Activity) {
         } else {
             progressBar.isIndeterminate = true
         }
-        val terminal = p.stage.isTerminal || p.stage == OperationStage.IDLE
-        progressBar.visibility = if (terminal) View.GONE else View.VISIBLE
-        cancelButton.visibility = if (terminal) View.GONE else View.VISIBLE
+        val running = !p.stage.isTerminal && p.stage != OperationStage.IDLE
+        progressBar.visibility = if (running) View.VISIBLE else View.GONE
+        cancelButton.visibility = if (running) View.VISIBLE else View.GONE
+        closeButton.visibility =
+            if (p.stage.isTerminal && onCloseClicked != null) View.VISIBLE else View.GONE
     }
 
     /**
@@ -187,6 +207,7 @@ class OperationLogPanel(private val activity: Activity) {
         progressBar.progress = 0
         progressBar.visibility = View.GONE
         cancelButton.visibility = View.GONE
+        closeButton.visibility = View.GONE
     }
 
     fun appendLog(line: String) {
