@@ -232,7 +232,8 @@ then human steps 3.3 and 4.
    current fdroiddata docs at the time):
    - `Categories`, `License: GPL-3.0-only`, `SourceCode`, `IssueTracker`
    - `Repo: https://github.com/wmww/tawc.git`
-   - Builds entry per version: `commit: vN`, `subdir: app`,
+   - Builds entry per version: `commit: <full hash of vN>` (reviewers
+     reject tags there; the in-repo draft keeps `vN`), `subdir: app`,
      `sudo:` apt-get install of meson/ninja/autotools/`gcc-aarch64-linux-gnu`
      etc., `prebuild:` rustup + cargo-ndk setup and `scripts/ensure-deps.sh`
      (or declare each `deps/deps.list` entry as an `srclibs` pin if the

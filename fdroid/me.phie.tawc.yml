@@ -61,6 +61,9 @@ AllowedAPKSigningKeys: 0b2262d221a951b57d847b288324004ce3b2fefe1ef52a1140f2fbc1f
 Builds:
   - versionName: '3'
     versionCode: 3
+    # fdroiddata reviewers want the tag's full commit hash here
+    # (`git rev-parse 'vN^{commit}'`), not the tag. This copy keeps the tag:
+    # it is committed inside the release commit, so it cannot name it.
     commit: v3
     subdir: app
     ndk: 27.2.12479018
