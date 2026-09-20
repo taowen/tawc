@@ -16,7 +16,6 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -38,6 +37,8 @@ import kotlinx.coroutines.runInterruptible
 import me.phie.tawc.ops.LogScreenActivity
 import me.phie.tawc.ui.buildChildScreen
 import me.phie.tawc.ui.destructiveButton
+import me.phie.tawc.ui.plainIconButton
+import me.phie.tawc.ui.tawcButtonSizePx
 import me.phie.tawc.ui.tonalButton
 import me.phie.tawc.ui.verticalLp
 
@@ -160,7 +161,7 @@ class DistroInfoActivity : AppCompatActivity() {
         rootfsRow.gravity = android.view.Gravity.CENTER_VERTICAL
         rootfsRow.addView(
             copyButton(getString(R.string.action_copy_rootfs_path), rootfsPath),
-            LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT),
+            LinearLayout.LayoutParams(tawcButtonSizePx(), tawcButtonSizePx()),
         )
         content.addView(rootfsRow, rowLp(pad))
         if (installation.method == TawcrootMethod.KEY && AllFilesAccess.declared(this)) {
@@ -394,22 +395,12 @@ class DistroInfoActivity : AppCompatActivity() {
      * Borderless clipboard icon button. Skips the "copied" toast on
      * T+ where the system already shows its own clipboard overlay.
      */
-    private fun copyButton(description: String, text: String): ImageButton =
-        ImageButton(this).apply {
-            setImageResource(R.drawable.ic_content_copy)
-            imageTintList = android.content.res.ColorStateList.valueOf(
-                MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant)
-            )
-            val outValue = android.util.TypedValue()
-            context.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, outValue, true)
-            setBackgroundResource(outValue.resourceId)
-            contentDescription = description
-            setOnClickListener {
-                val clipboard = getSystemService(ClipboardManager::class.java)
-                clipboard.setPrimaryClip(ClipData.newPlainText(description, text))
-                if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
-                    Toast.makeText(context, R.string.copied_to_clipboard, Toast.LENGTH_SHORT).show()
-                }
+    private fun copyButton(description: String, text: String): View =
+        plainIconButton(R.drawable.ic_content_copy, description) {
+            val clipboard = getSystemService(ClipboardManager::class.java)
+            clipboard.setPrimaryClip(ClipData.newPlainText(description, text))
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
+                Toast.makeText(this, R.string.copied_to_clipboard, Toast.LENGTH_SHORT).show()
             }
         }
 

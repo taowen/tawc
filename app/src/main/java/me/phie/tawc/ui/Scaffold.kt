@@ -7,6 +7,7 @@ import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.appbar.MaterialToolbar
@@ -98,6 +99,11 @@ private const val BUTTON_CORNER_DP = 6f
 // text rows.
 private const val BUTTON_HEIGHT_DP = 44
 
+// Glyph edge for [plainIconButton]: what a toolbar's own up arrow
+// draws at, not MaterialButton's 18dp default (which is sized to sit
+// beside a label, and reads small on its own).
+private const val PLAIN_ICON_SIZE_DP = 24
+
 /**
  * The uniform button height in pixels — also the exact width/height
  * callers should give [tonalIconButton]s' layout params so the squares
@@ -176,7 +182,7 @@ fun Context.tonalIconButton(
     onClick: () -> Unit,
 ): MaterialButton =
     MaterialButton(this).apply {
-        icon = androidx.appcompat.content.res.AppCompatResources.getDrawable(context, iconRes)
+        icon = AppCompatResources.getDrawable(context, iconRes)
         if (iconSizeDp != null) iconSize = (iconSizeDp * resources.displayMetrics.density).toInt()
         iconPadding = 0
         iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START
@@ -190,6 +196,51 @@ fun Context.tonalIconButton(
         iconTint = ColorStateList.valueOf(getColor(foregroundColor))
         setOnClickListener { onClick() }
     }
+
+/**
+ * Background-less [tonalIconButton] for chrome that sits inside
+ * another surface (the launcher's back / ⋮ buttons beside the search
+ * field), where a filled square would read as a second control rather
+ * than part of the row. Same square footprint, no fill — only the
+ * press ripple shows, so the shape is a circle (a rounded square
+ * looks like a stray button once the fill is gone).
+ *
+ * The glyph is [PLAIN_ICON_SIZE_DP] at `?attr/colorControlNormal`,
+ * i.e. what a toolbar's own up arrow draws: these buttons are the same
+ * kind of chrome, so a screen's back arrow and a row's must be one
+ * mark. Pass [foregroundColor] only where the colour carries meaning,
+ * and [iconSizeDp] only for a glyph that reads heavier than the rest
+ * at the shared size.
+ */
+fun Context.plainIconButton(
+    iconRes: Int,
+    description: CharSequence,
+    foregroundColor: Int? = null,
+    iconSizeDp: Int = PLAIN_ICON_SIZE_DP,
+    onClick: () -> Unit,
+): MaterialButton =
+    tonalIconButton(
+        iconRes,
+        description,
+        android.R.color.transparent,
+        foregroundColor ?: R.color.tawc_on_tonal,
+        iconSizeDp,
+        onClick,
+    ).apply {
+        cornerRadius = tawcButtonSizePx() / 2
+        if (foregroundColor == null) iconTint = controlTint()
+    }
+
+/** `?attr/colorControlNormal`, the tint the platform's own chrome uses. */
+private fun Context.controlTint(): ColorStateList {
+    val value = android.util.TypedValue()
+    theme.resolveAttribute(androidx.appcompat.R.attr.colorControlNormal, value, true)
+    return if (value.resourceId != 0) {
+        AppCompatResources.getColorStateList(this, value.resourceId)
+    } else {
+        ColorStateList.valueOf(value.data)
+    }
+}
 
 /**
  * Card / panel surface used for distro rows on the home screen, the

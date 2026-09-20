@@ -27,10 +27,10 @@ import me.phie.tawc.launcher.LauncherActivity
 import me.phie.tawc.terminal.TerminalActivity
 import me.phie.tawc.tasks.TaskManagerActivity
 import me.phie.tawc.ui.buildHomeScreen
+import me.phie.tawc.ui.plainIconButton
+import me.phie.tawc.ui.tawcButtonSizePx
 import me.phie.tawc.ui.tawcCard
 import me.phie.tawc.ui.tonalButton
-import me.phie.tawc.ui.tawcButtonSizePx
-import me.phie.tawc.ui.tonalIconButton
 import me.phie.tawc.ui.verticalLp
 
 /**
@@ -124,18 +124,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildCard(inst: Installation): View {
         val card = tawcCard()
-        // Bottom padding is set at the end of this function: when the
-        // bottom row is shown, the terminal button's bottom margin
-        // (which drops it onto the search underline) already provides
-        // part of the gap, so the column's own bottom padding shrinks
-        // by the same amount to keep the button's distance from the
-        // card's bottom edge equal to its distance from the left edge.
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(cardPad, cardPad, cardPad, cardPad)
         }
 
-        // Header: title/subtitle on the left, Manage button on the top-right.
+        // Header: title/subtitle on the left, Terminal + Manage buttons
+        // on the top-right.
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val textCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val title = DistroRegistry.displayLabel(inst)
@@ -168,11 +163,30 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).also { it.marginEnd = gap },
         )
         val btnSize = tawcButtonSizePx()
+        // Terminal needs a runnable rootfs and the tawcroot spawn path
+        // (chroot needs su, proot is dev-only — see TerminalActivity).
+        if (inst.state == Installation.State.READY && inst.method == TawcrootMethod.KEY) {
+            header.addView(
+                plainIconButton(
+                    R.drawable.ic_terminal,
+                    getString(R.string.action_terminal),
+                    iconSizeDp = HOME_ICON_SIZE_DP,
+                ) {
+                    val i = Intent(this@MainActivity, TerminalActivity::class.java)
+                        .putExtra(TerminalActivity.EXTRA_ID, inst.id)
+                        // Unique per-distro document URI — see the
+                        // manifest comment on TerminalActivity.
+                        .setData(Uri.parse("tawc://terminal/${inst.id}"))
+                    startActivity(i)
+                },
+                LinearLayout.LayoutParams(btnSize, btnSize).also { it.gravity = Gravity.TOP },
+            )
+        }
         header.addView(
-            tonalIconButton(
+            plainIconButton(
                 R.drawable.ic_settings_gear,
                 getString(R.string.action_manage),
-                iconSizeDp = 24,
+                iconSizeDp = HOME_ICON_SIZE_DP,
             ) {
                 val i = Intent(this@MainActivity, DistroInfoActivity::class.java)
                     .putExtra(DistroInfoActivity.EXTRA_ID, inst.id)
@@ -182,23 +196,12 @@ class MainActivity : AppCompatActivity() {
         )
         column.addView(header, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
 
-        // Bottom row: Terminal icon button + search-apps stub. The stub
-        // looks like a search field but never holds focus — tapping it
-        // forwards into LauncherActivity, which is the real search UI.
-        // Hidden on FAILED/CORRUPT (no usable launcher) and disabled while
+        // Bottom row: the search-apps stub. It looks like a search field
+        // but never holds focus — tapping it forwards into
+        // LauncherActivity, which is the real search UI. Hidden on
+        // FAILED/CORRUPT (no usable launcher) and disabled while
         // installing/uninstalling so it returns once ready.
         val topMargin = (8 * resources.displayMetrics.density).toInt()
-        // BOTTOM, not CENTER_VERTICAL: the search box's underline sits
-        // at its bottom edge, so that's the line the terminal button
-        // should sit on. baselineAligned must go — with it on (the
-        // horizontal-LinearLayout default) the row aligns the button's
-        // empty-text baseline to the EditText's instead of honoring
-        // BOTTOM, pushing the button up out of the row's clip bounds.
-        val bottomRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.BOTTOM
-            isBaselineAligned = false
-        }
         val searchBox = EditText(this).apply {
             hint = getString(R.string.hint_search_apps)
             isSingleLine = true
@@ -212,50 +215,14 @@ class MainActivity : AppCompatActivity() {
                 startActivity(i)
             }
         }
-        // The search box's underline draws a few px above the view's
-        // bottom inside its bottom padding; this margin drops the
-        // terminal button so its bottom edge lands a hair below the
-        // line rather than above it (the extra +1px is deliberate —
-        // dead-even read as the button floating half a pixel high).
-        val underlineNudge = (3 * resources.displayMetrics.density).toInt() + 1
-        val buttonDrop = (searchBox.paddingBottom - underlineNudge).coerceAtLeast(0)
-        // Terminal needs a runnable rootfs and the tawcroot spawn path
-        // (chroot needs su, proot is dev-only — see TerminalActivity).
-        if (inst.state == Installation.State.READY && inst.method == TawcrootMethod.KEY) {
-            // 28dp icon (over the 24dp default) so the ">_" reads at a
-            // glance instead of floating in button padding.
-            bottomRow.addView(
-                tonalIconButton(
-                    R.drawable.ic_terminal,
-                    getString(R.string.action_terminal),
-                    iconSizeDp = 28,
-                ) {
-                    val i = Intent(this@MainActivity, TerminalActivity::class.java)
-                        .putExtra(TerminalActivity.EXTRA_ID, inst.id)
-                        // Unique per-distro document URI — see the
-                        // manifest comment on TerminalActivity.
-                        .setData(Uri.parse("tawc://terminal/${inst.id}"))
-                    startActivity(i)
-                },
-                LinearLayout.LayoutParams(btnSize, btnSize).also {
-                    it.marginEnd = gap
-                    it.bottomMargin = buttonDrop
-                },
-            )
-        }
-        bottomRow.addView(searchBox, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        val rowVisible = inst.state != Installation.State.FAILED &&
+        searchBox.visibility = if (
+            inst.state != Installation.State.FAILED &&
             inst.state != Installation.State.CORRUPT
-        bottomRow.visibility = if (rowVisible) View.VISIBLE else View.GONE
+        ) View.VISIBLE else View.GONE
         column.addView(
-            bottomRow,
+            searchBox,
             LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).also { it.topMargin = topMargin },
         )
-        // See the comment at the top of this function: the button's
-        // bottom margin counts toward the visual gap to the card edge.
-        if (rowVisible) {
-            column.setPadding(cardPad, cardPad, cardPad, (cardPad - buttonDrop).coerceAtLeast(0))
-        }
 
         card.addView(column)
         return card
@@ -273,5 +240,10 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val REQUEST_NOTIFICATIONS = 1
+
+        /** The distro card's two buttons run larger than the shared
+         *  plain-button glyph: they're the card's only controls, with
+         *  the whole card's width of empty space around them. */
+        const val HOME_ICON_SIZE_DP = 28
     }
 }

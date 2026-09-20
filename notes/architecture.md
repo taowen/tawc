@@ -72,7 +72,16 @@ Kotlin side (`app/src/main/java/me/phie/tawc/`):
   typing) doesn't slam the wrong bitmap into a recycled view.
 - **ui/Scaffold.kt** -- Helpers shared by the non-compositor activities — builds the
   `MaterialToolbar` (with back/up arrow on child screens) plus the content column, and
-  exposes `primaryButton` (accent) / `destructiveButton` (red) factories.
+  exposes the button factories. Buttons with text keep a visible fill
+  (`primaryButton` accent / `destructiveButton` red / `tonalButton` muted;
+  `tonalIconButton` is the icon-only filled base). Narrow icon-only buttons use
+  `plainIconButton`: no fill, circular ripple, and a 24dp `?attr/colorControlNormal`
+  glyph — the same mark a toolbar's own up arrow draws, so back arrows match
+  wherever they appear. Two deliberate exceptions: the home card's gear/terminal
+  run at 28dp (`HOME_ICON_SIZE_DP` — the card's only controls, in open space) and
+  the launcher's ⋮ at 21dp (solid dots read heavier than the line icons). Colour
+  carries meaning where it did before: the `+` on a bind suggestion is an
+  accent-tinted glyph.
 - **compositor/CompositorService.kt** -- Foreground service (`specialUse` type) that owns
   the Rust compositor thread. Activities bind to it; it tracks them by `activityId` so
   reverse-JNI calls can find the right Activity. Its notification's "Exit" stops the

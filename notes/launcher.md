@@ -81,7 +81,13 @@ in `launcher.rs::scan_entries`:
 - `resolve_metadata_for_app_id` shares `scan_entries` for window
   icons/titles — a hidden app that is *running* must still resolve.
 
-The ⋮ tonal icon button beside the search field opens a `PopupMenu`
+The search row is `←  [search field]  ⋮`, both buttons background-less
+(`plainIconButton`) so they read as row chrome; the ← is the same mark as
+a child screen's toolbar up arrow. The ← just `finish()`es:
+system back is consumed by the soft keyboard first, so the popup window
+needs its own dismiss.
+
+The ⋮ button beside the search field opens a `PopupMenu`
 with a checkable **"Show hidden (N)"** item (N counts hidden ids that
 match actual entries) and — on editable methods — **"Add entry…"**
 (the editor). Show-hidden is transient per-Activity state, not

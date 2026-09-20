@@ -33,9 +33,9 @@ import kotlinx.coroutines.withContext
 import me.phie.tawc.R
 import me.phie.tawc.install.Installation
 import me.phie.tawc.install.InstallationStore
+import me.phie.tawc.ui.plainIconButton
 import me.phie.tawc.ui.tawcButtonSizePx
 import me.phie.tawc.ui.tawcCard
-import me.phie.tawc.ui.tonalIconButton
 import me.phie.tawc.ui.verticalLp
 import kotlin.math.max
 import kotlin.math.min
@@ -135,14 +135,29 @@ class LauncherActivity : AppCompatActivity() {
                 if (isEnter) { launchTop(); true } else false
             }
         }
-        menuButton = tonalIconButton(
+        // Under the shared glyph size: three solid dots read heavier
+        // than the line icons everything else uses.
+        menuButton = plainIconButton(
             R.drawable.ic_more_vert,
             getString(R.string.launcher_menu_description),
+            iconSizeDp = 21,
         ) { showOverflowMenu() }
+        // System back dismisses the keyboard before it dismisses the
+        // window, so the launcher needs its own way out.
+        val backButton = plainIconButton(
+            R.drawable.ic_arrow_back,
+            getString(androidx.appcompat.R.string.abc_action_bar_up_description),
+        ) { finish() }
         val searchRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        searchRow.addView(
+            backButton,
+            LinearLayout.LayoutParams(tawcButtonSizePx(), tawcButtonSizePx()).also {
+                it.marginEnd = pad / 2
+            },
+        )
         searchRow.addView(searchField, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         searchRow.addView(
             menuButton,

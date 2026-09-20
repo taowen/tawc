@@ -24,11 +24,11 @@ import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import me.phie.tawc.R
 import me.phie.tawc.ui.buildChildScreen
+import me.phie.tawc.ui.plainIconButton
 import me.phie.tawc.ui.primaryButton
 import me.phie.tawc.ui.tawcButtonSizePx
 import me.phie.tawc.ui.tawcCard
 import me.phie.tawc.ui.tonalButton
-import me.phie.tawc.ui.tonalIconButton
 import me.phie.tawc.ui.verticalLp
 import org.json.JSONArray
 
@@ -327,13 +327,13 @@ class ManageBindsActivity : AppCompatActivity() {
         val btnSize = tawcButtonSizePx()
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         buttons.addView(
-            tonalIconButton(R.drawable.ic_settings_gear, getString(R.string.action_edit)) {
+            plainIconButton(R.drawable.ic_settings_gear, getString(R.string.action_edit)) {
                 showEditDialog(index)
             },
             LinearLayout.LayoutParams(btnSize, btnSize).apply { marginEnd = pad / 4 },
         )
         buttons.addView(
-            tonalIconButton(R.drawable.ic_delete, getString(R.string.action_remove)) {
+            plainIconButton(R.drawable.ic_delete, getString(R.string.action_remove)) {
                 binds.removeAt(index)
                 commit()
             },
@@ -370,15 +370,19 @@ class ManageBindsActivity : AppCompatActivity() {
         row.addView(labels, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         val btnSize = tawcButtonSizePx()
         row.addView(
-            tonalIconButton(
+            // Accent-tinted rather than accent-filled: it's the primary
+            // action on a suggestion row, but a filled square next to
+            // the plain edit/remove buttons reads as a different kind
+            // of control.
+            plainIconButton(
                 R.drawable.ic_add,
                 getString(R.string.action_add),
-                backgroundColor = R.color.tawc_accent,
+                foregroundColor = R.color.tawc_accent,
             ) {
                 val problem = validate(bind, null)
                 if (problem != null) {
                     Toast.makeText(this, problem, Toast.LENGTH_LONG).show()
-                    return@tonalIconButton
+                    return@plainIconButton
                 }
                 binds.add(bind)
                 commit()
