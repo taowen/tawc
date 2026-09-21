@@ -1,5 +1,9 @@
 # Socket-activated compositor (lazy start, auto-stop)
 
+Steps 3–4 depend on [session-service.md](session-service.md): once the
+compositor auto-stops it can no longer be what keeps the process alive, and
+it must not need a foreground-service start of its own.
+
 ## Problem
 
 The compositor only runs after something goes through
@@ -20,9 +24,10 @@ The user has to track and manage compositor state.
   in the listen backlog meanwhile (measured on the emulator: ~7 ms from
   `nativeStartCompositor` to dispatch now that GL setup runs on a helper
   thread, plus service start; first run also pays asset extraction).
-- When nothing is connected any more, the compositor stops (GLES context,
-  foreground service, notification all go away). Next connection restarts
-  it.
+- When nothing is connected any more, the compositor stops (GLES context
+  goes away, its session hold is released — the notification drops its
+  window count, and goes away entirely only if nothing else in a rootfs is
+  alive). Next connection restarts it.
 - Nothing starts the compositor explicitly. `UserRootfsSession` loses
   `ensureRunning`/`waitForWaylandSocket`; launcher, terminal and broker
   all become "just spawn the process".
@@ -66,8 +71,10 @@ New module (e.g. `compositor/src/activation.rs`), started from
 
 ### 2. Start path
 
-Holder → `NativeBridge` reverse-JNI → `CompositorService.ensureRunning`.
-The existing `ensureCompositorRunning` sequence stays as is. Move the
+Holder → `NativeBridge` reverse-JNI → `CompositorService.ensureRunning`,
+which after session-service.md is a plain `startService` plus
+`SessionHolds.acquire(Compositor)` — no `startForegroundService`. The rest
+of the `ensureCompositorRunning` sequence stays as is. Move the
 one-time asset extraction (xkb, libhybris, Xwayland) to app start / a
 cached "already extracted for this versionCode" check so it never sits in
 the connect→accept gap.
@@ -82,8 +89,9 @@ stop when all hold for a grace period:
 - no debug hold (see Testing).
 
 Then: compositor thread exits its loop, returns listeners to the holder,
-reverse-JNIs the service to `stopForeground` + `stopSelf` (same teardown
-as `exitFromNotification`, minus killing clients). If a connection is
+reverse-JNIs the service to release its `Compositor` session hold and
+`stopSelf` (the compositor-side half of the notification-Exit teardown,
+minus killing clients). If a connection is
 already pending on a listener when the holder gets it back, it restarts
 immediately — no connection is ever refused.
 
@@ -115,10 +123,10 @@ are for); revisit only if one shows up in practice.
 
 ### 5. UI consequences
 
-- Notification Exit stays as the "kill everything" escape hatch (it kills
-  clients; the compositor then stops by rule 3 anyway). The
-  "running, nothing connected" state no longer exists, so any UI for it
-  can go.
+- Notification Exit is the session service's "kill everything in every
+  rootfs" (session-service.md); the compositor then stops by rule 3
+  anyway. The "running, nothing connected" state no longer exists, so any
+  UI for it can go.
 - `CompositorActivity.onCreate`'s `ensureRunning` stays harmless (the
   Activity only exists because a client mapped a window).
 
@@ -137,24 +145,28 @@ are for); revisit only if one shows up in practice.
    `LoopHandle` Rc-cycle leak (Display, client fds, X11 lock). Add a
    stress test: N start/stop cycles, assert fd and thread counts in
    `/proc/<pid>` are flat, and EGL contexts are destroyed.
-3. **Foreground-service start from the background.** The trigger is now a
-   socket connect, which can happen while no TAWC Activity is visible
-   (script in a backgrounded terminal). Android 12+ throws
-   `ForegroundServiceStartNotAllowedException` there. Needs a decision and
-   a test on API 31+: catch it and run the compositor un-promoted until an
-   Activity appears (a windowed client will spawn one anyway; background
-   Activity launch is an existing limitation, unchanged), or refuse and
-   drop the pending connections. Check what `TerminalSessions` uses to
-   keep the process alive, and whether that already exempts us.
+3. **Starting from the background.** The trigger is now a socket connect,
+   which can happen while no TAWC Activity is visible (script in a
+   backgrounded terminal). A `startForegroundService` there throws
+   `ForegroundServiceStartNotAllowedException` on Android 12+. Resolved by
+   session-service.md: whatever connected is a guest process, so a
+   terminal/command/stray hold already has `SessionService` in the
+   foreground, and the compositor starts as a plain in-process component
+   (`startService` from an app with a running FGS is allowed). Test on API
+   31+ with the terminal backgrounded. Background Activity launch for the
+   client's first window is an existing limitation, unchanged.
 4. **Connect→accept latency.** The `lib.rs` comment claims a GTK4 client
    "timed out its initial roundtrip" over an ~80 ms gap. libwayland has no
    roundtrip timeout, so that diagnosis is suspect — but something failed
    there. Reproduce with a cold start of `gtk4-widget-factory` and Firefox
    from the terminal on the slow emulator before relying on the backlog.
 5. **Process lifetime.** "Always listening" only holds while the process
-   is alive. A terminal-only session must already keep it alive for the
-   shell to survive; confirm, and confirm the holder is up before the
-   first terminal/launcher process can be spawned (Application.onCreate
+   is alive. Measured 2026-09-20: today a terminal-only session does *not*
+   keep it alive (no service, cached at adj 910, killed with all guests by
+   routine trimming); session-service.md fixes that. With no guest
+   processes nothing can connect, so an unprotected idle process losing
+   its listeners is harmless. Confirm the holder is up before the first
+   terminal/launcher process can be spawned (Application.onCreate
    ordering).
 6. X11-only programs (xterm from a terminal) connect only to `:0`. The
    holder must watch that fd too, otherwise lazy start works for Wayland
@@ -179,6 +191,7 @@ are for); revisit only if one shows up in practice.
 
 ## Suggested order
 
+0. [session-service.md](session-service.md) steps 1–2 (needed before 3).
 1. Synchronous stop + leak fixes + kumquat process-lifetime thread
    (valuable on their own, no behaviour change).
 2. Holder owns the sockets; compositor borrows them; start still explicit.

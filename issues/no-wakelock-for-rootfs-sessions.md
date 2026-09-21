@@ -36,3 +36,5 @@ toggle, is worth considering.
 
 Found 2026-08-11 investigating a user report of dropped connections
 when backgrounding.
+
+Plan: [plans/wakelock.md](../plans/wakelock.md).

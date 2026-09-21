@@ -60,3 +60,5 @@ target.
 
 Found 2026-08-11 investigating a user report of dropped connections
 when backgrounding.
+
+An FGS does not help here; see [plans/session-service.md](../plans/session-service.md) for what it does fix.

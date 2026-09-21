@@ -66,3 +66,5 @@ device-idle allowlist.
 
 Found 2026-08-11 investigating a user report of dropped connections
 when backgrounding.
+
+Plan: [plans/session-service.md](../plans/session-service.md).
