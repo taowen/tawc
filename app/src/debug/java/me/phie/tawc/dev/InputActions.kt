@@ -497,10 +497,30 @@ internal object InputActions {
      */
     private object QueryStateAction : BrokerAction {
         override fun run(args: Map<String, String>, ctx: ActionContext): Int {
-            val state = NativeBridge.nativeQueryState()
-                ?: return ctx.fail("query-state: compositor did not return state")
-            ctx.out(state)
-            return 0
+            // Never starts anything: an idle compositor is stopped.
+            if (!NativeBridge.nativeIsCompositorRunning()) {
+                ctx.out("stopped")
+                return 0
+            }
+            // A null answer from a compositor that is on its way out is
+            // "stopped" a moment early, not a failure.
+            val deadline = SystemClock.uptimeMillis() + 2_000
+            while (true) {
+                val state = NativeBridge.nativeQueryState()
+                if (state != null) {
+                    ctx.out(state)
+                    return 0
+                }
+                if (!NativeBridge.nativeIsCompositorRunning()) {
+                    ctx.out("stopped")
+                    return 0
+                }
+                if (SystemClock.uptimeMillis() >= deadline) {
+                    return ctx.fail("query-state: compositor did not return state")
+                }
+                Thread.sleep(10)
+            }
+
         }
     }
 

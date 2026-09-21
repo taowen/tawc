@@ -133,9 +133,13 @@ Useful independent of Play: 16 KB devices exist.
    `scripts/gen-icon.sh` if wanted — do not hand-edit the SVG). State the
    no-shared-storage limitation and link GitHub/F-Droid for the full build.
 4.3. (**HUMAN**, agent drafts text) Console declarations:
-   - Foreground service `specialUse`: justification ("Wayland compositor
-     hosting user-launched Linux GUI apps; must keep the display socket and
-     client processes alive while they run") plus a short screen recording.
+   - Foreground service `specialUse` (subtype `linux_session`):
+     justification ("Keeps user-launched Linux programs alive while they
+     run: terminal shells, command-line jobs, and the Wayland compositor
+     hosting Linux GUI apps. They are child processes of the app, so
+     Android killing the backgrounded app would kill them and lose the
+     user's work; the service runs only while such a program exists and
+     its notification has an Exit action") plus a short screen recording.
    - Foreground service `dataSync`: distro install/uninstall. Note the
      Android 15+ 6-hour cap; installs are far shorter.
    - Data safety: no data collected or shared.

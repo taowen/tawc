@@ -116,14 +116,21 @@ commit, and may be arbitrarily late).
 - Not sufficient alone for wl-clipboard: see the Activity-flash problem
   above.
 
-## Interaction with plans/lazy-compositor.md
+## Interaction with the lazy compositor (done)
 
-- `wl-copy` leaves a daemon connected to serve the selection; that plan's
-  auto-stop rule has to account for it (its §4).
+See notes/architecture.md, "Compositor lifecycle".
+
+- `wl-copy` leaves a daemon connected to serve the selection. The
+  compositor's idle rule already handles it: once the mirror into Android
+  completed and no client has a `wl_surface`, it installs the Android
+  selection, the daemon gets `cancelled` and exits, and the compositor
+  stops. That path has never run end to end, because `wl-copy` dies on the
+  configure bug above first — verify it here.
 - With lazy start, `wl-copy` from a cold terminal starts the compositor,
-  the mirror writes the text to Android, and the compositor may stop
-  again; the text survives in the Android clipboard. Add that as an
-  integration test.
+  the mirror writes the text to Android, and the compositor stops again;
+  the text survives in the Android clipboard. Add that as an integration
+  test (`lazy_compositor`, unpinned): `wl-copy` then `wl-paste` across a
+  stop/start keeps the text.
 
 ## Tests
 

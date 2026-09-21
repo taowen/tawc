@@ -2,11 +2,13 @@ package me.phie.tawc
 
 import android.app.Application
 import android.util.Log
+import me.phie.tawc.compositor.CompositorService
 import me.phie.tawc.install.BootstrapCache
 import me.phie.tawc.install.InstallationStore
 import me.phie.tawc.install.RootfsTmpSweeper
 import me.phie.tawc.install.TawcInstaller
 import me.phie.tawc.ops.OperationsNotificationCenter
+import me.phie.tawc.session.SessionService
 import kotlin.concurrent.thread
 
 /**
@@ -36,6 +38,8 @@ class TawcApplication : Application() {
         // OperationsRegistry → notification fan-out — see
         // me.phie.tawc.ops package KDoc.
         OperationsNotificationCenter.start(this)
+        // Before anything can spawn into a rootfs.
+        SessionService.install(this)
         thread(name = "tawc-startup", isDaemon = true) {
             // Production ando broker (run Android commands from rootfs
             // guests; notes/ando.md). Per-distro: one listener per
@@ -43,6 +47,11 @@ class TawcApplication : Application() {
             // app process is. On this thread because touching
             // NativeBridge triggers its `System.loadLibrary` of the
             // large compositor .so, which shouldn't block onCreate.
+            try {
+                CompositorService.ensureActivation(this)
+            } catch (t: Throwable) {
+                Log.w(TAG, "compositor activation start failed", t)
+            }
             try {
                 val appPaths = AppPaths.from(this)
                 appPaths.shareDir.mkdirs()

@@ -32,9 +32,8 @@ closes that window.
 ## Bootstrap: there is no "primary" CompositorActivity
 
 `MainActivity` is the launcher entry. It does not start the compositor
-on open; user-launched rootfs commands go through `UserRootfsSession`,
-which starts `CompositorService` lazily before spawning the Linux
-process. Once a Wayland client maps a toplevel, every
+on open, and neither does anything else: the first client connection
+does (notes/architecture.md, "Compositor lifecycle"). Once a Wayland client maps a toplevel, every
 `CompositorActivity` instance corresponds 1:1 to a real Wayland
 toplevel (spawned by the policy via reverse-JNI, killed by
 `finishActivity` when the toplevel dies). The recents view shows
@@ -54,6 +53,10 @@ Activities per window: the policy says "new toplevel → spawn Activity," so
 the compositor must already be running (Wayland socket open, ready to accept
 the chroot client's connection) before the first Activity exists, and must
 outlive any single Activity dying.
+
+(Historical design. Today the service is bound only, not foreground and
+not started; the foreground service is `SessionService` —
+[session-service.md](session-service.md).)
 
 Resolution: introduce `CompositorService` (an Android foreground Service) that:
 

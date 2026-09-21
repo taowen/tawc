@@ -1,6 +1,6 @@
 # Wakelock toggle
 
-Depends on [session-service.md](session-service.md). Background:
+Builds on [notes/session-service.md](../notes/session-service.md) (done). Background:
 [issues/no-wakelock-for-rootfs-sessions.md](../issues/no-wakelock-for-rootfs-sessions.md).
 
 ## Problem

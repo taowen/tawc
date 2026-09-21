@@ -1,23 +1,19 @@
 package me.phie.tawc.install
 
 import android.content.Context
-import android.net.LocalSocket
-import android.net.LocalSocketAddress
-import me.phie.tawc.AppPaths
 import me.phie.tawc.GraphicsBackend
 import me.phie.tawc.compositor.CompositorService
-import java.io.IOException
+import me.phie.tawc.session.Reason
+import me.phie.tawc.session.SessionHolds
+import kotlin.concurrent.thread
 
 /**
  * Entry point for user-launched rootfs commands. Installer/package setup
  * calls [InstallationMethod.startInside] directly; this wrapper is for
- * commands that may open Wayland/X11 windows and therefore need the
- * compositor service and socket alive first.
+ * user commands: it holds a session reason while the process lives and
+ * makes sure the compositor's sockets are listening.
  */
 internal object UserRootfsSession {
-    private const val SOCKET_WAIT_TIMEOUT_MS = 30_000L
-    private const val SOCKET_WAIT_POLL_MS = 50L
-
     fun startInside(
         context: Context,
         method: InstallationMethod,
@@ -25,10 +21,37 @@ internal object UserRootfsSession {
         command: String?,
         graphics: GraphicsBackend? = null,
     ): Process {
-        CompositorService.ensureRunning(context)
-        waitForWaylandSocket(context)
-        return method.startInside(rootfs, command, graphics)
+        // Nothing starts the compositor here: its sockets always accept,
+        // and the first connection starts it.
+        CompositorService.ensureActivation(context)
+        // The hold follows the process, so no caller has to cooperate.
+        val hold = SessionHolds.acquire(Reason.Command(commandLabel(command)))
+        val proc = try {
+            method.startInside(rootfs, command, graphics)
+        } catch (t: Throwable) {
+            hold.release()
+            throw t
+        }
+        thread(name = "tawc-session-wait", isDaemon = true) {
+            try {
+                proc.waitFor()
+            } catch (_: InterruptedException) {
+            } finally {
+                hold.release()
+            }
+        }
+        return proc
     }
+
+    /** Short name for the notification: the program's basename. */
+    internal fun commandLabel(command: String?): String {
+        val word = command?.trim()?.split(Regex("\\s+"))
+            ?.firstOrNull { it.isNotEmpty() && !ENV_ASSIGNMENT.matches(it) }
+            ?: return "shell"
+        return word.substringAfterLast('/').ifEmpty { "shell" }
+    }
+
+    private val ENV_ASSIGNMENT = Regex("[A-Za-z_][A-Za-z0-9_]*=.*")
 
     fun runInside(
         context: Context,
@@ -40,34 +63,5 @@ internal object UserRootfsSession {
     ): MethodResult {
         val proc = startInside(context, method, rootfs, command, graphics)
         return MethodRunHelper.collectProcess(proc, onLine)
-    }
-
-    private fun waitForWaylandSocket(context: Context) {
-        val socket = AppPaths.from(context).waylandSocket
-        val deadline = System.currentTimeMillis() + SOCKET_WAIT_TIMEOUT_MS
-        val address = LocalSocketAddress(
-            socket.absolutePath,
-            LocalSocketAddress.Namespace.FILESYSTEM,
-        )
-        while (!canConnect(address)) {
-            if (System.currentTimeMillis() >= deadline) {
-                throw IOException("Wayland socket did not become ready at ${socket.absolutePath}")
-            }
-            try {
-                Thread.sleep(SOCKET_WAIT_POLL_MS)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                throw IOException("Interrupted waiting for Wayland socket", e)
-            }
-        }
-    }
-
-    private fun canConnect(address: LocalSocketAddress): Boolean = try {
-        LocalSocket().use { socket ->
-            socket.connect(address)
-        }
-        true
-    } catch (_: IOException) {
-        false
     }
 }

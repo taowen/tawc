@@ -130,12 +130,10 @@ selection, JVM-unit-tested); tab policy lives in the activity. One
 `updateSize()`s, so background tabs keep a stale pty size until
 selected). Last shell exiting (or its tab closed) finishes the
 activity and drops the recents card; swiping the card kills all of the
-distro's shells. No foreground service: sessions die if Android kills
-the app process in the background; promote to a service only if that
-becomes a real complaint. That complaint has arrived — a terminal-only
-session is backgrounded at oom_adj 700 and loses all network to the
-Doze firewall about a minute after screen-off; see
-[issues/rootfs-network-cut-when-app-backgrounded.md](../issues/rootfs-network-cut-when-app-backgrounded.md).
+distro's shells. Every registered session holds a `Terminal` reason in
+`SessionHolds`, so the process is a foreground service while any shell
+is alive ([session-service.md](session-service.md)); the hold lives in
+the registry, not the activity, because sessions outlive it.
 
 Tab labels are the session's xterm window title (OSC 0/2, parsed by
 the vendored emulator, surfaced via `TerminalSession.getTitle()` /

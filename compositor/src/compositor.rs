@@ -217,6 +217,14 @@ pub struct TawcState {
     /// a Wayland selection, for deduping repeat announces (focus syncs
     /// re-announce the same clip). Compositor restarts reset it.
     pub last_announced_android_clip_ts: Option<i64>,
+    /// The live selection is a Wayland client's and its text is already
+    /// in Android's clipboard, so the client is no longer needed to serve
+    /// it (see `event_loop::check_idle`). Cleared on every new selection.
+    pub selection_mirrored: bool,
+    /// Live `wl_surface`s, Xwayland's included.
+    pub surface_count: usize,
+    /// Since when nothing has been connected; drives auto-stop.
+    pub idle_since: Option<std::time::Instant>,
 
     /// Hardware keys accepted from Android and currently held in the Smithay
     /// seat. Releases must be honored even if Android Activity foreground
@@ -387,6 +395,9 @@ impl TawcState {
             text_input_state: TextInputState::new(),
             clipboard_pull: None,
             last_announced_android_clip_ts: None,
+            selection_mirrored: false,
+            surface_count: 0,
+            idle_since: None,
             hardware_keys_down: HashSet::new(),
             client_count: Arc::new(AtomicU32::new(0)),
             client_ids: Arc::new(Mutex::new(Vec::new())),
@@ -939,6 +950,10 @@ impl CompositorHandler for TawcState {
         // wp_fractional_scale_v1; integer-only clients use the rounded-up
         // wl_surface.preferred_buffer_scale fallback.
         self.send_surface_scale(surface);
+        self.surface_count += 1;
+        smithay::wayland::compositor::add_destruction_hook(surface, |state: &mut TawcState, _| {
+            state.surface_count = state.surface_count.saturating_sub(1);
+        });
     }
 
     fn commit(&mut self, surface: &WlSurface) {
@@ -1258,6 +1273,9 @@ impl SelectionHandler for TawcState {
         _seat: Seat<Self>,
     ) {
         let mime_types = source.as_ref().map(|source| source.mime_types());
+        if ty == SelectionTarget::Clipboard {
+            self.selection_mirrored = false;
+        }
         if let Some(xwm) = self.xwm.as_mut() {
             if let Err(e) = xwm.new_selection(ty, mime_types.clone()) {
                 log::warn!("clipboard: failed to notify XWayland of Wayland selection: {:?}", e);

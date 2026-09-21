@@ -5,9 +5,9 @@
 
     <!-- Bootstrap tarballs are downloaded directly by the install package. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- CompositorService keeps the compositor thread + Wayland socket
-         alive across Activity lifecycles; specialUse is the correct
-         foregroundServiceType for a desktop compositor on Android 14+
+    <!-- SessionService keeps the process in the foreground while anything
+         is alive in a rootfs (terminals, commands, the compositor);
+         specialUse is the correct foregroundServiceType on Android 14+
          (none of the standard types fit). InstallationService runs the
          long-running install/uninstall flow as dataSync. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -74,11 +74,15 @@
 
         <service
             android:name=".compositor.CompositorService"
+            android:exported="false" />
+
+        <service
+            android:name=".session.SessionService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="wayland_compositor" />
+                android:value="linux_session" />
         </service>
 
         <activity

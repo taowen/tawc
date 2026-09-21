@@ -50,7 +50,13 @@ pub fn query_state(timeout: Duration) -> Result<CompositorState, String> {
                 if let Some(state) = parse_compositor_state(stdout.trim()) {
                     return Ok(state);
                 }
-                return Err(format!("query-state returned malformed stdout: {stdout:?}"));
+                if stdout.trim() != STOPPED {
+                    return Err(format!("query-state returned malformed stdout: {stdout:?}"));
+                }
+                // Stopped (no clients): keep waiting for a start.
+                if Instant::now() > deadline {
+                    return Err("compositor is stopped".to_string());
+                }
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -68,6 +74,33 @@ pub fn query_state(timeout: Duration) -> Result<CompositorState, String> {
             }
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// `query-state`'s whole answer while no compositor thread exists. The
+/// action never starts one.
+const STOPPED: &str = "stopped";
+
+/// True iff the app answers and reports the compositor stopped.
+pub fn is_stopped() -> Result<bool, String> {
+    let output = adb::query_state().map_err(|e| e.to_string())?;
+    Ok(output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == STOPPED)
+}
+
+/// Wait for the idle rule (or an exit) to stop the compositor.
+pub fn wait_for_stopped(timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if is_stopped()? {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "compositor still running after {timeout:?}: {:?}",
+                query_state_once()
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -296,8 +329,8 @@ pub fn wait_for_rendered_toplevels(
 
 /// Panic with a clear message if the compositor isn't running. The
 /// harness never starts the compositor itself — `run-integration-tests.sh`
-/// launches it once before invoking `cargo test` and force-stops it
-/// after the suite. A failure here means the script wasn't used (or
+/// pins it running (`compositor-hold`) before invoking `cargo test` and
+/// force-stops the app after the suite. A failure here means the script wasn't used (or
 /// the compositor died mid-suite), and the right fix is to re-run
 /// `scripts/run-integration-tests.sh` rather than to start it
 /// from inside a test.
@@ -316,12 +349,10 @@ pub fn assert_running() {
 /// True iff the compositor loop answers a `query-state` round-trip AND
 /// the chroot-visible Wayland socket exists. The broker round-trip is
 /// stronger than a pidof check — it proves the app process is up and
-/// the compositor event loop is dispatching. The socket probe still
-/// matters: the compositor starts lazily on the first RUNINSIDE, so
-/// the broker can answer before the socket exists. Once seen, the
-/// socket persists for the life of the compositor process (and this
-/// check runs per test), so a success is cached and later calls
-/// collapse to the single query-state round-trip.
+/// the compositor event loop is dispatching. The socket is bound once
+/// per app process (before anything is spawned into a rootfs), so a
+/// success is cached and later calls collapse to the single query-state
+/// round-trip.
 pub fn is_running() -> io::Result<bool> {
     static SOCKET_SEEN: OnceLock<()> = OnceLock::new();
     if query_state_once().is_err() {

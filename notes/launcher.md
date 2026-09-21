@@ -42,8 +42,8 @@ and lets the user search + launch. Reached from the home screen card's
    warn. Everything else runs
    `UserRootfsSession.runInside(rootfs, "<exec> </dev/null >/dev/null
    2>&1")` on its process-wide `LAUNCH_SCOPE` (Dispatchers.IO).
-   `UserRootfsSession` starts `CompositorService` lazily and waits for
-   the Wayland socket before spawning the Linux process. The Activity
+   `UserRootfsSession` holds a session reason while the process lives;
+   the program's first Wayland/X11 connection starts the compositor. The Activity
    `finish()`es immediately; the coroutine keeps blocking in
    `runInside` for the program's lifetime, which pins one IO thread
    per running app. We can't `setsid -f` detach: proot's

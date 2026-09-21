@@ -806,7 +806,13 @@ that Kotlin exports before `nativeStartCompositor`. No `su`, no
   when the first X11 client connects. Xwayland gets `-terminate 5`, so
   it exits after its last real X11 client has been gone for five seconds;
   TAWC then recreates the activation socket. See "Idle termination"
-  below for the startup race this depends on us having patched. The same module wires
+  below for the startup race this depends on us having patched. The
+  compositor itself is socket-activated the same way one level up: while
+  none runs, `activation.rs` holds the prepared `:0` socket and an
+  X11-only client's connect starts the compositor, which borrows the
+  socket (`take_x11`) and returns it unused on exit
+  (notes/architecture.md, "Compositor lifecycle"). Xwayland lingering
+  5 s also delays the compositor's own idle stop by that much. The same module wires
   `X11Wm` on `XWaylandEvent::Ready` and implements `XwmHandler` +
   `XWaylandShellHandler` directly on `TawcState` (the calloop data type).
 - `xwayland` feature added to the smithay dep in
@@ -910,7 +916,8 @@ Gradle splits Xwayland's tree across two output paths:
    cwd there before spawning it so one binary works for Android
    multi-user/profile app data paths.
 
-On first `CompositorService.onCreate` after install / app upgrade,
+On the first `CompositorService.ensureActivation` after install / app
+upgrade (app start or the first rootfs spawn, whichever comes first),
 `ensureXwaylandExtracted` extracts `share.tar` into
 `<filesDir>/xwayland/share/` and creates the
 `<filesDir>/xwayland/bin/{Xwayland,xkbcomp}` symlinks pointing at

@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, mpsc};
 use std::time::Duration;
@@ -14,6 +14,7 @@ use wayland_server::Display;
 
 #[cfg(feature = "gfxstream")]
 mod ahb_export;
+mod activation;
 mod ando;
 mod app_paths;
 #[cfg(feature = "gfxstream")]
@@ -59,11 +60,95 @@ type StateQueryResponse = mpsc::Sender<String>;
 /// Global sender for state query requests. Replaced each time the compositor restarts.
 static STATE_QUERY_SENDER: Mutex<Option<smithay::reexports::calloop::channel::Sender<StateQueryResponse>>> = Mutex::new(None);
 
-/// Tracks whether the compositor thread is currently running. Set true
-/// in `nativeStartCompositor`; cleared by the thread on exit. Used to
-/// make `nativeStartCompositor` idempotent (Service can call it on every
-/// `onCreate` after a process restart).
-static COMPOSITOR_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Compositor thread lifecycle. Native state is the truth; Kotlin follows
+/// it (`nativeStartCompositor`'s return value, `onCompositorStopped`).
+/// `Running` lasts until the thread has dropped everything, so a start
+/// never overlaps the previous run's teardown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Idle,
+    Running,
+}
+
+struct Lifecycle {
+    phase: Mutex<Phase>,
+    changed: Condvar,
+}
+
+static LIFECYCLE: Lifecycle = Lifecycle {
+    phase: Mutex::new(Phase::Idle),
+    changed: Condvar::new(),
+};
+
+/// Drop every JNI→compositor channel sender. The event loop does this
+/// while it is still alive: a calloop sender pings its loop on drop and
+/// logs a warning if the loop is already gone.
+pub(crate) fn clear_senders() {
+    *STATE_QUERY_SENDER.lock().unwrap() = None;
+    clipboard::clear_clipboard_sender();
+    host::clear_surface_event_sender();
+    input::clear_senders();
+    text_input::clear_text_input_sender();
+}
+
+/// Activation holder: block while a compositor thread exists.
+pub(crate) fn wait_until_idle() {
+    let mut phase = LIFECYCLE.phase.lock().unwrap();
+    while *phase != Phase::Idle {
+        phase = LIFECYCLE.changed.wait(phase).unwrap();
+    }
+}
+
+/// Activation holder: wait for a requested start to happen.
+pub(crate) fn wait_until_running(timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut phase = LIFECYCLE.phase.lock().unwrap();
+    while *phase != Phase::Running {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        phase = LIFECYCLE.changed.wait_timeout(phase, left).unwrap().0;
+    }
+    true
+}
+
+pub(crate) fn compositor_running() -> bool {
+    *LIFECYCLE.phase.lock().unwrap() == Phase::Running
+}
+
+/// Debug pin (`compositor-hold`): an idle compositor stays up.
+static DEBUG_HOLD: AtomicBool = AtomicBool::new(false);
+
+/// Event loop: nothing is connected any more. Stops the compositor unless
+/// pinned; decided under the lifecycle lock so it cannot cross a start
+/// that would report "already running".
+pub(crate) fn stop_if_unpinned() -> bool {
+    let _phase = LIFECYCLE.phase.lock().unwrap();
+    if DEBUG_HOLD.load(Ordering::SeqCst) {
+        return false;
+    }
+    RUNNING.store(false, Ordering::SeqCst);
+    true
+}
+
+/// Longest a start or stop waits for a previous run to finish tearing down.
+const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Block until the compositor thread is fully gone. False on timeout.
+fn wait_for_idle<'a>(
+    mut phase: std::sync::MutexGuard<'a, Phase>,
+) -> (std::sync::MutexGuard<'a, Phase>, bool) {
+    let deadline = std::time::Instant::now() + TEARDOWN_TIMEOUT;
+    while *phase != Phase::Idle {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return (phase, false);
+        }
+        phase = LIFECYCLE.changed.wait_timeout(phase, left).unwrap().0;
+    }
+    (phase, true)
+}
 
 /// android_logger + panic hook setup shared by every JNI entry point
 /// that can be the first native call in the process
@@ -139,8 +224,10 @@ fn cache_jni_globals(env: &mut JNIEnv) {
 // JNI: compositor lifecycle (CompositorService)
 // ---------------------------------------------------------------------------
 
-/// Start the compositor thread. Called from `CompositorService.onCreate`.
-/// Idempotent: if a compositor thread is already running, this is a no-op.
+/// Start the compositor thread. Idempotent: returns false if one is
+/// already running, true if this call spawned it (the caller then re-seeds
+/// per-run state). A previous run that is still tearing down is waited
+/// for first, so a fast restart never ends with no compositor.
 ///
 /// The compositor sets up its Wayland display and listening socket up
 /// front (EGL context + GlesRenderer come up beside that on a helper
@@ -160,18 +247,30 @@ pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeStartComp
     display_height_px: jint,
     xwayland: jboolean,
     gtk3_broken_menus_workaround: jboolean,
-) {
+) -> jboolean {
     init_native_logging();
     cache_jni_globals(&mut env);
     app_paths::init_from_env();
+    // The compositor accepts on the holder's listener.
+    activation::start(xwayland != 0);
 
-    if COMPOSITOR_RUNNING.swap(true, Ordering::SeqCst) {
-        info!("nativeStartCompositor: already running");
-        return;
+    let mut phase = LIFECYCLE.phase.lock().unwrap();
+    if *phase == Phase::Running && RUNNING.load(Ordering::SeqCst) {
+        return 0;
     }
+    // Running with RUNNING cleared: the old thread is on its way out.
+    let (guard, idle) = wait_for_idle(phase);
+    phase = guard;
+    if !idle {
+        log::error!("nativeStartCompositor: previous compositor thread never exited");
+        return 0;
+    }
+    *phase = Phase::Running;
+    RUNNING.store(true, Ordering::SeqCst);
+    drop(phase);
+    LIFECYCLE.changed.notify_all();
 
     info!("nativeStartCompositor: spawning compositor thread");
-    RUNNING.store(true, Ordering::SeqCst);
 
     // gfxstream-bridge kumquat listener runs as a sibling thread of
     // the calloop event loop. The patched rutabaga fork initializes
@@ -185,15 +284,17 @@ pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeStartComp
     // the protocol still wants an fd but the chroot doesn't read it).
     // Sequencing as (install hook, then spawn thread) makes the race
     // impossible.
+    //
+    // One thread for the life of the process: it has no per-compositor
+    // state, and nothing can stop it while it blocks in `Kumquat::run`.
     #[cfg(feature = "gfxstream")]
     {
-        info!("nativeStartCompositor: spawning kumquat thread");
-        ahb_export::install_hook();
-        bridge::spawn();
-    }
-    #[cfg(not(feature = "gfxstream"))]
-    {
-        info!("nativeStartCompositor: gfxstream bridge disabled at build time");
+        static KUMQUAT: std::sync::Once = std::sync::Once::new();
+        KUMQUAT.call_once(|| {
+            info!("nativeStartCompositor: spawning kumquat thread");
+            ahb_export::install_hook();
+            bridge::spawn();
+        });
     }
 
     // Create the channels here, BEFORE the compositor thread starts,
@@ -232,12 +333,50 @@ pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeStartComp
         ) {
             log::error!("Compositor failed: {}", e);
         }
-        *STATE_QUERY_SENDER.lock().unwrap() = None;
-        clipboard::clear_clipboard_sender();
-        host::clear_surface_event_sender();
-        COMPOSITOR_RUNNING.store(false, Ordering::SeqCst);
+        clear_senders();
+        // `run_compositor` has returned, so everything it owned is
+        // dropped: only now may a restart begin.
+        RUNNING.store(false, Ordering::SeqCst);
+        *LIFECYCLE.phase.lock().unwrap() = Phase::Idle;
+        LIFECYCLE.changed.notify_all();
         info!("Compositor thread exited");
+        call_native_bridge_void("onCompositorStopped", "()V", &[]);
     });
+    1
+}
+
+/// Bind the process-lifetime Wayland/X11 sockets and start watching them
+/// for the first connection. Needs the `TAWC_*` path env. Idempotent.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeStartActivation(
+    mut env: JNIEnv,
+    _class: JClass,
+    xwayland: jboolean,
+) {
+    init_native_logging();
+    cache_jni_globals(&mut env);
+    app_paths::init_from_env();
+    activation::start(xwayland != 0);
+}
+
+/// Debug builds: pin the compositor running while it has no clients.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeSetCompositorHold(
+    _env: JNIEnv,
+    _class: JClass,
+    hold: jboolean,
+) {
+    let _phase = LIFECYCLE.phase.lock().unwrap();
+    DEBUG_HOLD.store(hold != 0, Ordering::SeqCst);
+}
+
+/// True while a compositor thread exists (including one tearing down).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeIsCompositorRunning(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jboolean {
+    (*LIFECYCLE.phase.lock().unwrap() == Phase::Running) as jboolean
 }
 
 /// Reconcile the per-distro ando broker listeners to exactly the
@@ -287,14 +426,20 @@ fn jstring_array(env: &mut JNIEnv, arr: &JObjectArray) -> Result<Vec<String>, jn
     Ok(out)
 }
 
-/// Stop the compositor thread. Called from `CompositorService.onDestroy`.
+/// Stop the compositor thread and wait until it is fully gone. The thread
+/// reports back through `onCompositorStopped`; its teardown never waits on
+/// the caller's thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeStopCompositor(
     _env: JNIEnv,
     _class: JClass,
 ) {
     info!("nativeStopCompositor");
+    let phase = LIFECYCLE.phase.lock().unwrap();
     RUNNING.store(false, Ordering::SeqCst);
+    if !wait_for_idle(phase).1 {
+        log::error!("nativeStopCompositor: compositor thread did not exit");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -700,6 +845,7 @@ pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeSetXwayla
     _class: JClass,
     enabled: jboolean,
 ) {
+    activation::set_x11_enabled(enabled != 0);
     host::send_surface_event(SurfaceEvent::XwaylandChanged {
         enabled: enabled != 0,
     });
@@ -1168,21 +1314,8 @@ fn run_compositor(
     );
 
     // --- Run ---
-    // Note: the listening socket is bound inside `event_loop::run` as the
-    // last step before entering the dispatch loop. Binding here would
-    // create a window where clients can `connect()` and write requests
-    // (the kernel queues them on the listening socket) but the
-    // compositor isn't yet running `accept()` — on a slow emulator an
-    // ~80ms gap between bind and dispatch (back when GLES setup sat in
-    // it) was enough to make a freshly-spawned GTK4 client time out its
-    // initial roundtrip.
-    let wayland_socket_path = app_paths::get().wayland_socket_path.clone();
-    let _ = std::fs::remove_file(&wayland_socket_path);
-    if let Some(parent) = std::path::Path::new(&wayland_socket_path).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     event_loop::run(
-        wl_display, state, &wayland_socket_path,
+        wl_display, state,
         touch_channel, pointer_channel, text_input_channel, clipboard_channel, state_query_channel,
         surface_event_channel,
         &RUNNING,

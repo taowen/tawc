@@ -6,7 +6,6 @@
 //! JNI threads send events through channels.
 
 use std::ffi::c_void;
-use std::os::unix::fs::PermissionsExt;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -31,7 +30,7 @@ use smithay::wayland::compositor::{
     get_parent, get_role, SUBSURFACE_ROLE,
 };
 use smithay::wayland::shell::xdg::XDG_POPUP_ROLE;
-use wayland_server::{Display, ListeningSocket};
+use wayland_server::Display;
 
 use crate::host::{ActivityId, OutputHost, SurfaceEvent};
 use crate::input::{PointerAxisSource, PointerEvent, TouchEvent};
@@ -361,15 +360,10 @@ fn dismiss_host_popups_if_touch_is_outside_popup(
 }
 
 /// Set up and run the calloop event loop. Returns when `running` becomes false.
-///
-/// `socket_path` is bound and inserted as a calloop source as the last
-/// step before entering the dispatch loop — see the comment at the
-/// caller in `lib.rs::run_compositor` for why we don't bind earlier.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     display: Display<TawcState>,
     mut state: TawcState,
-    socket_path: &str,
     touch_channel: Channel<TouchEvent>,
     pointer_channel: Channel<PointerEvent>,
     text_input_channel: Channel<TextInputEvent>,
@@ -410,12 +404,7 @@ pub fn run(
         },
     )?;
 
-    // --- Source 2: deferred ---
-    // The listening socket is bound and inserted just before
-    // `event_loop.dispatch` starts (see end of this function). Binding
-    // earlier would let clients `connect()` while we're still wiring up
-    // sources, leaving their initial roundtrip stuck in the listen
-    // backlog and exceeding GTK4's connect timeout on slow hosts.
+    // --- Source 2: client listener, inserted last (end of this function).
 
     // --- Source 3: Touch input channel ---
     // Receives touch events from the Android UI thread via JNI, tagged
@@ -667,22 +656,7 @@ pub fn run(
                 // older client selection must not overwrite it later.
                 crate::clipboard::cancel_pull(handle, data);
                 data.last_announced_android_clip_ts = Some(ts);
-                smithay::wayland::selection::data_device::set_data_device_selection(
-                    &data.display_handle,
-                    &data.seat,
-                    crate::clipboard::text_mime_types(),
-                    crate::clipboard::SelectionUserData::Android(
-                        crate::clipboard::next_android_selection_serial(),
-                    ),
-                );
-                if let Some(xwm) = data.xwm.as_mut() {
-                    if let Err(e) = xwm.new_selection(
-                        smithay::wayland::selection::SelectionTarget::Clipboard,
-                        Some(crate::clipboard::text_mime_types()),
-                    ) {
-                        log::warn!("clipboard: failed to notify XWayland of Android selection: {:?}", e);
-                    }
-                }
+                crate::clipboard::install_android_selection(data);
                 if let Err(e) = data.display_handle.flush_clients() {
                     error!("flush_clients error after Android clipboard update: {}", e);
                 }
@@ -946,6 +920,8 @@ pub fn run(
             data.set_input_focus(new_focus.as_ref());
         }
 
+        check_idle(data);
+
         // 5. Flush (after focus updates so enter/leave events are sent immediately)
         if let Err(e) = data.display_handle.flush_clients() {
             error!("flush_clients error: {}", e);
@@ -959,20 +935,22 @@ pub fn run(
     let initial_xwayland = state.xwayland_enabled;
     crate::xwayland::set_enabled(&loop_handle, &mut state, initial_xwayland);
 
-    // Bind the Wayland socket as the last setup step. From here on, any
-    // new connection lands in a backlog the dispatch loop drains within
-    // a single iteration. Setting the mode 0o777 lets clients running as
-    // any uid (in-chroot bionic-libc with its own concept of "us") open
-    // the socket.
-    let listener = ListeningSocket::bind_absolute(socket_path.into())
-        .map_err(Box::<dyn std::error::Error>::from)?;
-    let _ = std::fs::set_permissions(
-        socket_path,
-        std::fs::Permissions::from_mode(0o777),
-    );
+    // Accept on a clone of the process-lifetime listener (activation.rs).
+    // Clients that connected before now have been waiting in its backlog;
+    // inserted last so they are served by a fully wired loop.
+    let listener = crate::activation::wayland_listener()?;
     let listener_source = Generic::new(listener, Interest::READ, Mode::Level);
-    let listener_token = loop_handle.insert_source(listener_source, |_, source, data: &mut TawcState| {
-        while let Some(stream) = source.accept().map_err(std::io::Error::other)? {
+    let listener_token = loop_handle.insert_source(listener_source, |_, listener, data: &mut TawcState| {
+        loop {
+            let stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    error!("Wayland accept failed: {}", e);
+                    break;
+                }
+            };
             let client_state = ClientState::new(data.client_count.clone(), data.client_ids.clone());
             if let Err(e) = data
                 .display_handle
@@ -983,7 +961,6 @@ pub fn run(
         }
         Ok(PostAction::Continue)
     })?;
-    info!("Wayland socket: {}", socket_path);
 
     info!("Entering calloop event loop");
 
@@ -995,16 +972,55 @@ pub fn run(
         }
     }
 
-    // Dropping `event_loop` does not reliably release the listening socket:
-    // any source callback still holding a LoopHandle (smithay's X11Wm ones
-    // do) keeps the loop's source list alive in an Rc cycle. Remove the
-    // listener explicitly so the socket and its lock are always released —
-    // a leaked lock makes the next in-process start fail with "Requested
-    // socket name is already in use".
+    // Dropping `event_loop` does not reliably drop its sources: any
+    // callback still holding a LoopHandle keeps the source list alive in
+    // an Rc cycle. Remove our listener clone explicitly so a stopped
+    // compositor can never steal a connection from the next one.
     loop_handle.remove(listener_token);
+    crate::xwayland::release_activation_socket(&loop_handle, &mut state);
 
     info!("Event loop exited after {} frames", state.frame_count);
+    crate::clear_senders();
+    // State first: its teardown (client disconnects, X11Wm source removal)
+    // still talks to the loop.
+    drop(state);
+    drop(event_loop);
     loop_result
+}
+
+/// How long nothing may be connected before the compositor stops. Not
+/// zero: app startup often has short-lived helper connections before the
+/// real one, and scripts call `wl-copy`/`wl-paste` in bursts.
+const IDLE_GRACE: Duration = Duration::from_secs(1);
+
+/// Auto-stop: with no Wayland client and no Xwayland (which exits by
+/// itself 5 s after its last X client) for [`IDLE_GRACE`], leave the
+/// loop. The activation holder restarts us on the next connection.
+fn check_idle(data: &mut TawcState) {
+    let xwayland_running = data.xwayland_source.is_some() || data.xwm.is_some();
+    let clients = data.client_count.load(std::sync::atomic::Ordering::Relaxed);
+
+    // A client that only serves a selection (wl-copy's daemon) never
+    // leaves by itself. Once its text is in Android's clipboard, take the
+    // selection over: it gets `cancelled` and exits, and pastes are served
+    // from Android. An unmirrored selection (non-text, over the cap) keeps
+    // its owner, and with it the compositor — it is the only copy.
+    if clients > 0 && !xwayland_running && data.surface_count == 0 && data.selection_mirrored {
+        info!("clipboard: taking over mirrored selection from surfaceless client");
+        crate::clipboard::install_android_selection(data);
+    }
+
+    if clients > 0 || xwayland_running {
+        data.idle_since = None;
+        return;
+    }
+    let since = *data.idle_since.get_or_insert_with(std::time::Instant::now);
+    if since.elapsed() >= IDLE_GRACE {
+        if crate::stop_if_unpinned() {
+            info!("No clients for {:?}; stopping compositor", IDLE_GRACE);
+        }
+        data.idle_since = None;
+    }
 }
 
 fn render_visible_host(data: &mut TawcState) -> bool {

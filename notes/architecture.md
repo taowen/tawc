@@ -58,9 +58,9 @@ Kotlin side (`app/src/main/java/me/phie/tawc/`):
 
 - **MainActivity.kt** -- Home screen (only Activity in `category.LAUNCHER`). Renders
   one card per installed distro (each with Info + Run buttons) plus "Task manager" /
-  "Install new distro" buttons. It does not start the compositor; user-launched
-  rootfs commands go through `UserRootfsSession`, which starts `CompositorService`
-  lazily before spawning the Linux process.
+  "Install new distro" buttons. Nothing starts the compositor explicitly (see
+  "Compositor lifecycle" below); user-launched rootfs commands go through
+  `UserRootfsSession`, which holds a session reason for the process's lifetime.
 - **launcher/LauncherActivity.kt** -- Per-distro app picker. Reads the rootfs's
   `.desktop` files via [`NativeBridge.nativeLauncherScan`][launcher.rs] (Rust does the
   scan + parsing), shows a type-to-filter list with each entry's icon, fires
@@ -86,13 +86,14 @@ Kotlin side (`app/src/main/java/me/phie/tawc/`):
   the launcher's ⋮ at 21dp (solid dots read heavier than the line icons). Colour
   carries meaning where it did before: the `+` on a bind suggestion is an
   accent-tinted glyph.
-- **compositor/CompositorService.kt** -- Foreground service (`specialUse` type) that owns
-  the Rust compositor thread. Activities bind to it; it tracks them by `activityId` so
-  reverse-JNI calls can find the right Activity. Its notification's "Exit" stops the
-  compositor and finishes the compositor activities, nothing else: GUI clients (and
-  Xwayland) die with the Wayland socket, while terminal shells, their jobs, and any
-  daemon a GUI app spawned keep running until the task manager or the app process
-  takes them.
+- **compositor/CompositorService.kt** -- Bound (never started, not foreground) service
+  that owns the Rust compositor thread. Activities bind to it; it tracks them by
+  `activityId` so reverse-JNI calls can find the right Activity. A process-level binding
+  keeps it alive while the compositor runs — binding, unlike starting, is allowed from
+  the background. What keeps the *process* alive is its `Compositor` hold in
+  [session-service.md](session-service.md), whose notification also owns "Exit".
+- **session/** -- `SessionHolds` + `SessionService`: the one foreground service, up
+  exactly while something is alive in a rootfs. See [session-service.md](session-service.md).
 - **compositor/CompositorActivity.kt** -- One per Wayland window. Reads `activityId` from
   `intent.data?.lastPathSegment` (UUID under `tawc://activity/<id>`); falls back to
   `"primary"` for the launcher path. Forwards `SurfaceHolder` / touch / focus events
@@ -128,6 +129,63 @@ Kotlin side (`app/src/main/java/me/phie/tawc/`):
   `Space<Window>`. Smithay renderer surface state owns committed buffer
   metadata and texture import; TAWC wraps the resulting render elements only
   to preserve Android buffer tinting and forced-opaque shader policy.
+
+## Compositor lifecycle
+
+Socket-activated, like Xwayland inside it: nothing starts the compositor
+explicitly, and an idle one stops.
+
+- **`activation.rs`** binds `share/wayland-0` once per app process and owns
+  the listener for the life of the process; it also holds Xwayland's prepared
+  `:0` socket whenever no compositor has borrowed it. Started by
+  `CompositorService.ensureActivation` (asset extraction + `TAWC_*` env +
+  `nativeStartActivation`), which every spawn path calls first
+  (`TawcApplication` startup thread, `UserRootfsSession.startInside`,
+  `TerminalActivity.spawnSession`) so the sockets are listening before any
+  guest exists and extraction never sits in the connect→accept gap. No
+  `.lock` file: one process, one holder.
+- While no compositor thread exists the holder thread `poll()`s both sockets
+  without accepting. Readable → reverse-JNI `onActivationRequested` →
+  `CompositorService.ensureRunning`; the connection waits in the listen
+  backlog (~7 ms start→dispatch plus the service bind). It sleeps without a
+  timeout; a self-pipe wakes it when the Xwayland setting changes, and it
+  retries once a second only while `:0` is wanted but could not be prepared.
+  It polls a *dup* of the X11 fd, since the original may be borrowed and
+  consumed by Xwayland meanwhile.
+- A running compositor accepts on its own `try_clone()` of the listener
+  (calloop `Generic` → `insert_client`) and `take_x11()`s the X socket;
+  on exit it removes its listener source explicitly (the `LoopHandle`
+  Rc-cycle below would otherwise let a dead loop steal connections) and
+  `return_x11()`s an unused socket. After an Xwayland run consumed it, the
+  compositor (or the idle holder) prepares a fresh one.
+- **Auto-stop** (`event_loop::check_idle`, frame timer): no Wayland client
+  and no Xwayland (it exits by itself 5 s after its last X client) for 1 s.
+  Not zero: app startup has short-lived helper connections, and each cycle
+  costs a GL context. A connection pending when the thread exits restarts it
+  at once — none is refused. The debug `compositor-hold` pins it; the stop
+  decision and `nativeStartCompositor`'s "already running" answer share the
+  lifecycle lock so they cannot cross.
+- **Native state leads.** `nativeStartCompositor` returns whether it spawned
+  a thread (Kotlin then re-seeds per-run state: session hold, settings,
+  clipboard announce, a fresh `MouseWatcher`) and first waits out a previous
+  run's teardown; `nativeStopCompositor` blocks until the thread is fully
+  gone (~10–20 ms on the phone); the thread's last act is
+  `onCompositorStopped`, ignored if a restart already won. Teardown order in
+  `event_loop::run`: clear the JNI channel senders, drop state, then the loop
+  (a calloop sender pings its loop on drop and warns if it is gone).
+  `LazyRenderState` joins its `gl-init` thread on drop so a run that never
+  touched GL still destroys its context before reporting itself gone.
+- **Selection-only clients** (`wl-copy`'s daemon) never leave by themselves.
+  When no client has a `wl_surface`, the live selection is a Wayland
+  client's, and its mirror into Android completed
+  (`TawcState::selection_mirrored`), the compositor installs the payloadless
+  Android selection: the owner gets `cancelled` and exits, pastes are served
+  from Android. An unmirrored selection (non-text, over cap) keeps its owner
+  and pins the compositor — it is the only copy. Not exercised end to end
+  yet: `wl-copy` itself fails earlier, see `plans/wl-clipboard-support.md`.
+- The kumquat listener is one thread for the life of the process.
+- Verified by `lazy_compositor::*`: Wayland and X11-only cold start, idle
+  stop, restart, and flat fd/thread counts over start/stop cycles.
 
 ## Wayland Protocols Implemented
 

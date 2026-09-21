@@ -2,8 +2,8 @@
 
 A parallel workload in a rootfs (`make -j`, package-manager hooks, a
 build) loses processes to an unexplained SIGKILL, or the whole terminal
-session vanishes. Independent of the foreground-service problem in
-[rootfs-network-cut-when-app-backgrounded.md](rootfs-network-cut-when-app-backgrounded.md).
+session vanishes. Independent of the foreground-service problem the
+session service fixed ([notes/session-service.md](../notes/session-service.md)).
 
 ## Cause
 
@@ -61,4 +61,4 @@ target.
 Found 2026-08-11 investigating a user report of dropped connections
 when backgrounding.
 
-An FGS does not help here; see [plans/session-service.md](../plans/session-service.md) for what it does fix.
+An FGS does not help here; see [notes/session-service.md](../notes/session-service.md) for what it does fix.

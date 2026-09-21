@@ -4,6 +4,7 @@ import android.app.Application
 import me.phie.tawc.dev.DevActivityTracker
 import me.phie.tawc.dev.ExecBroker
 import me.phie.tawc.dev.InputActions
+import me.phie.tawc.dev.SessionActions
 import me.phie.tawc.dev.SettingsActions
 import me.phie.tawc.install.InstallActions
 import me.phie.tawc.launcher.LauncherActions
@@ -32,6 +33,7 @@ internal object DevHooks {
         InstallActions.registerAll()
         InputActions.registerAll()
         SettingsActions.registerAll()
+        SessionActions.registerAll()
         LauncherActions.registerAll()
     }
 }

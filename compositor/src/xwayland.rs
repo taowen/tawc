@@ -169,12 +169,13 @@ pub fn service_pending(
     }
 }
 
-fn prepare_xwayland_environment() -> Option<(String, String)> {
+/// Point smithay and `PATH` at our Xwayland install. `None` when this
+/// build or device ships no Xwayland. Also used by the activation holder.
+pub(crate) fn prepare_environment() -> Option<(String, String)> {
     if matches!(
         std::env::var("TAWC_XWAYLAND_ENABLED").as_deref(),
         Ok("0") | Ok("false") | Ok("FALSE")
     ) {
-        info!("xwayland: disabled or unavailable");
         return None;
     }
 
@@ -204,13 +205,19 @@ fn start_activation_socket(
     if state.xwayland_activation.is_some() || state.xwayland_activation_source.is_some() {
         return;
     }
-    if prepare_xwayland_environment().is_none() {
+    if prepare_environment().is_none() {
         state.xwayland_start_pending = false;
         state.xwayland_start_after = None;
         return;
     }
 
-    let activation = match XWayland::prepare_lazy(Some(0), false) {
+    // The process-lifetime holder usually has the socket ready; after an
+    // Xwayland run consumed it, prepare a fresh one.
+    let prepared = match crate::activation::take_x11() {
+        Some(activation) => Ok(activation),
+        None => XWayland::prepare_lazy(Some(0), false),
+    };
+    let activation = match prepared {
         Ok(activation) => activation,
         Err(e) => {
             warn!("xwayland: failed to prepare activation socket: {}", e);
@@ -246,6 +253,20 @@ fn start_activation_socket(
     }
 }
 
+/// Compositor exit: an unused `:0` socket goes back to the holder so X11
+/// clients can keep connecting (and restart the compositor).
+pub fn release_activation_socket(
+    handle: &LoopHandle<'static, TawcState>,
+    state: &mut TawcState,
+) {
+    if let Some(token) = state.xwayland_activation_source.take() {
+        handle.remove(token);
+    }
+    if let Some(activation) = state.xwayland_activation.take() {
+        crate::activation::return_x11(activation);
+    }
+}
+
 fn stop_activation_socket(
     handle: &LoopHandle<'static, TawcState>,
     state: &mut TawcState,
@@ -264,7 +285,7 @@ fn start_xwayland(
     state: &mut TawcState,
 ) -> StartResult {
     let paths = crate::app_paths::get();
-    let Some((xwl_runtime_dir, xwl_install_dir)) = prepare_xwayland_environment() else {
+    let Some((xwl_runtime_dir, xwl_install_dir)) = prepare_environment() else {
         return StartResult::Unavailable;
     };
     let Some(activation) = state.xwayland_activation.take() else {
@@ -765,6 +786,7 @@ impl XwmHandler for TawcState {
     ) {
         match selection {
             SelectionTarget::Clipboard => {
+                self.selection_mirrored = false;
                 crate::clipboard::queue_selection_pull(
                     crate::clipboard::PullSource::X11,
                     &mime_types,

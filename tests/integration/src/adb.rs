@@ -741,6 +741,28 @@ pub fn query_state() -> io::Result<Output> {
     broker_action("query-state", &[])
 }
 
+/// Pin the compositor running with no clients (`on` also starts it), or
+/// let the idle rule stop it again. The suite runs pinned; see
+/// `run-integration-tests.sh`.
+pub fn compositor_hold(on: bool) -> io::Result<Output> {
+    broker_action("compositor-hold", &[("hold", if on { "on" } else { "off" })])
+}
+
+/// Held session reasons, one `kind detail` line each (`session-state`).
+pub fn session_state() -> io::Result<Vec<String>> {
+    let output = broker_action("session-state", &[])?;
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
+/// What the notification's Exit does: kill everything in every rootfs.
+pub fn session_exit() -> io::Result<Output> {
+    broker_action("session-exit", &[])
+}
+
 /// The app's `nativeLibraryDir` (where the APK's jniLibs land on this
 /// device), via the broker `app-info` action. The tawcroot prod-env
 /// tests exec `libtawcroot.so` from there — the one app-readable

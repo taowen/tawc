@@ -245,4 +245,26 @@
     <string name="task_manager_unknown">unknown</string>
     <string name="task_manager_unknown_rootfs">unknown rootfs</string>
     <string name="task_manager_uninstalled_rootfs">uninstalled rootfs %1$s</string>
+    <string name="session_channel_name">Linux session</string>
+    <string name="session_channel_description">Shown while terminals, programs or windows are running in a Linux install.</string>
+    <string name="session_notification_title">TAWC running</string>
+    <string name="session_notification_exit">Exit</string>
+    <string name="session_running_command">Running: %1$s</string>
+    <string name="session_display_server">Display server running</string>
+    <plurals name="session_terminals">
+        <item quantity="one">%1$d terminal</item>
+        <item quantity="other">%1$d terminals</item>
+    </plurals>
+    <plurals name="session_windows">
+        <item quantity="one">%1$d window</item>
+        <item quantity="other">%1$d windows</item>
+    </plurals>
+    <plurals name="session_commands">
+        <item quantity="one">%1$d program</item>
+        <item quantity="other">%1$d programs</item>
+    </plurals>
+    <plurals name="session_strays">
+        <item quantity="one">%1$d background process</item>
+        <item quantity="other">%1$d background processes</item>
+    </plurals>
 </resources>

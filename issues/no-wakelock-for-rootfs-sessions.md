@@ -15,9 +15,8 @@ reported failures happen.
 
 With the screen off and no charger the SoC suspends and every guest
 process stops mid-syscall, so long transfers die from server-side
-timeouts even during windows where the Doze firewall
-([rootfs-network-cut-when-app-backgrounded.md](rootfs-network-cut-when-app-backgrounded.md))
-is not blocking them.
+timeouts even though the Doze firewall no longer blocks them (fixed by
+the session service, [notes/session-service.md](../notes/session-service.md)).
 
 This could not be exercised on the wired test target: a USB-attached
 adb session holds the device awake, so the kernel never suspends.

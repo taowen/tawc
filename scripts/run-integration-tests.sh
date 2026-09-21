@@ -323,28 +323,27 @@ EOF
     ensure_tawcroot_device_tests
 fi
 
-# Launch the compositor once for the whole suite. Tests assert it is
-# running rather than starting it themselves, so the suite gets a single
-# clean compositor lifetime instead of N partial ones. Force-stop first
-# so a previous app process/compositor is gone before the new one starts.
-# MainActivity intentionally does not start the compositor; RUNINSIDE is
-# the shared user/rootfs launch path that starts it lazily.
+# Pin the compositor running for the whole suite. In production it
+# starts on the first client connection and stops a second after the
+# last one leaves; most tests poke an empty compositor, so they get one
+# pinned lifetime (`compositor-hold`) instead. Tests of the lazy
+# lifecycle drop the pin themselves. Force-stop first so a previous app
+# process is gone.
 echo "=== Starting compositor ==="
 adb shell "am force-stop me.phie.tawc"
 sleep 0.3
-"$TAWC_EXEC" --in-rootfs "$INSTALL_ID" -- true >/dev/null
+"$TAWC_EXEC" --action compositor-hold --arg hold=on >/dev/null
 
 # Wait until the TAWC process is alive, the wayland socket exists, AND
-# the compositor event loop answers a broker state query. `am force-stop`
-# leaves the previous run's socket file behind, so the stat alone would
-# falsely match a stale socket while the new compositor is still in early init.
+# the compositor event loop answers a broker state query (`query-state`
+# prints just "stopped" when it is not running).
 COMPOSITOR_READY=0
 for _ in $(seq 1 150); do
     # Wayland socket lives in the app's private data dir; probe via
     # the broker (runs as the app uid).
     if adb shell 'pidof me.phie.tawc >/dev/null' 2>/dev/null && \
        "$TAWC_EXEC" /system/bin/sh -c "test -e /data/data/me.phie.tawc/share/wayland-0" 2>/dev/null && \
-       "$TAWC_EXEC" --action query-state >/dev/null 2>&1; then
+       "$TAWC_EXEC" --action query-state 2>/dev/null | grep -q clients=; then
         COMPOSITOR_READY=1
         break
     fi

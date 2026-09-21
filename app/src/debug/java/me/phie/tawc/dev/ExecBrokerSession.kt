@@ -348,6 +348,11 @@ internal class ExecBrokerSession(private val socket: LocalSocket) {
         val rootPid = pidOf(proc)
         val descendants = if (rootPid > 0) collectDescendants(rootPid) else emptyList()
         Log.i(ExecBroker.TAG, "$reason rootPid=$rootPid descendants=$descendants")
+        // Android's Process.destroyForcibly() is destroy(), i.e. SIGTERM,
+        // which a guest may catch and sit on.
+        if (rootPid > 0) {
+            try { Os.kill(rootPid, OsConstants.SIGKILL) } catch (_: Throwable) {}
+        }
         proc.destroyForcibly()
         for (p in descendants) {
             try { Os.kill(p, OsConstants.SIGKILL) } catch (_: Throwable) {}

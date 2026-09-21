@@ -78,6 +78,10 @@ pub fn create_text_input_channel() -> channel::Channel<TextInputEvent> {
     ch
 }
 
+pub fn clear_text_input_sender() {
+    *TEXT_INPUT_SENDER.lock().unwrap() = None;
+}
+
 /// Send a text input event from JNI. No-op if the channel isn't set up yet.
 pub fn send_text_input_event(event: TextInputEvent) {
     if let Some(sender) = TEXT_INPUT_SENDER.lock().unwrap().as_ref() {

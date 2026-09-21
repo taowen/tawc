@@ -4,6 +4,7 @@ mod apps;
 mod cpu_graphics;
 mod gfxstream;
 mod launcher;
+mod lazy_compositor;
 mod libhybris;
 mod libhybris_zink;
 mod linker_config;

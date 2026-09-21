@@ -57,6 +57,12 @@ object NativeBridge {
     private val fullscreenByActivity = mutableMapOf<String, Boolean>()
     private val pendingFinishActivities = mutableSetOf<String>()
 
+    /** Process start ([CompositorService.ensureActivation]): reverse-JNI
+     *  needs a context before any service exists. */
+    fun attachContext(context: Context) {
+        appContext = context.applicationContext
+    }
+
     fun attachService(service: CompositorService) {
         appContext = service.applicationContext
         serviceRef = WeakReference(service)
@@ -65,7 +71,6 @@ object NativeBridge {
 
     fun detachService() {
         ClipboardBridge.detach()
-        appContext = null
         serviceRef = null
         synchronized(pendingKeyboardShownByActivity) {
             pendingKeyboardShownByActivity.clear()
@@ -117,7 +122,9 @@ object NativeBridge {
 
     // --- Compositor lifecycle: called from CompositorService ---
 
-    /** Start the Rust compositor thread. Idempotent — second call is a no-op.
+    /** Start the Rust compositor thread. Returns true if this call spawned
+     *  it, false if one was already running. Waits out a previous run that
+     *  is still tearing down.
      *  `displayWidthPx`/`displayHeightPx` are the Android panel metrics; they
      *  seed a provisional `wl_output` mode so clients that connect before any
      *  Activity exists still see a display. The first real output size comes
@@ -128,10 +135,22 @@ object NativeBridge {
         displayHeightPx: Int,
         xwayland: Boolean,
         gtk3BrokenMenusWorkaround: Boolean,
-    )
+    ): Boolean
 
-    /** Stop the Rust compositor thread. Called when the Service is destroyed. */
+    /** Stop the Rust compositor thread and wait until it is gone. The
+     *  thread then reports through [onCompositorStopped]. */
     external fun nativeStopCompositor()
+
+    /** True while a compositor thread exists, including one tearing down. */
+    external fun nativeIsCompositorRunning(): Boolean
+
+    /** Bind the process-lifetime Wayland/X11 sockets and watch them for
+     *  the first connection, which calls [onActivationRequested].
+     *  Idempotent. Needs the `TAWC_*` env. */
+    external fun nativeStartActivation(xwayland: Boolean)
+
+    /** Debug builds (`compositor-hold`): keep a clientless compositor up. */
+    external fun nativeSetCompositorHold(hold: Boolean)
 
     /** Reconcile the per-distro ando broker listeners to exactly the
      *  enabled set (run Android commands from rootfs guests — see
@@ -509,6 +528,22 @@ object NativeBridge {
                 desktopName = desktopName,
                 iconPath = iconPath,
             )
+        }
+    }
+
+    /** Called from the native socket holder: a client is waiting to connect
+     *  and no compositor is running. */
+    @JvmStatic
+    fun onActivationRequested() {
+        val ctx = appContext ?: return
+        CompositorService.ensureRunning(ctx)
+    }
+
+    /** Called from the compositor thread as its very last act. */
+    @JvmStatic
+    fun onCompositorStopped() {
+        mainHandler.post {
+            serviceRef?.get()?.onCompositorStopped()
         }
     }
 

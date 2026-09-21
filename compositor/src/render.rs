@@ -239,6 +239,17 @@ impl LazyRenderState {
     }
 }
 
+impl Drop for LazyRenderState {
+    /// A compositor run that never touched GL (clipboard-only clients)
+    /// still owns the helper thread's result; join so the EGL context is
+    /// destroyed before the compositor thread reports itself gone.
+    fn drop(&mut self) {
+        if let Some(pending) = self.pending.take() {
+            let _ = pending.join();
+        }
+    }
+}
+
 /// Compile the plain texture shader. One uniform: `force_opaque`
 /// (`1.0` rewrites the texture's alpha channel to `1.0` before
 /// blending; `0.0` leaves it as-is). Used when `TINT_BUFFERS_BY_TYPE`

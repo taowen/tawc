@@ -4,6 +4,9 @@ import android.util.Log
 import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
+import me.phie.tawc.session.Hold
+import me.phie.tawc.session.Reason
+import me.phie.tawc.session.SessionHolds
 
 /**
  * Process-wide registry of live terminal sessions: per installation id,
@@ -12,9 +15,9 @@ import com.termux.terminal.TerminalSessionClient
  * pressure) and re-opening from the home screen reattach to the running
  * shells instead of spawning new ones. (Back merely backgrounds the
  * task, keeping the activity itself alive.) Selection lives here too so
- * recreation restores which tab was showing. Sessions die with the app
- * process; there is deliberately no foreground service keeping shells
- * alive, so a backgrounded app's shells can be reaped with the process.
+ * recreation restores which tab was showing. Every registered session
+ * holds a [Reason.Terminal] in [SessionHolds], which keeps the process a
+ * foreground service while any shell is alive (notes/session-service.md).
  *
  * Dumb bookkeeping only (order + selection): tab policy — what to
  * select after a close, when to finish the activity — lives in
@@ -25,6 +28,9 @@ internal object TerminalSessions {
         val sessions = ArrayList<TerminalSession>()
         var selected = 0
     }
+
+    /** Held here, not by the activity: sessions outlive it. */
+    private val holds = java.util.IdentityHashMap<TerminalSession, Hold>()
 
     private val entries = HashMap<String, Entry>()
 
@@ -37,7 +43,12 @@ internal object TerminalSessions {
     @Synchronized
     fun add(id: String, session: TerminalSession) {
         entries.getOrPut(id) { Entry() }.sessions.add(session)
+        holds[session] = SessionHolds.acquire(Reason.Terminal(id))
     }
+
+    /** Every live session, all installs. */
+    @Synchronized
+    fun all(): List<TerminalSession> = entries.values.flatMap { it.sessions }
 
     /**
      * Drop [session] from [id]'s list if present, keeping the selection
@@ -51,6 +62,7 @@ internal object TerminalSessions {
         val index = entry.sessions.indexOfFirst { it === session }
         if (index < 0) return
         entry.sessions.removeAt(index)
+        holds.remove(session)?.release()
         if (entry.sessions.isEmpty()) {
             entries.remove(id)
             return
@@ -61,8 +73,11 @@ internal object TerminalSessions {
 
     /** Drop every session for [id], returning them (in tab order). */
     @Synchronized
-    fun removeAll(id: String): List<TerminalSession> =
-        entries.remove(id)?.sessions ?: emptyList()
+    fun removeAll(id: String): List<TerminalSession> {
+        val sessions = entries.remove(id)?.sessions ?: return emptyList()
+        for (s in sessions) holds.remove(s)?.release()
+        return sessions
+    }
 
     @Synchronized
     fun selected(id: String): Int = entries[id]?.selected ?: 0

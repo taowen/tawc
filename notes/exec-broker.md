@@ -351,7 +351,10 @@ at its definition.
 | `uninstall` | InstallActions | Same shape, opposite direction. Use `--foreground-app`. |
 | `app-info` | InputActions | Prints `nativeLibraryDir=<path>` — where the APK's jniLibs landed on this device. The tawcroot prod-env tests exec `libtawcroot.so` from there (the one app-readable location `untrusted_app` may execve). kv lines, extensible. |
 | `host-sh` (`script`) | InputActions | Runs `script` through `Sh.run` — the host-side shell path install `runOutside` scripts take — streaming output; exit code is the script's. Unlike ARGV-form `sh -c`, this covers the environment `Sh` sets up (writable `TMPDIR` for mksh heredocs). |
-| `query-state` | InputActions | Calls `NativeBridge.nativeQueryState()` and prints a one-line `key=value` compositor-thread snapshot on stdout: client/toplevel/surface counts, frame + wlegl debug counters, output geometry, `xwayland_running`, and `xwayland_pids` (comma-separated live uid-owned Xwayland pids, zombies excluded). Schema lives in the format string in `compositor/src/event_loop.rs` and the parser in `tests/integration/src/compositor.rs`; unknown keys are ignored, so adding fields is backward-compatible. Observational only — doesn't change input state. Needs no focused activity. |
+| `compositor-hold` (`hold=on\|off`) | SessionActions | Pin the compositor running with no clients; `on` also starts it and waits until it answers. The integration suite runs pinned (notes/testing.md). |
+| `session-state` | SessionActions | One line per held session reason: `terminal <id>`, `command <label>`, `compositor <windows>`. |
+| `session-exit` | SessionActions | What the session notification's Exit does: kill everything in every rootfs. |
+| `query-state` | InputActions | Prints just `stopped` when no compositor thread exists (it never starts one; a compositor mid-teardown also counts as stopped). Otherwise calls `NativeBridge.nativeQueryState()` and prints a one-line `key=value` compositor-thread snapshot on stdout: client/toplevel/surface counts, frame + wlegl debug counters, output geometry, `xwayland_running`, and `xwayland_pids` (comma-separated live uid-owned Xwayland pids, zombies excluded). Schema lives in the format string in `compositor/src/event_loop.rs` and the parser in `tests/integration/src/compositor.rs`; unknown keys are ignored, so adding fields is backward-compatible. Observational only — doesn't change input state. Needs no focused activity. |
 | `test-init` | InputActions | Per-test reset: swap `Settings` to an in-memory factory-default store, push live runtime settings, swap `NativeBridge.imeOutput` to a fresh `RecordingImeOutput`, clear the active IC, finish any lingering `LogScreenActivity` left by broker install/uninstall/run actions (restoring whatever was beneath, normally MainActivity), and ask attached Wayland/XWayland client windows to close. Prints `closed=N`; the Rust harness waits for a clean compositor only when `N > 0`, so the normal no-client path stays fast. Does not write `SharedPreferences`; app process death discards it. |
 | `input-ready` | InputActions | Succeeds only when the focused `CompositorActivity` has an active `TawcInputConnection` for its own `SurfaceView`. Used by tests after `onShowKeyboard` so the first `ic-*` action cannot race IC creation. |
 | `focused-editor-info` | InputActions | Test-mode observation of the last `EditorInfo` produced by `RecordingImeOutput` when it created/restarted the IC. Used for activity-scoped content-type coverage. |
@@ -457,9 +460,11 @@ tawc-exec [--foreground-app] --in-rootfs ID [--graphics KEY] [--op-title TITLE] 
 `--foreground-app` starts `MainActivity` even when the app process is
 already running. Install/uninstall actions need it because they start
 `InstallationService` as a foreground service. `RUNINSIDE` does this
-implicitly in CLI mode because the app may need to start the lazy
-compositor foreground service before entering the rootfs; suite mode
-honors only the explicit flag (see "Connect modes" below).
+implicitly in CLI mode because its `Command` session hold starts
+`SessionService` as a foreground service, which Android 12+ only allows
+while the app is visible (without it the command still runs, unprotected
+— [session-service.md](session-service.md)); suite mode honors only the
+explicit flag (see "Connect modes" below).
 
 `--op-title TITLE` opts into the in-app log-screen mirror — the broker
 posts an Operation, opens `LogScreenActivity`, and streams stdout /

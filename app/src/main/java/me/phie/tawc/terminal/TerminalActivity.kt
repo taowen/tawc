@@ -28,6 +28,7 @@ import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import me.phie.tawc.R
+import me.phie.tawc.compositor.CompositorService
 import me.phie.tawc.install.InstallationMethod
 import me.phie.tawc.install.InstallationStore
 import me.phie.tawc.install.TawcrootMethod
@@ -278,6 +279,9 @@ class TerminalActivity : AppCompatActivity(), TerminalViewClient, TerminalSessio
      * [label] names the tab until an OSC title arrives ([labelFor]).
      */
     private fun spawnSession(command: String? = null, label: String? = null): TerminalSession? {
+        // GUI programs typed into the shell start the compositor by
+        // connecting; its sockets must be listening first.
+        CompositorService.ensureActivation(this)
         val exec = try {
             method.ptyShellExec(
                 store.rootfsDir(distroId).absolutePath,

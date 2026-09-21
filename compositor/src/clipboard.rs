@@ -245,6 +245,7 @@ pub struct ActivePull {
     timer_token: RegistrationToken,
     buf: Vec<u8>,
     label: &'static str,
+    source: PullSource,
 }
 
 /// Begin mirroring the selection readable on `fd` into Android,
@@ -302,6 +303,7 @@ pub fn start_pull(
         timer_token,
         buf: Vec::new(),
         label,
+        source,
     });
 }
 
@@ -349,7 +351,9 @@ fn pull_readable(
     loop {
         match file.read(&mut chunk) {
             Ok(0) => {
-                publish_to_android(finish_pull(handle, state, id));
+                let pull = finish_pull(handle, state, id);
+                let from_wayland = matches!(pull.source, PullSource::Wayland);
+                state.selection_mirrored = publish_to_android(pull) && from_wayland;
                 return PostAction::Remove;
             }
             Ok(n) => {
@@ -377,7 +381,7 @@ fn pull_readable(
     }
 }
 
-fn publish_to_android(pull: ActivePull) {
+fn publish_to_android(pull: ActivePull) -> bool {
     match String::from_utf8(pull.buf) {
         Ok(text) => {
             info!(
@@ -386,8 +390,32 @@ fn publish_to_android(pull: ActivePull) {
                 text.len()
             );
             crate::set_android_clipboard_text(&text);
+            true
         }
-        Err(e) => warn!("clipboard: {} selection was not valid UTF-8: {}", pull.label, e),
+        Err(e) => {
+            warn!("clipboard: {} selection was not valid UTF-8: {}", pull.label, e);
+            false
+        }
+    }
+}
+
+/// Make Android's clipboard the selection owner: payloadless, fetched at
+/// paste time. Any client owner gets `cancelled`.
+pub fn install_android_selection(state: &mut TawcState) {
+    state.selection_mirrored = false;
+    smithay::wayland::selection::data_device::set_data_device_selection(
+        &state.display_handle,
+        &state.seat,
+        text_mime_types(),
+        SelectionUserData::Android(next_android_selection_serial()),
+    );
+    if let Some(xwm) = state.xwm.as_mut() {
+        if let Err(e) = xwm.new_selection(
+            smithay::wayland::selection::SelectionTarget::Clipboard,
+            Some(text_mime_types()),
+        ) {
+            warn!("clipboard: failed to notify XWayland of Android selection: {:?}", e);
+        }
     }
 }
 

@@ -35,6 +35,11 @@ pub fn create_touch_channel() -> channel::Channel<TouchEvent> {
     channel
 }
 
+pub fn clear_senders() {
+    *TOUCH_SENDER.lock().unwrap() = None;
+    *POINTER_SENDER.lock().unwrap() = None;
+}
+
 /// Send a touch event from JNI. No-op if the channel isn't set up yet.
 pub fn send_touch_event(event: TouchEvent) {
     if let Some(sender) = TOUCH_SENDER.lock().unwrap().as_ref() {

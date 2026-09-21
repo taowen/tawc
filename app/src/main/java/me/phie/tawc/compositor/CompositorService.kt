@@ -1,63 +1,59 @@
 package me.phie.tawc.compositor
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.content.pm.ServiceInfo
-import android.graphics.drawable.Icon
 import android.hardware.display.DisplayManager
 import android.os.Binder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.SystemClock
 import android.system.Os
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Display
-import androidx.core.app.ServiceCompat
 import me.phie.tawc.AppPaths
 import me.phie.tawc.BuildConfig
-import me.phie.tawc.MainActivity
+import me.phie.tawc.session.Hold
+import me.phie.tawc.session.Reason
+import me.phie.tawc.session.SessionHolds
 import java.io.File
 import java.lang.ref.WeakReference
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 
 /**
- * Foreground service that owns the Rust Wayland compositor thread for the
- * lifetime of the TAWC process. The compositor outlives any single
+ * Bound service that owns the Rust Wayland compositor thread and the
+ * per-Activity bookkeeping around it. The compositor outlives any single
  * [CompositorActivity], which is the prerequisite for the multi-window
  * design (see notes/multi-activity.md).
+ *
+ * Not a foreground service and never started: a process-level binding
+ * ([ensureRunning]) keeps it alive exactly while the compositor runs, and
+ * binding — unlike starting — is allowed from the background. What keeps
+ * the *process* alive is the [Reason.Compositor] hold in [SessionHolds]
+ * (notes/session-service.md).
  *
  * Activities bind to this service to register themselves; the service
  * tracks them by `activityId` so reverse-JNI calls (keyboard show/hide,
  * future per-host operations) can find the right Activity's view.
  *
- * The service is `START_STICKY`: if Android kills it under memory
- * pressure, the OS recreates it (without the original Intent), and our
- * `onCreate` re-spawns the compositor thread. Wayland clients connected
- * over the chroot socket will see a brief disconnect and reconnect.
+ * Lifecycle follows native state rather than leading it:
+ * [NativeBridge.nativeStartCompositor] says whether a new compositor
+ * thread was spawned, and the thread reports its own exit through
+ * [onCompositorStopped].
  */
 class CompositorService : Service() {
 
     private val binder = LocalBinder()
     private val activities = mutableMapOf<String, WeakReference<CompositorActivity>>()
     private val windowRegistry = WindowRegistry()
-    private val toplevelCount = MutableStateFlow(0)
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var lifecycle = Lifecycle.STOPPED
-    private var restartAfterStop = false
+    private var hold: Hold? = null
     /** Seeds and follows the compositor's "a mouse is attached" reason for
      *  the `wl_pointer` seat capability. Lives here rather than on an
      *  Activity: it is one process-wide fact, and the compositor outlives
@@ -72,100 +68,27 @@ class CompositorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        serviceScope.launch {
-            toplevelCount.collect { count ->
-                if (!lifecycle.postsNotification) return@collect
-                val nm = getSystemService(NotificationManager::class.java) ?: return@collect
-                nm.notify(NOTIFICATION_ID, buildNotification(count))
-            }
-        }
-        ensureCompositorRunning()
-    }
-
-    private fun ensureCompositorRunning() {
-        when (lifecycle) {
-            Lifecycle.STARTING, Lifecycle.RUNNING -> return
-            Lifecycle.STOPPING -> {
-                restartAfterStop = true
-                return
-            }
-            Lifecycle.STOPPED -> Unit
-        }
-        lifecycle = Lifecycle.STARTING
-        val appPaths = AppPaths.from(this)
-
-        ensureNotificationChannel()
-        // Foreground type "specialUse" is the correct fit on Android 14+ —
-        // none of the standard types (mediaPlayback, dataSync, etc.) match
-        // a desktop compositor. The app declares the corresponding
-        // PROPERTY_SPECIAL_USE_FGS_SUBTYPE in the manifest.
-        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        } else {
-            0
-        }
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            buildNotification(windowCount = 0),
-            foregroundType,
-        )
-
-        // xkbcommon's keymap lookup happens during compositor startup and
-        // dereferences a NULL keymap if XKB_CONFIG_ROOT is missing — extract
-        // bundled xkb data before starting the compositor thread. Idempotent
-        // (skips when files/xkb/.version matches the package version), so
-        // it's a no-op on subsequent service restarts.
-        ensureXkbDataExtracted()
-
-        // libhybris ships in the APK as a tarball asset (one tree per
-        // ABI) and is extracted into the app data dir.
-        // [me.phie.tawc.install.TawcInstaller] / LibhybrisInstallProvider
-        // copies it into each rootfs at /usr/lib/hybris/ — extracting
-        // here before any rootfs entry means the copy always sees a
-        // complete tree. Idempotent on the same versionCode.
-        ensureLibhybrisExtracted(this)
-
-        // Xwayland's exec'ables and runtime libs ride in the APK as
-        // `jniLibs/<abi>/lib{xwayland,xkbcomp,*}.so`, where the OS
-        // extracts them into `applicationInfo.nativeLibraryDir`. That
-        // dir has the `apk_data_file` SELinux type, which
-        // `untrusted_app` is allowed to exec — unlike `app_data_file`
-        // (the type assigned to anything we extract into `filesDir`),
-        // where `execute_no_trans` is denied on Android 10+ and used
-        // to force us to ship a `magiskpolicy --live` rule via su.
-        // The compositor PATH-resolves `Xwayland` against
-        // `<filesDir>/xwayland/bin/`, where this call lays down
-        // symlinks pointing at the real binaries in nativeLibraryDir.
-        // Only the XKB share tree (read by fopen via baked-in absolute
-        // path) still needs runtime extraction.
-        val xwaylandAvailable = ensureXwaylandExtracted(this)
-
-        // The Rust side adds nativeLibraryDir to LD_LIBRARY_PATH so
-        // Xwayland's bionic linker finds its DT_NEEDED libs (libX11.so,
-        // libxcb.so, …) alongside the binary in apk_data_file context.
-        Os.setenv("TAWC_XWAYLAND_ENABLED", if (xwaylandAvailable) "1" else "0", true)
-        Os.setenv("TAWC_NATIVE_LIB_DIR", applicationInfo.nativeLibraryDir, true)
-        Os.setenv("TAWC_APP_DATA_DIR", appPaths.dataDir.absolutePath, true)
-        Os.setenv("TAWC_APP_FILES_DIR", appPaths.filesDir.absolutePath, true)
-        Os.setenv("TAWC_APP_SHARE_DIR", appPaths.shareDir.absolutePath, true)
-        Os.setenv("TAWC_DISTROS_DIR", appPaths.distrosDir.absolutePath, true)
-        Os.setenv("TAWC_XWAYLAND_DIR", appPaths.xwaylandDir.absolutePath, true)
-        Os.setenv("TAWC_XWAYLAND_RUNTIME_DIR", appPaths.xwaylandRuntimeDir.absolutePath, true)
-        Os.setenv("TAWC_XKB_CONFIG_ROOT", appPaths.xkbDir.absolutePath, true)
-
         // Hand the application context + service to NativeBridge so its
         // reverse-JNI spawnActivity/finishActivity entry points work even
         // when no Activity is currently in the foreground.
         NativeBridge.attachService(this)
+        ensureCompositorRunning()
+    }
+
+    private fun ensureCompositorRunning() {
+        ensureActivation(this)
+
         val displayMetrics = realDisplayMetrics()
-        NativeBridge.nativeStartCompositor(
+        val started = NativeBridge.nativeStartCompositor(
             me.phie.tawc.Settings.outputScale,
             displayMetrics.widthPixels,
             displayMetrics.heightPixels,
             me.phie.tawc.Settings.xwayland,
             me.phie.tawc.Settings.gtk3BrokenMenusWorkaround,
         )
+        if (!started) return
+        // Everything below is per compositor run.
+        if (hold == null) hold = SessionHolds.acquire(Reason.Compositor(0))
         ClipboardBridge.announceCurrentClip()
         // Push the saved render-time settings into the compositor. The
         // Rust side defaults match the Settings defaults, so this is
@@ -176,8 +99,10 @@ class CompositorService : Service() {
         NativeBridge.nativeSetOutputScale(me.phie.tawc.Settings.outputScale)
         NativeBridge.nativeSetXwaylandEnabled(me.phie.tawc.Settings.xwayland)
         NativeBridge.nativeSetGtk3BrokenMenusWorkaround(me.phie.tawc.Settings.gtk3BrokenMenusWorkaround)
+        // A fresh watcher re-seeds mouse presence; a surviving one would
+        // drop it as an unchanged value.
+        mouseWatcher?.stop()
         mouseWatcher = MouseWatcher(this).also { it.start() }
-        lifecycle = Lifecycle.RUNNING
     }
 
     /** Full panel size of the default display, in physical pixels.
@@ -205,29 +130,34 @@ class CompositorService : Service() {
         return metrics
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_EXIT) {
-            exitFromNotification(startId)
-            return START_NOT_STICKY
-        }
-        ensureCompositorRunning()
-        // START_STICKY: the system recreates the service after a kill so the
-        // compositor comes back even if every Activity has been destroyed.
-        return START_STICKY
-    }
-
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
-        serviceScope.cancel()
+        NativeBridge.nativeStopCompositor()
+        compositorStopped()
+        NativeBridge.detachService()
+        super.onDestroy()
+    }
+
+    /**
+     * The compositor thread is gone (Exit, or a failed start): close its
+     * windows, drop the session hold and the binding that kept us alive.
+     * Skipped when a restart already won the race — native state leads.
+     * GUI clients died with the Wayland (and, through it, the X11) socket.
+     */
+    internal fun onCompositorStopped() {
+        if (NativeBridge.nativeIsCompositorRunning()) return
+        compositorStopped()
+        releaseKeepAlive(this)
+    }
+
+    private fun compositorStopped() {
         mouseWatcher?.stop()
         mouseWatcher = null
-        NativeBridge.nativeStopCompositor()
-        NativeBridge.detachService()
-        activities.clear()
         windowRegistry.clear()
-        lifecycle = Lifecycle.STOPPED
-        super.onDestroy()
+        finishCompositorActivities()
+        hold?.release()
+        hold = null
     }
 
     fun registerActivity(activityId: String, activity: CompositorActivity) {
@@ -277,7 +207,7 @@ class CompositorService : Service() {
     }
 
     fun updateToplevelCount(count: Int) {
-        toplevelCount.value = count.coerceAtLeast(0)
+        hold?.update(Reason.Compositor(count.coerceAtLeast(0)))
     }
 
     /** Look up an alive Activity by id. Returns null if it was GC'd. */
@@ -315,42 +245,6 @@ class CompositorService : Service() {
         return null
     }
 
-    /**
-     * Notification "Exit": stop the compositor, close its windows, drop
-     * the foreground service. Scoped to the compositor on purpose — GUI
-     * clients die with the Wayland (and, through it, the X11) socket,
-     * and everything else in a rootfs is somebody else's lifetime:
-     * terminal shells and their jobs belong to
-     * [me.phie.tawc.terminal.TerminalActivity], and a stray daemon a GUI
-     * app spawned is stoppable from the task manager. A blanket guest
-     * SIGKILL here used to take those with it.
-     */
-    private fun exitFromNotification(startId: Int) {
-        if (lifecycle == Lifecycle.STOPPING) return
-        lifecycle = Lifecycle.STOPPING
-        restartAfterStop = false
-        serviceScope.launch {
-            Log.i(TAG, "Notification exit requested")
-            // Stop before the compositor goes away so a restart re-seeds
-            // mouse presence instead of dropping it as an unchanged value.
-            mouseWatcher?.stop()
-            mouseWatcher = null
-            NativeBridge.nativeStopCompositor()
-            toplevelCount.value = 0
-            windowRegistry.clear()
-            finishCompositorActivities()
-            if (restartAfterStop) {
-                lifecycle = Lifecycle.STOPPED
-                restartAfterStop = false
-                ensureCompositorRunning()
-            } else {
-                lifecycle = Lifecycle.STOPPED
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelfResult(startId)
-            }
-        }
-    }
-
     private fun finishCompositorActivities() {
         val liveActivities = activities.values.mapNotNull { it.get() }
         activities.clear()
@@ -359,109 +253,141 @@ class CompositorService : Service() {
         }
     }
 
-    private fun ensureXkbDataExtracted() {
-        val destDir = File(filesDir, "xkb")
-        val currentStamp = currentExtractStamp(this)
-        if (!isStampStale("xkb", destDir, currentStamp)) return
-
-        val stagingDir = File(filesDir, "xkb.new")
-        stagingDir.deleteRecursively()
-        stagingDir.mkdirs()
-        fun extractDir(assetPath: String, destPath: File) {
-            val children = assets.list(assetPath) ?: return
-            if (children.isEmpty()) {
-                assets.open(assetPath).use { input ->
-                    destPath.outputStream().use { output -> input.copyTo(output) }
-                }
-            } else {
-                destPath.mkdirs()
-                for (child in children) {
-                    extractDir("$assetPath/$child", File(destPath, child))
-                }
-            }
-        }
-        extractDir("xkb", stagingDir)
-        atomicReplaceDir(stagingDir, destDir)
-        File(destDir, ".version").writeText(currentStamp)
-    }
-
-    private fun ensureNotificationChannel() {
-        val nm = getSystemService(NotificationManager::class.java) ?: return
-        if (nm.getNotificationChannel(CHANNEL_ID) != null) return
-        val channel = NotificationChannel(
-            CHANNEL_ID, "Compositor", NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Background notification for the running Wayland compositor."
-            setShowBadge(false)
-        }
-        nm.createNotificationChannel(channel)
-    }
-
-    private fun buildNotification(windowCount: Int): Notification {
-        return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("TAWC running")
-            .setContentText("$windowCount Linux windows open")
-            .setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentIntent(homePendingIntent())
-            .setOngoing(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .addAction(
-                Notification.Action.Builder(
-                    Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
-                    "Exit",
-                    exitPendingIntent(),
-                ).build(),
-            )
-            .build()
-    }
-
-    private fun homePendingIntent(): PendingIntent {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            action = Intent.ACTION_MAIN
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        return PendingIntent.getActivity(
-            this,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-    }
-
-    private fun exitPendingIntent(): PendingIntent {
-        val intent = Intent(this, CompositorService::class.java)
-            .setAction(ACTION_EXIT)
-        return PendingIntent.getService(
-            this,
-            1,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-    }
-
-    private enum class Lifecycle {
-        STOPPED,
-        STARTING,
-        RUNNING,
-        STOPPING;
-
-        val postsNotification: Boolean
-            get() = this == STARTING || this == RUNNING
-    }
-
     companion object {
         private const val TAG = "tawc"
-        private const val NOTIFICATION_ID = 1
-        private const val CHANNEL_ID = "tawc_compositor"
-        private const val ACTION_EXIT = "me.phie.tawc.compositor.EXIT"
 
+        /** Process-level binding held while the compositor runs. */
+        private var keepAlive: ServiceConnection? = null
+
+        private val mainHandler = Handler(Looper.getMainLooper())
+
+        /**
+         * Make sure the compositor is running (asynchronously when called
+         * off the main thread). Binds rather than starts: Android refuses
+         * `startService` from the background, and a connecting client can
+         * need the compositor there.
+         */
         fun ensureRunning(context: Context) {
-            context.applicationContext.startForegroundService(
-                Intent(context.applicationContext, CompositorService::class.java)
+            val app = context.applicationContext
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                mainHandler.post { ensureRunning(app) }
+                return
+            }
+            NativeBridge.serviceRefForDev()?.ensureCompositorRunning()
+            if (keepAlive != null) return
+            val connection = object : ServiceConnection {
+                override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {}
+                override fun onServiceDisconnected(name: ComponentName?) {}
+            }
+            keepAlive = connection
+            app.bindService(
+                Intent(app, CompositorService::class.java),
+                connection,
+                Context.BIND_AUTO_CREATE,
             )
+        }
+
+        /** Stop the compositor; [onCompositorStopped] does the rest. */
+        fun stop() {
+            NativeBridge.nativeStopCompositor()
+        }
+
+        private fun releaseKeepAlive(context: Context) {
+            val connection = keepAlive ?: return
+            keepAlive = null
+            try {
+                context.applicationContext.unbindService(connection)
+            } catch (_: IllegalArgumentException) {
+            }
+        }
+
+        private var activationStarted = false
+
+        /**
+         * Extract the compositor's bundled assets, export the `TAWC_*`
+         * environment the native side reads its paths from, and start the
+         * native socket holder (notes/architecture.md, "Compositor
+         * lifecycle"). Idempotent; any thread. Must have run before
+         * anything is spawned into a rootfs, so every spawn path calls it
+         * — that keeps extraction out of the connect→accept gap too.
+         */
+        @Synchronized
+        fun ensureActivation(context: Context) {
+            if (activationStarted) return
+            val app = context.applicationContext
+            val appPaths = AppPaths.from(app)
+
+            // xkbcommon's keymap lookup happens during compositor startup and
+            // dereferences a NULL keymap if XKB_CONFIG_ROOT is missing.
+            ensureXkbDataExtracted(app)
+
+            // libhybris ships in the APK as a tarball asset (one tree per
+            // ABI) and is extracted into the app data dir.
+            // [me.phie.tawc.install.TawcInstaller] / LibhybrisInstallProvider
+            // copies it into each rootfs at /usr/lib/hybris/ — extracting
+            // here before any rootfs entry means the copy always sees a
+            // complete tree. Idempotent on the same versionCode.
+            ensureLibhybrisExtracted(app)
+
+            // Xwayland's exec'ables and runtime libs ride in the APK as
+            // `jniLibs/<abi>/lib{xwayland,xkbcomp,*}.so`, where the OS
+            // extracts them into `applicationInfo.nativeLibraryDir`. That
+            // dir has the `apk_data_file` SELinux type, which
+            // `untrusted_app` is allowed to exec — unlike `app_data_file`
+            // (the type assigned to anything we extract into `filesDir`),
+            // where `execute_no_trans` is denied on Android 10+ and used
+            // to force us to ship a `magiskpolicy --live` rule via su.
+            // The compositor PATH-resolves `Xwayland` against
+            // `<filesDir>/xwayland/bin/`, where this call lays down
+            // symlinks pointing at the real binaries in nativeLibraryDir.
+            // Only the XKB share tree (read by fopen via baked-in absolute
+            // path) still needs runtime extraction.
+            val xwaylandAvailable = ensureXwaylandExtracted(app)
+
+            // The Rust side adds nativeLibraryDir to LD_LIBRARY_PATH so
+            // Xwayland's bionic linker finds its DT_NEEDED libs (libX11.so,
+            // libxcb.so, …) alongside the binary in apk_data_file context.
+            Os.setenv("TAWC_XWAYLAND_ENABLED", if (xwaylandAvailable) "1" else "0", true)
+            Os.setenv("TAWC_NATIVE_LIB_DIR", app.applicationInfo.nativeLibraryDir, true)
+            Os.setenv("TAWC_APP_DATA_DIR", appPaths.dataDir.absolutePath, true)
+            Os.setenv("TAWC_APP_FILES_DIR", appPaths.filesDir.absolutePath, true)
+            Os.setenv("TAWC_APP_SHARE_DIR", appPaths.shareDir.absolutePath, true)
+            Os.setenv("TAWC_DISTROS_DIR", appPaths.distrosDir.absolutePath, true)
+            Os.setenv("TAWC_XWAYLAND_DIR", appPaths.xwaylandDir.absolutePath, true)
+            Os.setenv("TAWC_XWAYLAND_RUNTIME_DIR", appPaths.xwaylandRuntimeDir.absolutePath, true)
+            Os.setenv("TAWC_XKB_CONFIG_ROOT", appPaths.xkbDir.absolutePath, true)
+
+            NativeBridge.attachContext(app)
+            NativeBridge.nativeStartActivation(me.phie.tawc.Settings.xwayland)
+            activationStarted = true
+        }
+
+        private fun ensureXkbDataExtracted(context: Context) {
+            val filesDir = context.filesDir
+            val assets = context.assets
+            val destDir = File(filesDir, "xkb")
+            val currentStamp = currentExtractStamp(context)
+            if (!isStampStale("xkb", destDir, currentStamp)) return
+
+            val stagingDir = File(filesDir, "xkb.new")
+            stagingDir.deleteRecursively()
+            stagingDir.mkdirs()
+            fun extractDir(assetPath: String, destPath: File) {
+                val children = assets.list(assetPath) ?: return
+                if (children.isEmpty()) {
+                    assets.open(assetPath).use { input ->
+                        destPath.outputStream().use { output -> input.copyTo(output) }
+                    }
+                } else {
+                    destPath.mkdirs()
+                    for (child in children) {
+                        extractDir("$assetPath/$child", File(destPath, child))
+                    }
+                }
+            }
+            extractDir("xkb", stagingDir)
+            atomicReplaceDir(stagingDir, destDir)
+            File(destDir, ".version").writeText(currentStamp)
         }
 
         /** Lock for [ensureLibhybrisExtracted] — see method KDoc. */

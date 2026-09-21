@@ -18,6 +18,14 @@ scripts/
   run-integration-tests.sh    Build everything, deploy, run integration tests
 ```
 
+**The suite runs with the compositor pinned.** In production it starts on
+the first client connection and stops 1 s after the last one leaves; most
+tests poke an empty compositor, so `run-integration-tests.sh` pins it with
+the broker action `compositor-hold hold=on` (which also starts it).
+`query-state` never starts anything and answers just `stopped` when no
+compositor thread exists. `lazy_compositor` tests drop the pin for their
+duration (`Unpinned` guard re-pins on drop, panics included).
+
 **`cold_start` is the one exception**, because its assertions only hold
 before anything has opened a window: a client connecting to a compositor
 with zero hosts must still see a `wl_output` with a real mode. It is its
@@ -43,6 +51,7 @@ prerequisites are. As of writing the modules are:
 | `text_input`    | `cpu`       | wayland-debug-app text-input-v3, wl_keyboard, clipboard, and cursor-tap coverage. Buffer type is irrelevant. |
 | `touch_input`   | `cpu`       | wayland-debug-app wl_touch routing coverage, including subsurfaces and popups. Buffer type is irrelevant. |
 | `pointer_input` | `cpu`       | wayland-debug-app wl_pointer coverage: the mouse/touch source split, button codes, scroll direction and units, frames, focus targets, and the hover-exit-is-not-leave rule. Buffer type is irrelevant. |
+| `lazy_compositor` | `cpu`    | Socket-activated lifecycle, unpinned: a Wayland client and an X11-only client each cold-start the compositor, it stops after they leave and restarts for the next; fd/thread counts stay flat over start/stop cycles; session holds follow commands and Exit kills everything; hold churn does not crash the session service. |
 | `settings`      | `cpu`       | Runtime settings coverage: output scale, configure-state policy, and GTK3 broken menus workaround. |
 | `tawcroot`      | n/a         | tawcroot device-side smokes (wraps the cleat-driven suite). |
 | `uninstall_wipe` | n/a        | Wipe-engine edge cases against a *fabricated* KB-scale slot (mount gate, su-retry ladder). Rooted target only. |
