@@ -39,7 +39,11 @@ The compositor (`compositor/src/`) is split into:
   foreground-host frame rendering, Smithay `Window::send_frame` callback dispatch, the SHM
   magenta tint / wlegl-opaque shaders, and `create_egl_surface_for_window` for binding new hosts.
   Each frame is cleared to `BACKGROUND_COLOR` (Material3 dark surface, matches the
-  rest of the app's UI) before any surfaces are drawn.
+  rest of the app's UI) before any surfaces are drawn. GL setup (EGL init + ~14 shader
+  programs: ~45 ms phone, ~75 ms emulator) runs on a `gl-init` helper thread via
+  `LazyRenderState` and is joined by its first user (buffer creation, host surface bind,
+  frame), so `nativeStartCompositor` → dispatch is ~7 ms instead of ~80–100 ms. `init`
+  must leave the EGL context unbound for the handoff.
 - **egl_android.rs** -- Raw EGL context creation (with `EGL_KHR_surfaceless_context`
   default-current) and `AndroidNativeSurface` for Smithay.
 - **wlegl.rs** -- `android_wlegl` server: reconstruct client-allocated gralloc buffers

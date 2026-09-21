@@ -17,9 +17,9 @@ The user has to track and manage compositor state.
 - While the app process is alive, `share/wayland-0` and the X11 `:0`
   socket always accept connections.
 - First connection on either starts the compositor; the connection waits
-  in the listen backlog meanwhile (measured on the emulator: ~100 ms from
-  `nativeStartCompositor` to dispatch, plus service start; first run also
-  pays asset extraction).
+  in the listen backlog meanwhile (measured on the emulator: ~7 ms from
+  `nativeStartCompositor` to dispatch now that GL setup runs on a helper
+  thread, plus service start; first run also pays asset extraction).
 - When nothing is connected any more, the compositor stops (GLES context,
   foreground service, notification all go away). Next connection restarts
   it.

@@ -10,8 +10,6 @@ use jni::sys::{jboolean, jint, jlong, jobject};
 use jni::JavaVM;
 use log::info;
 
-use smithay::backend::egl::EGLContext;
-use smithay::backend::renderer::gles::GlesRenderer;
 use wayland_server::Display;
 
 #[cfg(feature = "gfxstream")]
@@ -42,10 +40,9 @@ mod launcher;
 mod text_input;
 mod xwayland;
 
-use gl_import::AhbTextureImporter;
 use compositor::TawcState;
 use host::{ActivityId, SurfaceEvent};
-use render::RenderState;
+use render::LazyRenderState;
 use scale::OutputScale;
 
 /// Global flag shared between JNI calls to signal shutdown.
@@ -145,9 +142,10 @@ fn cache_jni_globals(env: &mut JNIEnv) {
 /// Start the compositor thread. Called from `CompositorService.onCreate`.
 /// Idempotent: if a compositor thread is already running, this is a no-op.
 ///
-/// The compositor sets up its EGL context, GlesRenderer, Wayland display,
-/// and listening socket up front, then enters its event loop with no
-/// `OutputHost`s. `nativeRegisterActivitySurface` adds hosts later.
+/// The compositor sets up its Wayland display and listening socket up
+/// front (EGL context + GlesRenderer come up beside that on a helper
+/// thread), then enters its event loop with no `OutputHost`s.
+/// `nativeRegisterActivitySurface` adds hosts later.
 ///
 /// `display_width_px`/`display_height_px` are the Android panel metrics.
 /// They seed the advertised output mode so clients that connect before any
@@ -1121,7 +1119,7 @@ fn sanitize_output_scale(scale: f64) -> Option<f64> {
     Some(scale.clamp(MIN_OUTPUT_SCALE, MAX_OUTPUT_SCALE))
 }
 
-/// Set up EGL context, renderer, Wayland display, and socket. Then hand off
+/// Start GL setup, then set up the Wayland display and socket. Then hand off
 /// to the calloop event loop. The first `OutputHost` is added asynchronously
 /// when an Activity calls `nativeRegisterActivitySurface`.
 fn run_compositor(
@@ -1136,33 +1134,8 @@ fn run_compositor(
     initial_xwayland: bool,
     initial_gtk3_broken_menus_workaround: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // --- EGL context (no surface yet — first Activity provides one) ---
-    let (raw_display, raw_config, raw_context) =
-        unsafe { egl_android::create_raw_egl_context()? };
-    let egl_context = unsafe { EGLContext::from_raw(raw_display, raw_config, raw_context)? };
-
-    let egl_display = egl_context.display().clone();
-    let egl_pixel_format = egl_context.pixel_format().ok_or("No pixel format")?;
-    let egl_config_id = egl_context.config_id();
-
-    let mut renderer = unsafe { GlesRenderer::new(egl_context)? };
-
-    let importer = AhbTextureImporter::new()
-        .map_err(|e| format!("Failed to load AHB importer: {}", e))?;
-    info!("EGL + GlesRenderer + AHB importer ready");
-
-    let plain_shader = render::compile_plain_shader(&mut renderer);
-    let tint_shader = render::compile_tint_shader(&mut renderer);
-
-    let render_state = RenderState {
-        renderer,
-        importer,
-        plain_shader,
-        tint_shader,
-        egl_display,
-        egl_pixel_format,
-        egl_config_id,
-    };
+    // GL setup runs beside the Wayland setup below; see `LazyRenderState`.
+    let render_state = LazyRenderState::spawn();
 
     // --- Wayland display + protocol state ---
     // The output is advertised from the start with the Android panel
@@ -1199,9 +1172,10 @@ fn run_compositor(
     // last step before entering the dispatch loop. Binding here would
     // create a window where clients can `connect()` and write requests
     // (the kernel queues them on the listening socket) but the
-    // compositor isn't yet running `accept()` — on a slow emulator the
-    // ~80ms of GLES/source setup between bind and dispatch is enough to
-    // make a freshly-spawned GTK4 client time out its initial roundtrip.
+    // compositor isn't yet running `accept()` — on a slow emulator an
+    // ~80ms gap between bind and dispatch (back when GLES setup sat in
+    // it) was enough to make a freshly-spawned GTK4 client time out its
+    // initial roundtrip.
     let wayland_socket_path = app_paths::get().wayland_socket_path.clone();
     let _ = std::fs::remove_file(&wayland_socket_path);
     if let Some(parent) = std::path::Path::new(&wayland_socket_path).parent() {

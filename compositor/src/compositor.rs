@@ -258,7 +258,7 @@ pub struct TawcState {
     /// XWayland Ready event arrives.
     pub xdisplay: Option<u32>,
 
-    pub render: crate::render::RenderState,
+    pub render: crate::render::LazyRenderState,
     /// The single output object tracked today. Its `wl_output` global exists
     /// with a nonzero mode for the whole life of the compositor; multi-output
     /// support is left to a later phase (see `notes/multi-activity.md`).
@@ -283,7 +283,7 @@ impl TawcState {
         output_physical_size: (i32, i32),
         xwayland_enabled: bool,
         gtk3_broken_menus_workaround_enabled: bool,
-        render: crate::render::RenderState,
+        render: crate::render::LazyRenderState,
         output: smithay::output::Output,
     ) -> Self {
         let dh = display.handle();

@@ -1072,7 +1072,9 @@ fn handle_surface_event(
             }
             // Bind the EGLSurface (separate step: needs &RenderState).
             if let Some(host) = data.hosts.get_mut(&activity_id) {
-                data.render.attach_host_surface(host);
+                if let Some(render) = data.render.get() {
+                    render.attach_host_surface(host);
+                }
             }
             let fullscreen = data.host_fullscreen(&activity_id);
             let foreground = data.desktop.foreground_host() == Some(&activity_id);

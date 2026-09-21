@@ -315,6 +315,11 @@ impl Dispatch<AndroidWlegl, ()> for TawcState {
                 usage,
                 native_handle,
             } => {
+                // GL init failed; the compositor is already stopping.
+                let Some(importer) = state.render.get().map(|r| r.importer) else {
+                    resource.post_error(android_wlegl::Error::BadValue, "renderer unavailable");
+                    return;
+                };
                 let handle_data = match native_handle.data::<WleglHandleData>() {
                     Some(d) => d,
                     None => {
@@ -391,7 +396,7 @@ impl Dispatch<AndroidWlegl, ()> for TawcState {
                     height,
                     has_alpha: android_format_has_alpha(fmt_u),
                     origin: BufferOrigin::Hybris,
-                    importer: state.render.importer,
+                    importer,
                     texture: Mutex::new(None),
                 };
                 data_init.init(id, ExternalBufferData::new(data));

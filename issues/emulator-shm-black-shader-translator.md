@@ -108,3 +108,7 @@ google_apis image does have root — live in
 Unrelated: xwayland tests can also fail wholesale if a stale
 `share/xtmp/.X0-lock` survives a force-kill (Xwayland then never gets a
 display); delete the lock + `.X11-unix/X0` socket to recover.
+
+2026-09-20: `test_shm_render_pattern_orientation_pixels` passed inside a
+full-suite run but failed every time when run filtered (`rendering`), on
+the same build — consistent with the unknown trigger condition above.

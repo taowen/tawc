@@ -11,7 +11,7 @@ use std::time::Duration;
 use log::{error, info};
 
 use smithay::backend::egl::display::PixelFormat;
-use smithay::backend::egl::EGLDisplay;
+use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::egl::EGLSurface;
 use smithay::backend::renderer::gles::{
     GlesFrame, GlesRenderer, GlesTexProgram,
@@ -116,6 +116,44 @@ pub struct RenderState {
 }
 
 impl RenderState {
+    /// Create the EGL context (no surface yet — the first Activity provides
+    /// one), the renderer, the AHB importer and our shaders. Leaves the
+    /// context unbound so another thread can make it current.
+    fn init() -> Result<Self, String> {
+        let (raw_display, raw_config, raw_context) =
+            unsafe { crate::egl_android::create_raw_egl_context() }.map_err(|e| e.to_string())?;
+        let egl_context = unsafe { EGLContext::from_raw(raw_display, raw_config, raw_context) }
+            .map_err(|e| format!("EGLContext::from_raw: {}", e))?;
+
+        let egl_display = egl_context.display().clone();
+        let egl_pixel_format = egl_context.pixel_format().ok_or("No pixel format")?;
+        let egl_config_id = egl_context.config_id();
+
+        let mut renderer = unsafe { GlesRenderer::new(egl_context) }
+            .map_err(|e| format!("GlesRenderer::new: {}", e))?;
+
+        let importer = AhbTextureImporter::new()
+            .map_err(|e| format!("Failed to load AHB importer: {}", e))?;
+        info!("EGL + GlesRenderer + AHB importer ready");
+
+        let plain_shader = compile_plain_shader(&mut renderer);
+        let tint_shader = compile_tint_shader(&mut renderer);
+        renderer
+            .egl_context()
+            .unbind()
+            .map_err(|e| format!("EGL unbind: {}", e))?;
+
+        Ok(RenderState {
+            renderer,
+            importer,
+            plain_shader,
+            tint_shader,
+            egl_display,
+            egl_pixel_format,
+            egl_config_id,
+        })
+    }
+
     /// Create an `EGLSurface` bound to a freshly-acquired ANativeWindow.
     /// The host takes ownership of the surface; on drop it calls
     /// `eglDestroySurface`.
@@ -160,12 +198,53 @@ impl RenderState {
 // TawcState even though it never actually moves data across threads.
 unsafe impl Send for RenderState {}
 
+/// `RenderState` whose GL setup runs on a helper thread. Shader compiles
+/// dominate compositor startup (~45 ms phone, ~75 ms emulator) and no
+/// Wayland global depends on them, so the socket starts accepting while
+/// they run. The first user (buffer creation, host surface bind, frame)
+/// joins the thread.
+pub struct LazyRenderState {
+    ready: Option<RenderState>,
+    pending: Option<std::thread::JoinHandle<Result<RenderState, String>>>,
+}
+
+impl LazyRenderState {
+    pub fn spawn() -> Self {
+        // Moving the `RenderState` across threads relies on `init` leaving
+        // the EGL context unbound; nothing else in it is thread-affine.
+        let pending = std::thread::Builder::new()
+            .name("gl-init".into())
+            .spawn(RenderState::init)
+            .expect("spawn gl-init thread");
+        Self { ready: None, pending: Some(pending) }
+    }
+
+    /// The render state, waiting for GL setup if it is still running.
+    /// `None` if setup failed; that also stops the compositor.
+    pub fn get(&mut self) -> Option<&mut RenderState> {
+        if let Some(pending) = self.pending.take() {
+            match pending.join() {
+                Ok(Ok(render)) => self.ready = Some(render),
+                Ok(Err(e)) => {
+                    error!("GL init failed: {}", e);
+                    crate::RUNNING.store(false, Ordering::SeqCst);
+                }
+                Err(_) => {
+                    error!("GL init thread panicked");
+                    crate::RUNNING.store(false, Ordering::SeqCst);
+                }
+            }
+        }
+        self.ready.as_mut()
+    }
+}
+
 /// Compile the plain texture shader. One uniform: `force_opaque`
 /// (`1.0` rewrites the texture's alpha channel to `1.0` before
 /// blending; `0.0` leaves it as-is). Used when `TINT_BUFFERS_BY_TYPE`
 /// is off, but kept distinct from smithay's stock EXTERNAL_OES shader so
 /// the plain and tinting paths share one draw setup.
-pub fn compile_plain_shader(renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
+fn compile_plain_shader(renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
     match renderer.compile_custom_texture_shader(
         SHADER_SOURCE_PLAIN,
         &[UniformName::new("force_opaque", UniformType::_1f)],
@@ -195,7 +274,7 @@ pub fn compile_plain_shader(renderer: &mut GlesRenderer) -> Option<GlesTexProgra
 /// then `tint_color * 0.3` is added. With `tint_color = (1, 0, 1)`
 /// this collapses back to the previous `(r * 1.0 + 0.3, g * 0.4, b *
 /// 1.0 + 0.3)` magenta formula.
-pub fn compile_tint_shader(renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
+fn compile_tint_shader(renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
     match renderer.compile_custom_texture_shader(
         SHADER_SOURCE_TINT,
         &[
@@ -487,7 +566,7 @@ pub fn render_frame(
     let screen_h = output_size.h;
     let region = Rectangle::from_size(Size::from(host.logical_size));
 
-    let render = &mut state.render;
+    let render = state.render.get().ok_or("renderer unavailable")?;
     let plain_shader = render.plain_shader.as_ref();
     let tint_shader = render.tint_shader.as_ref();
     let tint_enabled = TINT_BUFFERS_BY_TYPE.load(Ordering::Relaxed);
