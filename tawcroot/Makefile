@@ -133,6 +133,8 @@ TESTS_LDFLAGS := $(TESTS_SANFLAGS) -lm -pthread
 # --- source lists ---
 
 PROD_C := \
+    $(SRC_T)/src/sysv_sem.c \
+    $(SRC_T)/src/proc_tcp.c \
     $(SRC_T)/src/namespace.c \
     $(SRC_T)/src/main.c \
     $(SRC_T)/src/io.c \

@@ -54,6 +54,7 @@
  */
 
 #include <stddef.h>
+#include <asm/unistd.h>
 #include <stdint.h>
 #include <sys/stat.h>
 #include <ucontext.h>
@@ -71,6 +72,7 @@
 #include "tawc_string.h"
 #include "tawc_uapi.h"
 #include "usercopy.h"
+#include "proc_tcp.h"
 
 #define AF_UNIX_FAMILY  1
 #define AF_NETLINK_FAMILY  16
@@ -594,7 +596,17 @@ static long handle_bind(const tawcroot_syscall_args *args, ucontext_t *uc)
 static long handle_connect(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
-	return do_translate_unix_addr(TAWC_SYS_connect, args);
+	long result = do_translate_unix_addr(TAWC_SYS_connect, args);
+	if (!result || result == -115) tawcroot_tcp_record((int)args->a);
+	return result;
+}
+
+static long handle_listen(const tawcroot_syscall_args *args, ucontext_t *uc)
+{
+	(void)uc;
+	long result = TAWC_RAW(__NR_listen, args->a, args->b, 0, 0, 0, 0);
+	if (!result) tawcroot_tcp_record((int)args->a);
+	return result;
 }
 
 /* sendto(fd, buf, len, flags, dest_addr, addrlen): a connectionless
@@ -787,8 +799,10 @@ static long handle_getpeername(const tawcroot_syscall_args *args,
 static long handle_accept(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
-	return getname_with_reverse(TAWC_SYS_accept4, args->a,
+	long result = getname_with_reverse(TAWC_SYS_accept4, args->a,
 				    args->b, args->c, 0);
+	if (result >= 0) tawcroot_tcp_record((int)result);
+	return result;
 }
 
 /* accept4 carries flags in arg d; route through the same reverse-
@@ -798,8 +812,10 @@ static long handle_accept(const tawcroot_syscall_args *args, ucontext_t *uc)
 static long handle_accept4(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
-	return getname_with_reverse(TAWC_SYS_accept4, args->a,
+	long result = getname_with_reverse(TAWC_SYS_accept4, args->a,
 				    args->b, args->c, args->d);
+	if (result >= 0) tawcroot_tcp_record((int)result);
+	return result;
 }
 
 /* struct ucred mirror (SO_PEERCRED out-value): pid, uid, gid — three
@@ -840,8 +856,11 @@ static long handle_getsockopt(const tawcroot_syscall_args *args, ucontext_t *uc)
 	void *guest_lenp = (void *)(uintptr_t)args->e;
 	if ((int)args->b != SOL_SOCKET_LEVEL ||
 	    (int)args->c != SO_PEERCRED_OPT || !guest_val || !guest_lenp) {
-		return TAWC_RAW(TAWC_SYS_getsockopt, args->a, args->b,
+		long result = TAWC_RAW(TAWC_SYS_getsockopt, args->a, args->b,
 				args->c, args->d, args->e, 0);
+		if (!result && args->b == 1 && args->c == 4)
+			tawcroot_tcp_record((int)args->a);
+		return result;
 	}
 
 	uint32_t guest_cap;
@@ -906,6 +925,7 @@ void tawcroot_socket_register(void)
 	tawcroot_dispatch_install(TAWC_SYS_socket,      handle_socket);
 	tawcroot_dispatch_install(TAWC_SYS_bind,        handle_bind);
 	tawcroot_dispatch_install(TAWC_SYS_connect,     handle_connect);
+	tawcroot_dispatch_install(__NR_listen,         handle_listen);
 	tawcroot_dispatch_install(TAWC_SYS_accept,      handle_accept);
 	tawcroot_dispatch_install(TAWC_SYS_accept4,     handle_accept4);
 	tawcroot_dispatch_install(TAWC_SYS_sendto,      handle_sendto);

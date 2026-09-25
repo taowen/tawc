@@ -165,6 +165,8 @@ fi
 # (smoke.c, child.c, rootfs_smoke.c, testhost_main.c) lives under tawcroot/tests/testhost/
 # and is only linked when TESTHOST=1.
 SRC_C_PROD=(
+    "$TAWCROOT_DIR/src/sysv_sem.c"
+    "$TAWCROOT_DIR/src/proc_tcp.c"
     "$TAWCROOT_DIR/src/namespace.c"
     "$TAWCROOT_DIR/src/main.c"
     "$TAWCROOT_DIR/src/io.c"

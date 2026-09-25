@@ -22,6 +22,7 @@
 #include "syscalls_socket.h"
 
 static tawcroot_handler_fn g_dispatch[TAWCROOT_DISPATCH_MAX];
+void tawcroot_sysv_sem_register(void);
 
 long tawcroot_deny_enosys(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
@@ -78,6 +79,7 @@ void tawcroot_dispatch_init(void)
 	tawcroot_socket_register();
 	tawcroot_chroot_register();
 	tawcroot_namespace_register();
+	tawcroot_sysv_sem_register();
 }
 
 size_t tawcroot_dispatch_trap_list(int *out, size_t out_cap)

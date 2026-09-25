@@ -3,10 +3,17 @@
 Redmi 29854870 and x300 10AFA31610002QH, stock Debian trixie libc,
 Android app UID/seccomp.
 
-- System V semaphore syscalls are unavailable on Android. semget(IPC_PRIVATE)
-  fails; compatibility must live in the runtime, not a replacement libc.
+- System V semaphore syscalls are implemented in the runtime. Redmi passes
+  sem-undo, sem-contract and sem-api-consistency, including signal interruption.
+  Steam's semaphore startup assertions are gone. See notes/arlinux-runtime.md
+  for the bounded implementation and remaining semantics; x300 is unverified.
 - System V shared memory is also missing; the runtime must support both raw
   syscalls and stock libc callers without LD_PRELOAD.
+- Native ARM64 Steam reaches its sign-in window on Redmi. The TCP endpoint
+  snapshot lets genuine lsof resolve local peers through kernel socket inodes;
+  peer validation is unchanged. IPv4/IPv6, nonblocking connect, fork/exec,
+  dup and close pass. Snapshot coverage/capacity limits are documented in
+  notes/arlinux-runtime.md; this is not complete /proc/net emulation.
 - Namespace startup compatibility passes the clone/PID/map/capability/exec
   stage, but CLONE_FS shared filesystem-view regression still fails.
   Repeated creation now releases the old reserved map descriptors; 80
@@ -30,7 +37,7 @@ Android app UID/seccomp.
   consistently verified. The Android host now isolates guest XDG directories
   from compositor process environment, and the common session activates IBus.
 
-Latest device evidence (2026-09-25): `build/tawc-x300-full` completes the full
+Pre-Steam device evidence (2026-09-25): `build/tawc-x300-full` completes the full
 suite with seven runtime failures: namespace-contract, libc-ownership,
 identity-virtual-root, sem-undo, shm-api-consistency, shm-lifetime and
 sem-api-consistency. All application workflows, both hosted input transport

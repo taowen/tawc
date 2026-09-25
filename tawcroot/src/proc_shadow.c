@@ -11,6 +11,7 @@
 #include "path.h"
 #include "proc_rewrite.h"
 #include "proc_shadow.h"
+#include "proc_tcp.h"
 #include "raw_sys.h"
 #include "syscalls_fs.h"
 #include "sysnr.h"
@@ -28,7 +29,7 @@ int tawcroot_could_be_proc_relative(const char *p)
 {
 	char c = p[0];
 	return c == 'b' || c == 'c' || c == 's' || c == 't' || c == 'm' ||
-	       c == 'e' || c == 'l' || c == 'u' || c == 'v' ||
+	       c == 'e' || c == 'l' || c == 'u' || c == 'v' || c == 'n' ||
 	       (c >= '0' && c <= '9');
 }
 
@@ -323,6 +324,15 @@ int tawcroot_proc_shadow_classify(const char *path)
 {
 	if (!tawc_starts_with(path, "/proc/"))
 		return TAWCROOT_PROC_SHADOW_NONE;
+	long tid;
+	const char *tail = strip_proc_pid_prefix(path, &tid);
+	if (!tail) tail = path + 6;
+	if (tawc_streq(tail, "net/tcp") || tawc_streq(tail, "net/tcp6")) {
+		if (tail != path + 6 && !resolve_mine(tid))
+			return TAWCROOT_PROC_SHADOW_NONE;
+		return tawc_streq(tail, "net/tcp") ? TAWCROOT_PROC_SHADOW_TCP
+						: TAWCROOT_PROC_SHADOW_TCP6;
+	}
 	if (tawc_streq(path, "/proc/sys/kernel/overflowuid"))
 		return TAWCROOT_PROC_SHADOW_OVERFLOWUID;
 	if (tawc_streq(path, "/proc/sys/kernel/overflowgid"))
@@ -646,6 +656,8 @@ static long open_proc_loadavg_shadow(void)
 long tawcroot_proc_shadow_open(int kind)
 {
 	switch (kind) {
+	case TAWCROOT_PROC_SHADOW_TCP: return tawcroot_tcp_open(0);
+	case TAWCROOT_PROC_SHADOW_TCP6: return tawcroot_tcp_open(1);
 	case TAWCROOT_PROC_SHADOW_MAPS:
 		return open_proc_maps_shadow();
 	case TAWCROOT_PROC_SHADOW_OVERFLOWUID:

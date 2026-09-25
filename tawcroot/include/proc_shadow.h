@@ -40,7 +40,9 @@ struct statx;
 #define TAWCROOT_PROC_SHADOW_VERSION     6  /* /proc/version */
 #define TAWCROOT_PROC_SHADOW_UPTIME      7  /* /proc/uptime */
 #define TAWCROOT_PROC_SHADOW_LOADAVG     8  /* /proc/loadavg */
-#define TAWCROOT_PROC_SHADOW_KIND_MAX    8
+#define TAWCROOT_PROC_SHADOW_TCP         9
+#define TAWCROOT_PROC_SHADOW_TCP6       10
+#define TAWCROOT_PROC_SHADOW_KIND_MAX   10
 int tawcroot_proc_shadow_classify(const char *path);
 
 /* Synthesize the shadow fd for a classified kind. Returns the new fd or

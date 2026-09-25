@@ -125,6 +125,8 @@ static const struct { const char *path; int kind; } shadow_paths[] = {
 	{ "/proc/version",                   TAWCROOT_PROC_SHADOW_VERSION },
 	{ "/proc/uptime",                    TAWCROOT_PROC_SHADOW_UPTIME },
 	{ "/proc/loadavg",                   TAWCROOT_PROC_SHADOW_LOADAVG },
+	{ "/proc/net/tcp",                   TAWCROOT_PROC_SHADOW_TCP },
+	{ "/proc/self/net/tcp6",             TAWCROOT_PROC_SHADOW_TCP6 },
 };
 #define N_SHADOW_PATHS ((int)(sizeof shadow_paths / sizeof shadow_paths[0]))
 
