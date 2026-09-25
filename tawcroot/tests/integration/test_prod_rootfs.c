@@ -387,23 +387,8 @@ test(prod_rootfs_cross_bind_abs_symlink)
 	rh_rmrf(FAKE_ROOTFS);
 }
 
-/* Like prod_rootfs_cross_bind_abs_symlink but with *different-path*
- * binds. The contract isn't "bind src must equal bind dst" — it's "the
- * symlink's absolute target must be a real host path the kernel can
- * follow from /". With `-b <bind_a_host>:/dst_a -b <bind_b_host>:/dst_b`
- * and a symlink at `<bind_a_host>/link.txt → <bind_b_host>/target.txt`
- * (absolute, real host path), opening `/dst_a/link.txt` should still
- * succeed: the kernel chases the absolute target through the host
- * filesystem, doesn't care that the path text never appears in the
- * guest view.
- *
- * This pins down the actual contract — see notes/tawcroot/path-translation.md
- * §"No `openat2(RESOLVE_IN_ROOT)` shortcut". The case that *isn't*
- * supported is a symlink whose target is a guest-view-only path
- * (e.g. /dst_b/...) where the underlying host path differs; that
- * would need the manual resolver to walk leaf symlinks across bind
- * boundaries and we don't currently do that.
- */
+/* Different-path binds replace storage, not the guest symlink namespace.
+ * Absolute links resolve against guest paths, never unbound host paths. */
 test(prod_rootfs_cross_bind_abs_symlink_different_paths)
 {
 	rh_rmrf(FAKE_ROOTFS);
@@ -434,10 +419,7 @@ test(prod_rootfs_cross_bind_abs_symlink_different_paths)
 	snprintf(link, sizeof link, "%s/link.txt", bind_a);
 	test_true(symlink(target, link) == 0);
 
-	/* Different-path binds: bind src is the host tmp dir, bind dst is
-	 * a synthetic /dst_a, /dst_b inside the rootfs view. The symlink
-	 * target text (host path) doesn't appear anywhere in the guest
-	 * view — it's resolved by the kernel through the host root. */
+	/* The host-path link above must fail; then verify a guest-path link. */
 	char ba_spec[PATH_MAX];
 	char bb_spec[PATH_MAX];
 	snprintf(ba_spec, sizeof ba_spec, "%s:/dst_a", bind_a);
@@ -449,6 +431,9 @@ test(prod_rootfs_cross_bind_abs_symlink_different_paths)
 		"-b", bb_spec,
 		"--", "/bin/static_open_rdonly_argv1", "/dst_a/link.txt", NULL
 	};
+	test_int_eq(run_with(args), 201);
+	test_true(unlink(link) == 0);
+	test_true(symlink("/dst_b/target.txt", link) == 0);
 	test_int_eq(run_with(args), 0);
 
 	rh_rmrf(bind_a);

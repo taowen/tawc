@@ -259,6 +259,14 @@ static long handle_close_range(const tawcroot_syscall_args *args,
 	long dirfd = TAWC_RAW(TAWC_SYS_openat, AT_FDCWD,
 			      (long)"/proc/self/fd",
 			      O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0, 0, 0);
+	/* A full low-fd table must not hide descriptors above a subsequently
+	 * lowered soft limit. Close eligible low descriptors first, then scan
+	 * the actual table, rather than treating RLIMIT_NOFILE as its extent. */
+	if (dirfd == TAWC_EMFILE && !(flags & TAWC_CLOSE_RANGE_CLOEXEC)) {
+		(void)close_range_linear(first, last, flags);
+		dirfd = TAWC_RAW(TAWC_SYS_openat, AT_FDCWD,
+			(long)"/proc/self/fd", O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0, 0, 0);
+	}
 	if (dirfd < 0) return close_range_linear(first, last, flags);
 
 	/* Closing mutates the directory we're iterating, so repeat until

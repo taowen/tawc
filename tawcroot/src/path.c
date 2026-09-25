@@ -438,7 +438,26 @@ static long prod_readlink(void *ctx, const char *suffix,
 	(void)ctx;
 	if (!suffix || suffix[0] == 0) return TAWC_EINVAL;
 	if (tawcroot_rootfs_fd < 0)    return TAWC_EBADF;
-	long n = TAWC_RAW(TAWC_SYS_readlinkat, tawcroot_rootfs_fd,
+	const struct tawcroot_bind *best = 0;
+	size_t len = tawc_strlen(suffix);
+	for (size_t i = 0; i < tawcroot_n_binds; ++i) {
+		const struct tawcroot_bind *b = &tawcroot_binds[i];
+		if (!b->active || b->dst_len > len ||
+		    !tawc_starts_with(suffix, b->dst) ||
+		    (len > b->dst_len && suffix[b->dst_len] != '/')) continue;
+		if (!best || b->dst_len > best->dst_len) best = b;
+	}
+	int fd = tawcroot_rootfs_fd;
+	if (best) {
+		/* proc magic links retain kernel semantics; path_translate below
+		 * handles guest-root and visibility checks for those separately. */
+		if (tawc_streq(best->src, "/proc")) return TAWC_EINVAL;
+		fd = best->src_fd;
+		suffix += best->dst_len;
+		while (*suffix == '/') ++suffix;
+		if (!*suffix) return TAWC_EINVAL;
+	}
+	long n = TAWC_RAW(TAWC_SYS_readlinkat, fd,
 			  (long)suffix, (long)out, (long)out_cap, 0, 0);
 	return n;
 }

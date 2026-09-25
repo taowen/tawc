@@ -59,6 +59,7 @@
 #include <stdint.h>
 
 #include "identity.h"
+#include "namespace.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -89,7 +90,8 @@ extern "C" {
  * the real NUL-joined argv (see proctitle.h). Without it every guest
  * process's /proc/<pid>/cmdline reads "tawcroot --exec-child <fd>" and
  * pgrep/pkill/ps can't identify anything by name. */
-#define TAWCROOT_EXEC_STATE_VERSION 7
+/* v8: namespace startup metadata, independent of guest environment. */
+#define TAWCROOT_EXEC_STATE_VERSION 8
 /* MAX_ARGS at 4096: shell glob expansions, linker invocations, and
  * pacman hooks routinely pass hundreds-to-thousands of args; the kernel
  * allows ~2 MB of argv strings. MAX_ENV at 1024 covers the busiest bash
@@ -134,6 +136,7 @@ typedef struct {
 	 * (restore keeps the register-time root defaults). */
 	uint32_t      has_identity;
 	tawc_identity identity;
+	struct tawc_namespace namespaces;
 	/* v7: commit()'s execveat argv[0] (see version note). 0 = absent. */
 	uint32_t proctitle_off;
 } tawcroot_exec_state_header;
@@ -170,6 +173,7 @@ typedef struct {
 	int          shm_fd[TAWCROOT_EXEC_STATE_MAX_SHM];
 	int           has_identity;
 	tawc_identity identity;      /* valid iff has_identity */
+	struct tawc_namespace namespaces;
 	const char  *proctitle;      /* may be NULL (v7; commit() argv[0]) */
 } tawcroot_exec_state;
 
@@ -188,6 +192,7 @@ typedef struct {
 	const char *const *shm_name;        /* size n_shm */
 	const int         *shm_fd;          /* size n_shm */
 	const tawc_identity *identity;      /* may be NULL */
+	const struct tawc_namespace *namespaces;
 	const char        *proctitle;       /* may be NULL */
 } tawcroot_exec_state_extras;
 

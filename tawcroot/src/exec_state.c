@@ -166,6 +166,7 @@ long tawcroot_exec_state_write(void *buf, size_t buf_cap,
 		if (ex->proctitle)
 			h->proctitle_off = emit_str(strings, &off,
 			                            ex->proctitle);
+		if (ex->namespaces) h->namespaces = *ex->namespaces;
 	}
 
 	h->string_bytes = off;
@@ -263,6 +264,7 @@ long tawcroot_exec_state_read(const void *buf, size_t buf_size,
 	out->proctitle = h->proctitle_off ? strings + h->proctitle_off
 	                                  : (const char *)0;
 	out->has_identity = h->has_identity ? 1 : 0;
+	out->namespaces = h->namespaces;
 	if (h->has_identity) {
 		if (h->identity.ngroups > TAWC_IDENTITY_NGROUPS)
 			return TAWC_EINVAL;

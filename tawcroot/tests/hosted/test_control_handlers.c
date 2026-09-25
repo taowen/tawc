@@ -76,80 +76,16 @@ test(hosted_legacy_alarm_routes_to_setitimer)
 }
 #endif
 
-/* Guest seccomp installs are fake-accepted: kernel-faithful argument
- * validation (EFAULT/EINVAL shapes preserved so support probes keep
- * working), then success with nothing installed. See the
- * filter_fake_accept comment in syscalls_control.c and
- * notes/tawcroot/status.md "Accepted syscall-fidelity divergences".
- * The proof that nothing installs lives in the fork-based smoke
- * (rootfs_smoke.c drives a KILL_PROCESS program through the real trap
- * path); here we cover the validation matrix under ASan. */
-
-/* struct sock_filter: u16 code, u8 jt, u8 jf, u32 k. One BPF_RET|BPF_K
- * SECCOMP_RET_KILL_PROCESS insn — valid shape, lethal if ever truly
- * installed. */
-typedef struct { uint16_t code; uint8_t jt, jf; uint32_t k; } tf_insn;
-typedef struct { uint16_t len; uint16_t pad[3]; uint64_t filter; } tf_fprog;
-
-test(hosted_seccomp_filter_fake_accept)
+/* Unsupported filters must not appear to have installed successfully. */
+test(hosted_seccomp_reports_unsupported)
 {
 	th_view v;
-	th_setup(&v, "ctl-seccomp-accept");
-
-	tf_insn  kill_insn = { 0x06, 0, 0, 0x80000000u };
-	tf_fprog fprog = { 1, {0, 0, 0}, (uint64_t)(uintptr_t)&kill_insn };
-
-	/* seccomp(2) and the prctl spelling both fake-accept. */
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 1 /*SET_MODE_FILTER*/, 0,
-			   &fprog, 0, 0, 0), 0);
-	test_int_eq(th_sys(TAWC_SYS_prctl, 22 /*PR_SET_SECCOMP*/,
-			   2 /*SECCOMP_MODE_FILTER*/, &fprog, 0, 0, 0), 0);
-	/* Strict mode too (seccomp op 0, prctl mode 1). */
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 0, 0, NULL, 0, 0, 0), 0);
-	test_int_eq(th_sys(TAWC_SYS_prctl, 22, 1, 0, 0, 0, 0), 0);
-
-	th_teardown(&v);
-}
-
-test(hosted_seccomp_filter_validation_shapes)
-{
-	th_view v;
-	th_setup(&v, "ctl-seccomp-shapes");
-
-	tf_insn  kill_insn = { 0x06, 0, 0, 0x80000000u };
-	tf_fprog fprog = { 1, {0, 0, 0}, (uint64_t)(uintptr_t)&kill_insn };
-
-	/* NULL-fprog support probe (systemd's pattern) must EFAULT. */
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 1, 0, NULL, 0, 0, 0),
-		    TAWC_EFAULT);
-	/* Unreadable insn array EFAULTs like the kernel's copy would. */
-	tf_fprog bad_ptr = { 4096, {0, 0, 0}, 0 };
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 1, 0, &bad_ptr, 0, 0, 0),
-		    TAWC_EFAULT);
-	/* len 0 / len > BPF_MAXINSNS. */
-	tf_fprog zero_len = { 0, {0, 0, 0}, (uint64_t)(uintptr_t)&kill_insn };
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 1, 0, &zero_len, 0, 0, 0),
-		    TAWC_EINVAL);
-	tf_fprog too_long = { 4097, {0, 0, 0}, (uint64_t)(uintptr_t)&kill_insn };
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 1, 0, &too_long, 0, 0, 0),
-		    TAWC_EINVAL);
-	/* Unknown flag bits. */
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 1, 0x1000, &fprog, 0, 0, 0),
-		    TAWC_EINVAL);
-	/* TSYNC + NEW_LISTENER without TSYNC_ESRCH is the kernel's
-	 * invalid combo; NEW_LISTENER alone is our one honest refusal
-	 * (success would promise a notification fd we can't mint). */
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 1, 0x09, &fprog, 0, 0, 0),
-		    TAWC_EINVAL);
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 1, 0x08, &fprog, 0, 0, 0),
-		    TAWC_EPERM);
-	/* Strict mode with nonzero flags/uargs, bad prctl mode. */
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 0, 1, NULL, 0, 0, 0),
-		    TAWC_EINVAL);
-	test_int_eq(th_sys(TAWC_SYS_seccomp, 0, 0, &fprog, 0, 0, 0),
-		    TAWC_EINVAL);
-	test_int_eq(th_sys(TAWC_SYS_prctl, 22, 3, 0, 0, 0, 0),
-		    TAWC_EINVAL);
-
+	th_setup(&v, "ctl-seccomp-unsupported");
+	for (int op = 0; op < 4; ++op)
+		for (int flags = 0; flags < 16; ++flags)
+			test_int_eq(th_sys(TAWC_SYS_seccomp, op, flags, NULL, 0, 0, 0),
+			            TAWC_ENOSYS);
+	for (int mode = 0; mode < 4; ++mode)
+		test_int_eq(th_sys(TAWC_SYS_prctl, 22, mode, NULL, 0, 0, 0), TAWC_EINVAL);
 	th_teardown(&v);
 }

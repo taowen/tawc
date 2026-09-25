@@ -348,7 +348,7 @@ tawcroot_path_result tawcroot_path_translate_with_ctx(
 	/* Bind first. If matched, the bind src takes over — skip memo
 	 * and resolver, both of which are rootfs-view-only. */
 	matched = route_through_binds(&r, out_suffix, ctx->binds, ctx->n_binds);
-	if (r.base_fd != ctx->rootfs_base_fd) goto done;
+	if (r.base_fd != ctx->rootfs_base_fd) goto resolve_bind;
 
 	/* Well-known-symlink rewrite. If the rewrite kicks in, the suffix
 	 * may now contain `..`/`.` from the target, so re-fold. Bound
@@ -380,7 +380,24 @@ tawcroot_path_result tawcroot_path_translate_with_ctx(
 	 * file where the bind has a dir) drives resolution against the
 	 * wrong tree. */
 	matched = route_through_binds(&r, out_suffix, ctx->binds, ctx->n_binds);
-	if (r.base_fd != ctx->rootfs_base_fd) goto done;
+	if (r.base_fd != ctx->rootfs_base_fd) goto resolve_bind;
+	goto resolve;
+
+resolve_bind:
+	/* A bind replaces storage, not the guest's symlink namespace.
+	 * Restore the guest prefix before the bind-aware oracle walks it. */
+	if (!ctx->oracle || tawc_streq(matched->src, "/proc")) goto done;
+	{
+		char *tmp = scratch->buf[2];
+		size_t n = 0;
+		long e = tawc_str_append(tmp, TAWCROOT_PATH_SCRATCH_SIZE, &n, matched->dst);
+		if (!e && out_suffix[0]) e = tawc_str_append(tmp, TAWCROOT_PATH_SCRATCH_SIZE, &n, "/");
+		if (!e) e = tawc_str_append(tmp, TAWCROOT_PATH_SCRATCH_SIZE, &n, out_suffix);
+		if (e || n >= out_cap) { r.err = TAWC_ENAMETOOLONG; return r; }
+		memcpy(out_suffix, tmp, n + 1);
+		r.base_fd = ctx->rootfs_base_fd;
+	}
+resolve:
 
 	/* Manual symlink resolver. See path_resolve.h banner. Token
 	 * detection is enabled only when a store is open — without one,

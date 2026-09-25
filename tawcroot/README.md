@@ -1,5 +1,12 @@
 tawcroot — fast rootless chroot via systrap
 
+The default guest identity is virtual root. `--host-user` uses the launching
+process's UID and GID instead, for desktop sessions and Unix socket credential
+authentication. Neither mode grants Android privileges. The ARM64 namespace
+startup model is an incomplete compatibility layer, not kernel isolation.
+Additional application seccomp filters report unsupported. Android's own
+sandbox remains active; tawcroot is not a replacement security boundary.
+
 Layout:
 - `src/`, `include/`              — production C sources (no libc, freestanding)
 - `tests/{unit,handler,integration}/` — cleat-orchestrated test suite

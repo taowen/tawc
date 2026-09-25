@@ -139,6 +139,7 @@
 # define TAWC_SYS_write           1
 # define TAWC_SYS_close           3
 # define TAWC_SYS_getpid         39
+# define TAWC_SYS_clone          56
 # define TAWC_SYS_uname          63
 # define TAWC_SYS_getppid       110
 # define TAWC_SYS_getuid        102

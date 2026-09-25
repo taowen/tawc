@@ -513,6 +513,8 @@ void tawcroot_loader_exec_child(int state_fd, const char *platform)
 	 * a guest that dropped privileges must not resurface as fake
 	 * root in the exec'd image. */
 	if (st.has_identity) tawcroot_identity_load(&st.identity);
+	tawcroot_namespace = st.namespaces;
+	tawcroot_namespace_restore();
 
 	/* Don't bother closing — we're about to hand control to the guest
 	 * and any leftover fd dies on the next execve. */

@@ -38,6 +38,7 @@
 #include "errno_neg.h"
 #include "fdtab.h"
 #include "identity.h"
+#include "namespace.h"
 #include "io.h"
 #include "linkstore.h"
 #include "path.h"
@@ -63,6 +64,15 @@ enum { SHM_PEEK_NONE = 0, SHM_PEEK_NAME = 1, SHM_PEEK_DIR = 2 };
 static int classify_shm(const char *local_path, const char **name_out)
 {
 	*name_out = tawcroot_shm_match(local_path);
+	if (*name_out || tawcroot_shm_is_dir(local_path)) {
+		/* An explicit host bind owns the complete filesystem namespace,
+		 * including directory walks, linkat and independent processes.
+		 * Do not split it between real files and the private memfd table. */
+		for (size_t i = 0; i < tawcroot_n_binds; ++i)
+			if (tawcroot_binds[i].active &&
+			    tawc_streq(tawcroot_binds[i].dst, "dev/shm"))
+				return SHM_PEEK_NONE;
+	}
 	if (*name_out) return SHM_PEEK_NAME;
 	if (tawcroot_shm_is_dir(local_path)) return SHM_PEEK_DIR;
 	return SHM_PEEK_NONE;
@@ -243,6 +253,8 @@ static long handle_openat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	char *path = scratch->buf[0];
 	long fe = fetch_guest_path(scratch, 0, gpath);
 	if (fe) return fe;
+	long nsfd = tawcroot_namespace_open(path, flags);
+	if (nsfd != TAWC_ENOSYS) return nsfd;
 
 	/* /proc/self/maps and /proc/<our-pid>/maps: synthesize a shadow fd
 	 * backed by a memfd containing the kernel's maps output with each
@@ -501,6 +513,7 @@ static unsigned long fd_object_nlink(int fd, unsigned int mode,
  * output layout — bionic's `struct stat` is defined to match. */
 static void decorate_stat(struct stat *st)
 {
+	if (tawcroot_identity_euid() != 0 && !(st->st_mode & 06000)) return;
 	st->st_uid = 0;
 	st->st_gid = 0;
 }
@@ -1005,6 +1018,7 @@ static long handle_faccessat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
 	long fe = fetch_guest_path(scratch, 0, gpath);
 	if (fe) return fe;
+	if (!mode && tawcroot_namespace_probe(scratch->buf[0])) return 0;
 
 	{
 		const char *shm_name;
@@ -1070,13 +1084,12 @@ static long handle_chdir(const tawcroot_syscall_args *args, ucontext_t *uc)
 		return TAWC_RAW(TAWC_SYS_fchdir, t.fd, 0, 0, 0, 0, 0);
 	}
 
-	int flags = O_DIRECTORY | O_PATH | O_CLOEXEC;
-	long fd = tawc_openat(t.fd, t.path, flags, 0);
-	if (fd < 0) return fd;
-
-	long rv = TAWC_RAW(TAWC_SYS_fchdir, fd, 0, 0, 0, 0, 0);
-	tawc_close((int)fd);
-	return rv;
+	/* chdir does not allocate a descriptor on Linux. Keep that property
+	 * when a sandbox has exhausted or lowered RLIMIT_NOFILE. */
+	char *anchored = scratch->buf[2];
+	e = tawc_proc_fd_path(anchored, TAWCROOT_PATH_SCRATCH_SIZE, t.fd, t.path);
+	if (e < 0) return e;
+	return TAWC_RAW(TAWC_SYS_chdir, (long)anchored, 0, 0, 0, 0, 0);
 }
 
 /* getcwd reverse-translation. Kernel returns the host cwd; we reverse-
@@ -1204,6 +1217,47 @@ static long handle_mknodat(const tawcroot_syscall_args *args, ucontext_t *uc)
  *
  * The swallow is gated on virtual euid == 0: a guest that genuinely
  * dropped privileges should see real permission errors. */
+static long handle_fchmodat2(const tawcroot_syscall_args *args, ucontext_t *uc)
+{
+	(void)uc;
+	int flags = (int)args->d;
+	if (flags & ~(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)) return TAWC_EINVAL;
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	long e = fetch_guest_path(scratch, 0, (const char *)args->b);
+	if (e) return e;
+	int fd = (int)args->a;
+	int owned = 0;
+	if (scratch->buf[0][0] || fd == AT_FDCWD) {
+		if (!scratch->buf[0][0]) {
+			if (!(flags & AT_EMPTY_PATH)) return TAWC_ENOENT;
+			scratch->buf[0][0] = '.'; scratch->buf[0][1] = 0;
+		}
+		struct fs_path t;
+		e = translate_local(scratch, 0, fd,
+			(flags & AT_SYMLINK_NOFOLLOW) ? TAWCROOT_PATH_NOFOLLOW : TAWCROOT_PATH_FOLLOW,
+			TAWCROOT_PATH_INTENT_WRITE, &t);
+		if (e) return e;
+		long opened = tawc_openat(t.fd, t.is_root ? "." : t.path,
+			O_PATH | O_NOFOLLOW | O_CLOEXEC, 0);
+		if (opened < 0) return opened;
+		fd = (int)opened;
+		owned = 1;
+	} else if (!(flags & AT_EMPTY_PATH)) return TAWC_ENOENT;
+	else if (tawcroot_fd_is_reserved(fd)) return TAWC_EBADF;
+	struct stat st;
+	long result = TAWC_RAW(TAWC_SYS_fstat, fd, (long)&st, 0, 0, 0, 0);
+	if (!result && (st.st_mode & S_IFMT) == S_IFLNK) result = TAWC_EOPNOTSUPP;
+	if (!result && fd_in_ro_bind(fd, 1)) result = TAWC_EROFS;
+	if (!result) {
+		char path[64]; size_t n = 0;
+		result = tawc_str_append(path, sizeof path, &n, "/proc/self/fd/");
+		if (!result) result = tawc_str_append_dec(path, sizeof path, &n, fd);
+		if (!result) result = TAWC_RAW(TAWC_SYS_fchmodat, AT_FDCWD, (long)path, args->c, 0, 0, 0);
+	}
+	if (owned) tawc_close(fd);
+	return result;
+}
+
 static long handle_fchmodat(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
@@ -1619,8 +1673,10 @@ static long finish_statx(long rv, struct statx *local,
 			 struct statx *guest_out)
 {
 	if (rv != 0) return rv;
-	local->stx_uid = 0;
-	local->stx_gid = 0;
+	if (tawcroot_identity_euid() == 0 || (local->stx_mode & 06000)) {
+		local->stx_uid = 0;
+		local->stx_gid = 0;
+	}
 	local->stx_mask |= STATX_UID | STATX_GID;
 	long ce = tawc_copy_to_guest(guest_out, local, sizeof *local);
 	return ce < 0 ? ce : 0;
@@ -2643,13 +2699,10 @@ void tawcroot_fs_register(void)
 	tawcroot_dispatch_install(TAWC_SYS_fstatat,     handle_newfstatat);
 	tawcroot_dispatch_install(TAWC_SYS_fstat,       handle_fstat);
 	tawcroot_dispatch_install(TAWC_SYS_readlinkat,  handle_readlinkat);
-	/* openat2/fchmodat2: ENOSYS so callers fall back to the *at
-	 * variants we translate; untrapped they'd resolve against the
-	 * HOST view (BPF default is RET_ALLOW). The fallback is universal:
-	 * every openat2/fchmodat2 caller handles ENOSYS because older
-	 * kernels lack the syscalls. */
+	/* openat2 returns ENOSYS for the caller's older-kernel path.
+	 * fchmodat2 is translated here, including O_PATH and empty paths. */
 	tawcroot_dispatch_install(TAWC_SYS_openat2,     tawcroot_deny_enosys);
-	tawcroot_dispatch_install(TAWC_SYS_fchmodat2,   tawcroot_deny_enosys);
+	tawcroot_dispatch_install(TAWC_SYS_fchmodat2,   handle_fchmodat2);
 	tawcroot_dispatch_install(TAWC_SYS_inotify_add_watch,
 				  handle_inotify_add_watch);
 	/* Trap both faccessat (NR 269 aarch64 / 48 x86_64) and the

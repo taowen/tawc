@@ -3,12 +3,9 @@
  * tawcroot's own invariants.
  *
  * Surface (notes/tawcroot/sigsys-handler.md §"Guest signal/seccomp control"):
- *   - `seccomp(2)` / `prctl(PR_SET_SECCOMP)`: fake-accept. Validate
- *     the arguments exactly as the kernel would (same EFAULT/EINVAL
- *     shapes, so feature probes keep working), then install nothing
- *     and return success. We can't honestly stack the guest's filter
- *     on ours, and daemons that treat sandbox setup as fatal (sshd
- *     since mid-2026) can't take an -EPERM either.
+ *   - `seccomp(2)` / `prctl(PR_SET_SECCOMP)`: report unsupported.
+ *     Never claim to have installed an application filter. Programs that
+ *     require one rather than accepting capability failure cannot run.
  *   - `rt_sigaction(SIGSYS, ...)`: virtualize. The guest's intended
  *     disposition lives in a shadow buffer; reads/writes of SIGSYS
  *     hit the shadow and never the kernel. The real kernel disposition
@@ -70,101 +67,19 @@
  * (Earlier revs oversized to 64; over-read past the guest struct in
  * both directions, review finding B2.) */
 
-/* seccomp(2) filter-flag bits the kernel knows (kernel/seccomp.c, as of
- * 6.x). Unknown bits get the kernel's -EINVAL. */
-#define TAWC_SECCOMP_FLAG_TSYNC        0x01UL
-#define TAWC_SECCOMP_FLAG_NEW_LISTENER 0x08UL
-#define TAWC_SECCOMP_FLAG_TSYNC_ESRCH  0x10UL
-#define TAWC_SECCOMP_FLAG_KNOWN        0x3fUL
-#define TAWC_BPF_MAXINSNS              4096
-
-/* Fake-accept a guest SECCOMP_SET_MODE_FILTER install. We can't honestly
- * stack the guest's BPF filter on top of ours: it could KILL_PROCESS our
- * raw_syscall stub, return ERRNO before our path-translation trap, or
- * RET_TRAP into a guest-owned SIGSYS path that tawcroot virtualizes away.
- * -EPERM is no longer viable either: sshd (openssh-portable 7ab700f170,
- * mid-2026) treats any sandbox-install failure as fatal, killing every
- * connection preauth. So: validate the arguments with the kernel's exact
- * EFAULT/EINVAL shapes — NULL-fprog support probes (systemd et al.
- * expect -EFAULT) must keep working — then install nothing and report
- * success. The guest-visible world stays consistent: PR_GET_SECCOMP
- * passes through and truthfully reports filter mode (ours).
- *
- * Accepted divergence: the insn array is checked for readability, not
- * run through the BPF verifier — a malformed program "installs" where
- * the kernel would EINVAL (notes/tawcroot/status.md). */
-static long filter_fake_accept(const void *uargs)
-{
-	struct {
-		uint16_t len;      /* struct sock_fprog, 64-bit layout */
-		uint16_t pad[3];
-		uint64_t filter;
-	} fprog;
-	if (tawc_copy_from_guest(&fprog, sizeof fprog, uargs) < 0)
-		return TAWC_EFAULT;
-	if (fprog.len == 0 || fprog.len > TAWC_BPF_MAXINSNS)
-		return TAWC_EINVAL;
-	/* Readability probe over the whole insn array (8 bytes per
-	 * sock_filter), chunked to keep the handler stack small. A hole
-	 * mid-array EFAULTs here just as the kernel's copy would. */
-	unsigned char scratch[256];
-	uint64_t total = (uint64_t)fprog.len * 8;
-	for (uint64_t off = 0; off < total; off += sizeof scratch) {
-		uint64_t n = total - off;
-		if (n > sizeof scratch) n = sizeof scratch;
-		if (tawc_copy_from_guest(scratch, (size_t)n,
-				(const void *)(uintptr_t)(fprog.filter + off)) < 0)
-			return TAWC_EFAULT;
-	}
-	return 0;
-}
-
-/* SECCOMP_GET_ACTION_AVAIL and other read-only ops pass through to
- * the kernel verbatim because they don't change state. */
+/* Guest filters cannot be stacked safely over the runtime's SIGSYS routing.
+ * Match ARLinux's existing capability contract rather than claiming that an
+ * application filter was installed. Android's filter remains active. */
 static long handle_seccomp(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
-	(void)uc;
-	unsigned int  op    = (unsigned int)args->a;
-	unsigned long flags = (unsigned long)args->b;
-	const void   *uargs = (const void *)(uintptr_t)args->c;
-
-	if (op == 0 /*SECCOMP_SET_MODE_STRICT*/) {
-		if (flags != 0 || uargs != NULL) return TAWC_EINVAL;
-		return 0;  /* fake accept */
-	}
-	if (op == 1 /*SECCOMP_SET_MODE_FILTER*/) {
-		if (flags & ~TAWC_SECCOMP_FLAG_KNOWN) return TAWC_EINVAL;
-		if ((flags & TAWC_SECCOMP_FLAG_TSYNC) &&
-		    (flags & TAWC_SECCOMP_FLAG_NEW_LISTENER) &&
-		    !(flags & TAWC_SECCOMP_FLAG_TSYNC_ESRCH))
-			return TAWC_EINVAL;
-		/* User-notification needs a real notif fd the supervisor
-		 * polls; success without one would wedge the caller. Honest
-		 * refusal — the one seccomp shape we still deny. */
-		if (flags & TAWC_SECCOMP_FLAG_NEW_LISTENER)
-			return TAWC_EPERM;
-		return filter_fake_accept(uargs);
-	}
-	/* SECCOMP_GET_ACTION_AVAIL = 2, SECCOMP_GET_NOTIF_SIZES = 3, etc.
-	 * Read-only — pass through. */
-	return TAWC_RAW(TAWC_SYS_seccomp, args->a, args->b, args->c,
-			args->d, args->e, 0);
+	(void)args; (void)uc;
+	return TAWC_ENOSYS;
 }
 
 static long handle_prctl(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
-	int op = (int)args->a;
-	/* PR_SET_SECCOMP — same fake-accept as handle_seccomp above.
-	 * arg2 is the legacy mode numbering: 1 = strict, 2 = filter. */
-	if (op == PR_SET_SECCOMP) {
-		unsigned long mode = (unsigned long)args->b;
-		if (mode == 1) return 0;  /* fake accept, strict */
-		if (mode == 2)
-			return filter_fake_accept(
-				(const void *)(uintptr_t)args->c);
-		return TAWC_EINVAL;
-	}
+	if ((int)args->a == PR_SET_SECCOMP) return TAWC_EINVAL;
 	return TAWC_RAW(TAWC_SYS_prctl, args->a, args->b, args->c,
 			args->d, args->e, 0);
 }
@@ -179,7 +94,17 @@ static long handle_rt_sigaction(const tawcroot_syscall_args *args,
 	size_t sigsetsize  = (size_t)args->d;
 
 	if (sig != SIGSYS) {
-		return TAWC_RAW(TAWC_SYS_rt_sigaction, args->a, args->b,
+		/* A handler may invoke translated syscalls, including async-signal-safe
+		 * write(). Its sa_mask must not block our reserved trap signal. This
+		 * is separate from rt_sigprocmask's thread-mask virtualization. */
+		uint64_t action[TAWC_KERN_SIGACTION_SIZE / sizeof(uint64_t)];
+		if (act && sigsetsize == 8) {
+			long e = tawc_copy_from_guest(action, sizeof action, act);
+			if (e < 0) return e;
+			action[3] &= ~SIGSYS_BIT;
+			act = action;
+		}
+		return TAWC_RAW(TAWC_SYS_rt_sigaction, args->a, (long)act,
 				args->c, args->d, 0, 0);
 	}
 
@@ -469,6 +394,5 @@ void tawcroot_control_register(void)
 	tawcroot_dispatch_install(TAWC_SYS_pivot_root,      tawcroot_deny_eperm);
 	tawcroot_dispatch_install(TAWC_SYS_mount,           tawcroot_deny_eperm);
 	tawcroot_dispatch_install(TAWC_SYS_umount2,         tawcroot_deny_eperm);
-	tawcroot_dispatch_install(TAWC_SYS_unshare,         tawcroot_deny_eperm);
 	tawcroot_dispatch_install(TAWC_SYS_setns,           tawcroot_deny_eperm);
 }

@@ -62,6 +62,7 @@
 #include "errno_neg.h"
 #include "fdtab.h"
 #include "io.h"
+#include "identity.h"
 #include "path.h"
 #include "path_scratch.h"
 #include "raw_sys.h"
@@ -856,7 +857,7 @@ static long handle_getsockopt(const tawcroot_syscall_args *args, ucontext_t *uc)
 	if (rv < 0) return rv;
 
 	uint32_t real_uid = (uint32_t)tawc_getuid();
-	if (klen >= 8 && cred.uid == real_uid) {
+	if (klen >= 8 && cred.uid == real_uid && tawcroot_identity_euid() == 0) {
 		cred.uid = 0;
 		if (klen >= sizeof cred) cred.gid = 0;
 	}

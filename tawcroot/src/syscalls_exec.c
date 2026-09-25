@@ -19,9 +19,6 @@
  *     itself caps argv strings at MAX_ARG_STRLEN (32 pages) so most
  *     normal usage fits comfortably.
  *
- *   - execveat's AT_SYMLINK_NOFOLLOW flag is intentionally not emulated
- *     yet; callers get -ENOSYS rather than a silently-followed symlink.
- *     See notes/tawcroot/status.md §"Accepted syscall-fidelity divergences".
  */
 
 #include <stddef.h>
@@ -226,25 +223,35 @@ static long handle_execve(const tawcroot_syscall_args *args, ucontext_t *uc)
 /* execveat(dirfd, path, argv, envp, flags). Handles the common fexecve(3)
  * shape: execveat(fd, "", argv, envp, AT_EMPTY_PATH), plus dirfd-relative
  * non-empty paths that can be reverse-translated into the rootfs view. */
+static long execveat_path(const char *path, const tawcroot_syscall_args *args)
+{
+	if ((int)args->e & AT_SYMLINK_NOFOLLOW) {
+		static char suffix[MAX_STR];
+		tawcroot_path_result r = tawcroot_path_translate(path, suffix,
+			sizeof suffix, TAWCROOT_PATH_NOFOLLOW, TAWCROOT_PATH_INTENT_READ);
+		if (r.err) return r.err;
+		char target;
+		long n = tawc_readlinkat(r.base_fd, suffix[0] ? suffix : ".", &target, 1);
+		if (n >= 0) return TAWC_ELOOP;
+		if (n != TAWC_EINVAL) return n;
+	}
+	return do_exec_path(path, (char *const *)args->c, (char *const *)args->d);
+}
+
 static long execveat_locked(const tawcroot_syscall_args *args)
 {
 	int dirfd = (int)args->a;
 	int flags = (int)args->e;
 
 	if (flags & ~(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)) return TAWC_EINVAL;
-	if (flags & AT_SYMLINK_NOFOLLOW) return TAWC_ENOSYS;
-	if (dirfd == AT_FDCWD)
-		return do_exec((const void *)args->b, (char *const *)args->c,
-		               (char *const *)args->d);
 
 	static char guest_path[MAX_STR];
 	long pn = tawc_copy_string_from_guest(guest_path, sizeof guest_path,
 	                                      (const char *)args->b);
 	if (pn < 0) return pn;
 
-	if (guest_path[0] == '/') {
-		return do_exec_path(guest_path, (char *const *)args->c,
-		                    (char *const *)args->d);
+	if (guest_path[0] == '/' || (dirfd == AT_FDCWD && guest_path[0])) {
+		return execveat_path(guest_path, args);
 	}
 
 	if (guest_path[0] == 0 && !(flags & AT_EMPTY_PATH))
@@ -266,8 +273,7 @@ static long execveat_locked(const tawcroot_syscall_args *args)
 		if (ar < 0) return ar;
 	}
 
-	return do_exec_path(resolved, (char *const *)args->c,
-	                    (char *const *)args->d);
+	return execveat_path(resolved, args);
 }
 
 static long handle_execveat(const tawcroot_syscall_args *args, ucontext_t *uc)

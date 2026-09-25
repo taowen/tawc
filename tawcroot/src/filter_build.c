@@ -16,6 +16,7 @@
 
 #include <linux/filter.h>
 #include <linux/seccomp.h>
+#include <linux/sched.h>
 
 #include "errno_neg.h"
 #include "filter_build.h"
@@ -84,6 +85,17 @@ long tawcroot_build_filter(struct sock_filter *prog, size_t prog_cap,
 	EMIT_OR_FAIL(TAWC_BPF_S(BPF_LD | BPF_W | BPF_ABS, 0));
 
 	for (size_t t = 0; t < n_traps; t++) {
+		/* Never route shared-VM thread stack switches through a C handler. */
+		if (trap_nrs[t] == TAWC_SYS_clone) {
+			EMIT_OR_FAIL(TAWC_BPF_J(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)trap_nrs[t], 0, 4));
+			EMIT_OR_FAIL(TAWC_BPF_S(BPF_LD | BPF_W | BPF_ABS, 16));
+			EMIT_OR_FAIL(TAWC_BPF_J(BPF_JMP | BPF_JSET | BPF_K,
+				CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET, 0, 1));
+			EMIT_OR_FAIL(TAWC_BPF_S(BPF_RET | BPF_K, SECCOMP_RET_TRAP));
+			EMIT_OR_FAIL(TAWC_BPF_S(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
+			EMIT_OR_FAIL(TAWC_BPF_S(BPF_LD | BPF_W | BPF_ABS, 0));
+			continue;
+		}
 		if (trap_nrs[t] == TAWC_SYS_close && reserved_fd_floor > 0) {
 			/* not-close jf skips: LD args, JGE, RET TRAP,
 			 * RET ALLOW = 4, landing on the LD-nr reload. */

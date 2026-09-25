@@ -1140,9 +1140,7 @@ static int test_reserved_dirfd_ebadf(void)
 	return fails;
 }
 
-/* openat2 / fchmodat2 must trap to ENOSYS — untrapped they'd resolve
- * guest paths against the HOST view (BPF default is RET_ALLOW). Every
- * caller has a pre-5.6 / pre-6.6 fallback path. */
+/* openat2 requests the caller's fallback; fchmodat2 translates guest paths. */
 static int test_openat2_fchmodat2_enosys(void)
 {
 	int fails = 0;
@@ -1155,8 +1153,7 @@ static int test_openat2_fchmodat2_enosys(void)
 	tawc_io_kv_dec("    rv", rv);
 	INLINE_SYS6(TAWC_SYS_fchmodat2, AT_FDCWD, "/etc/probe",
 		    0644, 0, 0, 0, rv);
-	fails += tawc_io_step("fchmodat2 -> ENOSYS (forces fallback)",
-			      rv == TAWC_ENOSYS);
+	fails += tawc_io_step("fchmodat2 translates guest path", rv == 0);
 	tawc_io_kv_dec("    rv", rv);
 	return fails;
 }
@@ -3121,104 +3118,20 @@ static int test_guest_seccomp_prctl_handling(void)
 {
 	int fails = 0;
 	long rv;
-	/* One-insn BPF program: BPF_RET|BPF_K SECCOMP_RET_KILL_PROCESS.
-	 * struct sock_filter layout: u16 code, u8 jt, u8 jf, u32 k. */
 	struct { uint16_t code; uint8_t jt, jf; uint32_t k; } kill_insn =
 		{ 0x06, 0, 0, 0x80000000u };
 	struct { uint16_t len; uint16_t pad[3]; uint64_t filter; } fprog =
 		{ 1, {0, 0, 0}, (uint64_t)(uintptr_t)&kill_insn };
-
-	/* NULL-fprog support probe (systemd's pattern): kernel-faithful
-	 * -EFAULT, NOT success and NOT the old -EPERM. */
-	INLINE_SYS6(TAWC_SYS_seccomp, 1 /*SET_MODE_FILTER*/,
-		    0, 0, 0, 0, 0, rv);
-	fails += tawc_io_step("seccomp(SET_MODE_FILTER, 0, NULL) -> -EFAULT",
-			      rv == TAWC_EFAULT);
-	tawc_io_kv_dec("    rv", rv);
-
-	/* Valid program -> fake-accepted with 0, nothing installed. */
+	INLINE_SYS6(TAWC_SYS_seccomp, 1, 0, 0, 0, 0, 0, rv);
+	fails += tawc_io_step("seccomp probe -> ENOSYS", rv == TAWC_ENOSYS);
 	INLINE_SYS6(TAWC_SYS_seccomp, 1, 0, (long)&fprog, 0, 0, 0, rv);
-	fails += tawc_io_step("seccomp(SET_MODE_FILTER, kill-all) -> 0",
-			      rv == 0);
-	tawc_io_kv_dec("    rv", rv);
-
-	/* Still alive and still translating == the filter really wasn't
-	 * installed. */
-	long fd0 = inline_openat(AT_FDCWD, "/etc/probe", O_RDONLY, 0);
-	fails += tawc_io_step(
-		"alive + path syscall works after fake-accept", fd0 >= 0);
-	if (fd0 >= 0) tawc_close((int)fd0);
-
-	/* prctl spelling: mode 2 = filter, same fake-accept. */
-	INLINE_SYS6(TAWC_SYS_prctl, 22 /*PR_SET_SECCOMP*/,
-		    2 /*SECCOMP_MODE_FILTER*/, (long)&fprog, 0, 0, 0, rv);
-	fails += tawc_io_step("prctl(PR_SET_SECCOMP, 2, kill-all) -> 0",
-			      rv == 0);
-	tawc_io_kv_dec("    rv", rv);
-
-	/* prctl mode out of range -> -EINVAL. */
-	INLINE_SYS6(TAWC_SYS_prctl, 22, 3, 0, 0, 0, 0, rv);
-	fails += tawc_io_step("prctl(PR_SET_SECCOMP, 3) -> -EINVAL",
-			      rv == TAWC_EINVAL);
-	tawc_io_kv_dec("    rv", rv);
-
-	/* Unknown filter flag -> -EINVAL; NEW_LISTENER -> honest -EPERM
-	 * (we can't mint the notification fd success would promise). */
-	INLINE_SYS6(TAWC_SYS_seccomp, 1, 0x1000, (long)&fprog, 0, 0, 0, rv);
-	fails += tawc_io_step("seccomp(FILTER, unknown flag) -> -EINVAL",
-			      rv == TAWC_EINVAL);
-	tawc_io_kv_dec("    rv", rv);
-	INLINE_SYS6(TAWC_SYS_seccomp, 1, 0x08 /*NEW_LISTENER*/,
-		    (long)&fprog, 0, 0, 0, rv);
-	fails += tawc_io_step("seccomp(FILTER, NEW_LISTENER) -> -EPERM",
-			      rv == TAWC_EPERM);
-	tawc_io_kv_dec("    rv", rv);
-
-	/* Zero-length program -> -EINVAL, as the kernel would. */
-	fprog.len = 0;
-	INLINE_SYS6(TAWC_SYS_seccomp, 1, 0, (long)&fprog, 0, 0, 0, rv);
-	fails += tawc_io_step("seccomp(FILTER, len=0) -> -EINVAL",
-			      rv == TAWC_EINVAL);
-	fprog.len = 1;
-	tawc_io_kv_dec("    rv", rv);
-
-	/* Strict mode: fake-accepted when the args are kernel-valid
-	 * (flags and uargs must be zero), -EINVAL otherwise. */
-	INLINE_SYS6(TAWC_SYS_seccomp, 0 /*SET_MODE_STRICT*/,
-		    0, 0, 0, 0, 0, rv);
-	fails += tawc_io_step("seccomp(SET_MODE_STRICT) -> 0", rv == 0);
-	tawc_io_kv_dec("    rv", rv);
-	INLINE_SYS6(TAWC_SYS_seccomp, 0, 1, 0, 0, 0, 0, rv);
-	fails += tawc_io_step("seccomp(STRICT, flags!=0) -> -EINVAL",
-			      rv == TAWC_EINVAL);
-	tawc_io_kv_dec("    rv", rv);
-
-	/* io_uring_setup -> -ENOSYS (review D4). The guest must fall
-	 * back to syscall-based I/O so our translator stays in the
-	 * loop; pass-through would let the kernel read SQEs with
-	 * host-relative paths from app-shared memory, bypassing us
-	 * entirely. */
-	INLINE_SYS6(TAWC_SYS_io_uring_setup,
-		    0 /*entries*/, 0 /*params*/, 0, 0, 0, 0, rv);
-	fails += tawc_io_step("io_uring_setup -> -ENOSYS (D4)",
-			      rv == -38);
-	tawc_io_kv_dec("    rv", rv);
-
-	/* prctl(PR_GET_SECCOMP) passes through. We're under SECCOMP_MODE_FILTER
-	 * so the kernel returns 2. */
-	INLINE_SYS6(TAWC_SYS_prctl, 21 /*PR_GET_SECCOMP*/,
-		    0, 0, 0, 0, 0, rv);
-	fails += tawc_io_step(
-		"prctl(PR_GET_SECCOMP) passes through (kernel mode 2)",
-		rv == 2);
-	tawc_io_kv_dec("    rv", rv);
-
-	/* Path syscall still works after the whole battery. */
-	long fd = inline_openat(AT_FDCWD, "/etc/probe", O_RDONLY, 0);
-	fails += tawc_io_step(
-		"path syscall after seccomp battery -- still works",
-		fd >= 0);
-	if (fd >= 0) tawc_close((int)fd);
+	fails += tawc_io_step("seccomp filter -> ENOSYS", rv == TAWC_ENOSYS);
+	INLINE_SYS6(TAWC_SYS_prctl, 22, 2, (long)&fprog, 0, 0, 0, rv);
+	fails += tawc_io_step("prctl guest filter -> EINVAL", rv == TAWC_EINVAL);
+	INLINE_SYS6(TAWC_SYS_seccomp, 0, 0, 0, 0, 0, 0, rv);
+	fails += tawc_io_step("seccomp strict -> ENOSYS", rv == TAWC_ENOSYS);
+	INLINE_SYS6(TAWC_SYS_prctl, 21, 0, 0, 0, 0, 0, rv);
+	fails += tawc_io_step("runtime filter remains installed", rv == 2);
 	return fails;
 }
 

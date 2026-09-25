@@ -55,7 +55,7 @@ HOST_BASE := 0x10000000
 # Diagnostics are poor (trap PC + addr2line only); if a trap fires,
 # rebuild with EXTRA_CFLAGS='-fsanitize-undefined-trap-on-error' off
 # the table and reproduce hosted instead, where UBSan reports nicely.
-TAWC_UBSAN := -fsanitize=undefined -fsanitize-trap=all -fno-sanitize=alignment
+TAWC_UBSAN := -fsanitize=undefined -fsanitize-undefined-trap-on-error -fno-sanitize=alignment
 
 TAWC_CFLAGS := \
     -O2 -fno-strict-aliasing -fno-stack-protector -fvisibility=hidden \
@@ -68,7 +68,7 @@ TAWC_CFLAGS := \
 TAWC_LDFLAGS := \
     -static -nostdlib -nostartfiles \
     -Wl,--build-id=none -Wl,-z,noexecstack -Wl,-z,relro \
-    -Wl,--image-base=$(HOST_BASE)
+    -fuse-ld=bfd -Wl,-Ttext-segment=$(HOST_BASE)
 
 # The handler frame cap (stack_budget.h) is enforced on the prod
 # objects; the testhost build compiles the same sources plus smoke/test
@@ -133,6 +133,7 @@ TESTS_LDFLAGS := $(TESTS_SANFLAGS) -lm -pthread
 # --- source lists ---
 
 PROD_C := \
+    $(SRC_T)/src/namespace.c \
     $(SRC_T)/src/main.c \
     $(SRC_T)/src/io.c \
     $(SRC_T)/src/strings.c \

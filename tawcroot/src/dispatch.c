@@ -13,6 +13,7 @@
 #include "errno_neg.h"
 #include "fdtab.h"
 #include "identity.h"
+#include "namespace.h"
 #include "io.h"
 #include "raw_sys.h"
 #include "syscalls_control.h"
@@ -76,6 +77,7 @@ void tawcroot_dispatch_init(void)
 	tawcroot_exec_register();
 	tawcroot_socket_register();
 	tawcroot_chroot_register();
+	tawcroot_namespace_register();
 }
 
 size_t tawcroot_dispatch_trap_list(int *out, size_t out_cap)

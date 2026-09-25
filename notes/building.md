@@ -10,6 +10,22 @@ This doc describes building on a Linux x86_64 host. macOS/Windows are not
 supported as build hosts; nothing is fundamentally portable-hostile, just
 untested.
 
+The standalone host runtime tests require GCC 14 or newer (C23) and GNU
+binutils. On Ubuntu 24.04 install `gcc-14`, then run
+`CC=gcc-14 tawcroot/test.sh --host`. Host runtime binaries use GNU ld's
+`-Ttext-segment` and GCC's trap-only UBSan option. Android production builds
+continue to use the NDK toolchain; ARLinux also builds that standalone runtime
+with NDK 29 on Windows through its own CMake integration.
+
+On WSL, orphan-to-init tests require a PID namespace because WSL's subreaper
+may adopt orphans instead of PID 1. Keep a shell as namespace init (the test
+runner itself must not be PID 1):
+
+```sh
+unshare --mount --pid --fork --mount-proc sh -c \
+  'CC=gcc-14 ./tawcroot/test.sh --host; result=$?; exit "$result"'
+```
+
 ## Quick reference
 
 ```bash

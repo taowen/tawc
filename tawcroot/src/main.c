@@ -41,6 +41,8 @@
 #include "exec_handler.h"
 #include "filter.h"
 #include "io.h"
+#include "identity.h"
+#include "sysnr.h"
 #include "linkstore.h"
 #include "loader_exec.h"
 #include "path.h"
@@ -200,7 +202,7 @@ static __attribute__((noreturn)) void usage(int code)
 	            "  tawcroot-testhost -r ROOTFS [-b SRC:DST[:ro]]...\n");
 #else
 	tawc_io_str("tawcroot: usage:\n"
-	            "  tawcroot -r ROOTFS [-b SRC:DST[:ro]]... -- CMD [ARGS...]\n"
+	            "  tawcroot -r ROOTFS [--host-user] [-b SRC:DST[:ro]]... -- CMD [ARGS...]\n"
 	            "  tawcroot --exec-child <fd>\n");
 #endif
 	tawc_exit_group(code);
@@ -437,6 +439,7 @@ __attribute__((noreturn)) static void prod_main(int argc, char **argv)
 	const char *bind_specs[TAWCROOT_MAX_BINDS];
 	size_t      n_binds   = 0;
 	int         cmd_start = -1;
+	int         host_user = 0;
 
 	int i = 1;
 	while (i < argc) {
@@ -444,6 +447,9 @@ __attribute__((noreturn)) static void prod_main(int argc, char **argv)
 		if (tawc_streq(argv[i], "-r")) {
 			if (i + 1 >= argc) usage(2);
 			rootfs = argv[++i];
+			i++;
+		} else if (tawc_streq(argv[i], "--host-user")) {
+			host_user = 1;
 			i++;
 		} else if (tawc_streq(argv[i], "-b")) {
 			if (i + 1 >= argc) usage(2);
@@ -463,6 +469,14 @@ __attribute__((noreturn)) static void prod_main(int argc, char **argv)
 	if (!rootfs || cmd_start < 0 || cmd_start >= argc) usage(2);
 
 	prod_rootfs_init(rootfs, bind_specs, n_binds);
+	if (host_user) {
+		tawc_identity id = { 0 };
+		id.ruid = id.euid = id.suid = id.fsuid = (uint32_t)tawc_getuid();
+		id.rgid = id.egid = id.sgid = id.fsgid = (uint32_t)TAWC_RAW(TAWC_SYS_getgid, 0, 0, 0, 0, 0, 0);
+		id.ngroups = 1;
+		id.groups[0] = id.egid;
+		tawcroot_identity_load(&id);
+	}
 
 	/* Phase 2e: stash the guest exe path so /proc/self/exe synthesis
 	 * returns it instead of the kernel's libtawcroot view. Set BEFORE

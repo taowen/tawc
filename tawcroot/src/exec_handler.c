@@ -151,6 +151,7 @@ long tawcroot_exec_handler_prepare(const char *path, int argc,
 	 * In legacy --exec-via-handler mode (no rootfs) the path is a
 	 * host-fs path, opened directly. */
 	size_t title_extra = 0;
+	unsigned int setid_mode = 0;
 	{
 		long probe = tawcroot_open_in_view(path);
 		if (probe < 0) return probe;
@@ -160,6 +161,15 @@ long tawcroot_exec_handler_prepare(const char *path, int argc,
 		 * wrong-arch ELF returns a clean errno to the guest instead of
 		 * killing it with a loader exit code post-execveat. */
 		if (ck == 0) ck = classify_loadable((int)probe, 0, &title_extra);
+		if (ck == 0) {
+			struct statx stx;
+			unsigned char magic[4];
+			if (TAWC_RAW(TAWC_SYS_statx, probe, (long)"", AT_EMPTY_PATH,
+				STATX_MODE, (long)&stx, 0) == 0 &&
+			    TAWC_RAW(TAWC_SYS_pread64, probe, (long)magic, 4, 0, 0, 0) == 4 &&
+			    magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F')
+				setid_mode = stx.stx_mode & 06000;
+		}
 		tawc_close((int)probe);
 		if (ck < 0) return ck;
 	}
@@ -195,7 +205,13 @@ long tawcroot_exec_handler_prepare(const char *path, int argc,
 	 * and legacy --exec-via-handler modes. */
 	tawc_identity ident_snap;
 	tawcroot_identity_get(&ident_snap);
+	/* Set-id is virtual only: Android UID/SELinux remain unchanged.
+	 * Guest files have no independent host owners; privileged ELF files
+	 * belong to virtual root. Never apply set-id to interpreter scripts. */
+	if (setid_mode & 04000) ident_snap.euid = ident_snap.suid = ident_snap.fsuid = 0;
+	if (setid_mode & 02000) ident_snap.egid = ident_snap.sgid = ident_snap.fsgid = 0;
 	extras.identity = &ident_snap;
+	extras.namespaces = &tawcroot_namespace;
 
 	if (tawcroot_rootfs_fd >= 0 && tawcroot_rootfs_host_path_len > 0) {
 		extras.rootfs_host = tawcroot_rootfs_host_path;
