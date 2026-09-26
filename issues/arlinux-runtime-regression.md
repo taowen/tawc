@@ -7,8 +7,12 @@ Android app UID/seccomp.
   sem-undo, sem-contract and sem-api-consistency, including signal interruption.
   Steam's semaphore startup assertions are gone. See notes/arlinux-runtime.md
   for the bounded implementation and remaining semantics; x300 is unverified.
-- System V shared memory is also missing; the runtime must support both raw
-  syscalls and stock libc callers without LD_PRELOAD.
+- System V shared memory now supports stock libc and raw syscalls, independent
+  mappings, fork/exec/exit lifetime and deferred removal on both devices.
+  GIMP 3's Python plug-in maps the shared tile segment and completes XCF editing.
+  Fixed-address attachment, huge pages, executable mappings and IPC enumeration
+  remain unsupported. Kernel VMA scans determine attachment counts; this is a
+  correctness-first implementation, not a throughput claim.
 - Native ARM64 Steam reaches its sign-in window on Redmi. The TCP endpoint
   snapshot lets genuine lsof resolve local peers through kernel socket inodes;
   peer validation is unchanged. IPv4/IPv6, nonblocking connect, fork/exec,

@@ -41,7 +41,17 @@ not kernel IPC isolation. CLONE_SYSVSEM undo sharing, IPC_INFO enumeration,
 chroot-stable namespace ownership and killed-waiter count cleanup remain
 unimplemented. Do not present this as complete System V IPC emulation.
 
-System V shared memory remains unsupported. Namespace startup metadata is partially
+System V shared memory uses shared file-backed mappings in the app-private
+rootfs (128 segments, up to 1 GiB each). Kernel VMA scans account for fork,
+exec and process exit without a cleanup daemon. Marked segments are removed
+on the next IPC operation after their last attachment disappears. GIMP's
+shared-tile transport and raw/libc lifecycle tests pass on Redmi and x300.
+Fixed-address attachment, huge pages, executable mappings, IPC enumeration
+and chroot-stable namespace ownership remain unsupported. Attachment scans
+require readable app-owned proc maps; an unreadable same-UID task causes an
+error rather than knowingly treating its mappings as absent.
+
+Namespace startup metadata is partially
 modeled; shared filesystem-view behavior is unfinished. Do not treat these
 results as complete desktop acceptance or kernel namespace isolation.
 

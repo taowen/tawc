@@ -13,6 +13,7 @@
 # define TAWC_SYS_write          64
 # define TAWC_SYS_close          57
 # define TAWC_SYS_getpid        172
+# define TAWC_SYS_waitid         95
 # define TAWC_SYS_uname         160
 # define TAWC_SYS_getppid       173
 # define TAWC_SYS_getuid        174
@@ -135,6 +136,7 @@
  * CLOSE_RANGE_UNSHARE, and prlimit64 for the no-/proc fallback loop. */
 # define TAWC_SYS_prlimit64       261
 #elif defined(__x86_64__)
+# define TAWC_SYS_waitid        247
 # define TAWC_SYS_read            0
 # define TAWC_SYS_write           1
 # define TAWC_SYS_close           3
@@ -325,3 +327,5 @@
 #else
 # error "unsupported arch"
 #endif
+
+#define TAWC_SYS_pidfd_open     434

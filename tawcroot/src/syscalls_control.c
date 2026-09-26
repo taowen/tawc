@@ -309,6 +309,15 @@ static long handle_alarm(const tawcroot_syscall_args *args, ucontext_t *uc)
 
 void tawcroot_control_register(void)
 {
+	/* Some Android 4.19 kernels backport pidfd_open but not P_PIDFD
+	 * waitid. GLib then selects pidfds and loses child exit status.
+	 * Probe an invalid fd: supported kernels return EBADF, incomplete
+	 * kernels EINVAL. Do not emulate waits using a racy fd-to-PID lookup.
+	 * On incomplete kernels expose pidfd_open as unavailable so callers
+	 * use their ordinary SIGCHLD/waitpid path. New kernels stay native. */
+	if (TAWC_RAW(TAWC_SYS_waitid, 3 /* P_PIDFD */, -1, 0,
+	             5 /* WEXITED | WNOHANG */, 0, 0) == TAWC_EINVAL)
+		tawcroot_dispatch_install(TAWC_SYS_pidfd_open, tawcroot_deny_enosys);
 	tawcroot_dispatch_install(TAWC_SYS_seccomp,         handle_seccomp);
 	tawcroot_dispatch_install(TAWC_SYS_prctl,           handle_prctl);
 	tawcroot_dispatch_install(TAWC_SYS_rt_sigaction,    handle_rt_sigaction);

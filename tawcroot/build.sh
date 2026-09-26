@@ -166,6 +166,7 @@ fi
 # and is only linked when TESTHOST=1.
 SRC_C_PROD=(
     "$TAWCROOT_DIR/src/sysv_sem.c"
+    "$TAWCROOT_DIR/src/sysv_shm.c"
     "$TAWCROOT_DIR/src/proc_tcp.c"
     "$TAWCROOT_DIR/src/namespace.c"
     "$TAWCROOT_DIR/src/main.c"
