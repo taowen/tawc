@@ -45,7 +45,7 @@ long tawc_sigalt_check(const stack_t *cur, uintptr_t guest_sp,
  * is installed as-is (no worse than having no floor). */
 void tawc_sigalt_commit(stack_t *cur, const stack_t *new_ss);
 
-/* Thread is exiting: free its slot, if it holds one. */
+/* Free a slot in tests. Production cannot trap exit(2) safely. */
 void tawc_sigalt_thread_exit(const stack_t *cur);
 
 /* For tests; not called from production. */

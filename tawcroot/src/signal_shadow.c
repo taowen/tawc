@@ -25,8 +25,8 @@
  *
  * Single-writer-per-tid invariant: tawc_sigshadow_blocked_set and
  * tawc_sigshadow_blocked_clear are only called by the trapping thread
- * for its own tid (set from handle_rt_sigprocmask, clear from
- * handle_exit) with SIGSYS masked (no SA_NODEFER). Two writers can
+ * for its own tid (set from handle_rt_sigprocmask, clear only in
+ * explicit unit tests) with SIGSYS masked (no SA_NODEFER). Two writers can
  * never have the same tid in production, so the same-tid update path
  * needs no CAS — a plain atomic store is enough. Different-tid
  * concurrency is real and handled via the CAS-claim spin (for both
@@ -38,18 +38,10 @@
  * a wrong shadow mask and no diagnostic; a hard crash points at the
  * exact line and tells us to bump N_SLOTS.
  *
- * TID-reuse race: closed by the exit-side hook. handle_exit calls
- * blocked_clear(gettid()) before forwarding the syscall, so a tid's
- * slot is tombstoned the moment its thread exits. A subsequent thread
- * reusing that tid hits no stale state (tombstones probe-skip, so
- * blocked_get returns the default 0). The only remaining gap is
- * involuntary thread death (thread killed by SIGKILL from another
- * thread, or by a fatal signal that bypasses exit(2)) — uncommon, and
- * the failure mode is the same one-shot wrong-mask read documented
- * before. Voluntary thread teardown via pthread_exit / thread-fn
- * return goes through exit(2). exit_group is not hooked: it kills
- * every thread and the OS reclaims everything, so per-slot cleanup
- * would be wasted work.
+ * Thread exit cannot be trapped safely because musl may unmap the
+ * dying stack before issuing exit(2). A blocked slot can therefore
+ * survive until process exit; TID reuse and table exhaustion remain
+ * open issues. See issues/tawcroot-exit-stack-unmapped.md.
  *
  * Process-global sigaction — classic seqlock. Even sequence = stable,
  * odd = writer in progress. Writers CAS(seq, even, even+1) to claim,
@@ -227,8 +219,8 @@ void tawc_sigshadow_blocked_set(int tid, int blocked)
 	__builtin_trap();
 }
 
-/* Single-writer-per-tid: only the dying thread itself clears its own
- * slot (handle_exit on the trapping thread). Concurrent readers / other-tid
+/* Single-writer-per-tid: only the owning thread clears its own slot.
+ * This function is currently used by tests, not production. Concurrent readers / other-tid
  * writers are safe — tombstones probe-skip on get and are reclaim-targets
  * on set. We don't bother CAS-ing the tid swap: under the invariant nobody
  * else is touching this slot's tid value while we own it. */

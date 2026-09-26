@@ -6,8 +6,9 @@
  * view (ss_sp inside the slab), never from a tid: a fork child keeps
  * working with its new tid, and tid reuse can't alias.
  *
- * Known leaks, all bounded by the exhaustion fallback: a thread killed
- * without exit(2); other threads' slots in a fork child; a slot claimed
+ * Known leaks, all bounded by the exhaustion fallback: an exiting thread
+ * (exit(2) cannot safely be trapped after stack unmap); other threads'
+ * slots in a fork child; a slot claimed
  * by sigaltstack() inside an SS_AUTODISARM handler (the kernel drops
  * that setting when the handler returns). A CLONE_VM|CLONE_VFORK child
  * that replaces an inherited substituted stack frees the parent's slot

@@ -43,12 +43,9 @@
 int  tawc_sigshadow_blocked_get(int tid);
 void tawc_sigshadow_blocked_set(int tid, int blocked);
 
-/* Drop a tid's slot. Called from handle_exit on the dying thread before
- * forwarding the exit(2) syscall, so a future thread reusing this tid
- * sees the default (unblocked) state instead of the previous owner's
- * stale bit. Slot is tombstoned (probe-skipped, reclaimable by a later
- * blocked_set claim). Single-writer-per-tid: only the dying thread
- * itself calls this for its own tid. */
+/* Tombstone the calling thread's slot. Used by tests; production cannot
+ * safely trap exit(2) after a guest unmaps its stack. See the exit-stack
+ * issue before relying on this to solve TID reuse in production. */
 void tawc_sigshadow_blocked_clear(int tid);
 
 /* Process-global sigaction shadow. _get fills `out` with exactly

@@ -3293,13 +3293,13 @@ static int test_rt_sigaction_b2_sizing(void)
  * blocked isolation, 4×4 writer/reader seqlock, tombstone probe-chain
  * preservation, slot reclamation). What was missing — and what this
  * test adds — is concurrent coverage with traffic actually flowing
- * through `handle_rt_sigprocmask` / `handle_exit` on each TID. We
+ * through `handle_rt_sigprocmask` on each TID. We
  * spawn N kernel threads via raw clone(2); each blocks/unblocks SIGSYS
  * through the guest's normal sigprocmask, runs a trapping path syscall
  * (proves the kernel mask is clear despite shadow saying "blocked"),
  * reads its mask back, and asserts the SIGSYS bit matches what it
- * just set on every iteration. On thread exit, handle_exit's
- * shadow-clear hook fires (exit(2) is in the trapped set).
+ * just set on every iteration. Each worker explicitly unblocks before
+ * exit; exit(2) itself must not be trapped after stack unmap.
  *
  * pthreads are unavailable (testhost is freestanding -nostdlib), so we
  * use raw clone(2). clone3 is intercepted with -ENOSYS, but plain
@@ -3456,9 +3456,7 @@ static int mt_worker(void *p)
 	}
 	if (observed_match) st->last_observed = -1;
 
-	/* Best-effort restore: leave SIGSYS unblocked. handle_exit will
-	 * clear the slot regardless, but explicit unblock keeps the
-	 * single-writer-per-tid invariant clean. */
+	/* Restore SIGSYS unblocked before the thread exits. */
 	{
 		uint64_t set = sigsys_bit;
 		long rv2;
@@ -3469,8 +3467,7 @@ static int mt_worker(void *p)
 
 	/* Publish done=1 with release ordering — main reads with acquire,
 	 * sees a fully-written `last_observed` / `iters_completed` /
-	 * `tid`. The subsequent SYS_exit (issued by the trampoline) is
-	 * a hard happens-before edge with handle_exit's shadow-clear. */
+	 * `tid`. The trampoline's SYS_exit is intentionally not trapped. */
 	__atomic_store_n(&st->done, 1, __ATOMIC_RELEASE);
 	return 0;
 }
