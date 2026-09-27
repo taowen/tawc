@@ -1,27 +1,5 @@
-/* Guest-visible SIGSYS state shadows for syscalls_control.c.
- *
- * Two pieces of state, with different scoping:
- *
- *   - "blocked": per-thread shadow tracking whether the guest blocked
- *     SIGSYS via rt_sigprocmask. POSIX: signal masks are per-thread,
- *     and the kernel mask in uc->uc_sigmask is per-thread for free,
- *     but we deliberately strip SIGSYS from it (to keep traps coming)
- *     so the shadow has to live separately. Implemented as a fixed
- *     open-address TID-keyed table with linear probing.
- *
- *   - "action": process-global shadow of the guest's sigaction(SIGSYS).
- *     POSIX: signal dispositions are process-wide. Implemented as a
- *     seqlock-protected byte buffer.
- *
- * Both helpers are pure (no syscalls), async-signal-safe, and safe to
- * call from multiple threads concurrently. They make no allocation
- * decisions and use only __atomic_* builtins on lock-free widths
- * (a _Static_assert in the .c locks that invariant in) — usable from
- * the `-nostdlib -ffreestanding` production binary and from hosted
- * glibc unit tests without translation.
- *
- * Issue: tawcroot-handler-signal-state-not-thread-safe.md
- */
+/* Process-global guest SIGSYS disposition, backed by lock-free atomics.
+ * SIGSYS is reserved for the runtime; signal masks use kernel state only. */
 
 #ifndef TAWCROOT_SIGNAL_SHADOW_H
 #define TAWCROOT_SIGNAL_SHADOW_H
@@ -38,16 +16,6 @@
 # error "unsupported arch"
 #endif
 
-/* Per-thread "blocked" shadow. tid is the kernel tid (gettid()).
- * Unknown tids default to 0 (not blocked). */
-int  tawc_sigshadow_blocked_get(int tid);
-void tawc_sigshadow_blocked_set(int tid, int blocked);
-
-/* Tombstone the calling thread's slot. Used by tests; production cannot
- * safely trap exit(2) after a guest unmaps its stack. See the exit-stack
- * issue before relying on this to solve TID reuse in production. */
-void tawc_sigshadow_blocked_clear(int tid);
-
 /* Process-global sigaction shadow. _get fills `out` with exactly
  * TAWC_KERN_SIGACTION_SIZE bytes from the most recent _set, or all
  * zeros if no guest sigaction(SIGSYS) has ever happened (BSS-zero
@@ -57,12 +25,7 @@ void tawc_sigshadow_blocked_clear(int tid);
 void tawc_sigshadow_action_get(unsigned char *out);
 void tawc_sigshadow_action_set(const unsigned char *in);
 
-/* Reset all state to "fresh process" — empty TID table, action unset.
- * For tests; not called from production. */
+/* Reset the action to SIG_DFL; tests only. */
 void tawc_sigshadow_reset(void);
-
-/* Capacity of the TID-keyed blocked table. Exposed so overflow tests
- * don't hard-code the constant. For tests; not called from production. */
-unsigned tawc_sigshadow_capacity(void);
 
 #endif

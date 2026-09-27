@@ -3189,8 +3189,7 @@ static int test_sigsys_virtualization(void)
 	fails += tawc_io_step(
 		"rt_sigaction(SIGUSR1, oldact) passes through", rv == 0);
 
-	/* sigprocmask: try to block SIGSYS. The shadow records
-	 * blocked, the kernel never sees the SIGSYS bit. */
+	/* SIGSYS is reserved; other signals remain independently blockable. */
 	uint64_t set = (1ULL << (31 - 1)) | (1ULL << (10 - 1));
 	uint64_t oldset = 0;
 	INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 0 /*SIG_BLOCK*/,
@@ -3199,37 +3198,48 @@ static int test_sigsys_virtualization(void)
 		"rt_sigprocmask(SIG_BLOCK, {SIGSYS, SIGUSR1}) -> 0",
 		rv == 0);
 
-	/* Read it back: shadow should claim SIGSYS is blocked AND
-	 * the genuinely-blocked SIGUSR1 must persist. The latter
-	 * caught a real bug where the handler was calling the kernel
-	 * rt_sigprocmask and the change got rolled back by sigreturn
-	 * restoring ucontext.uc_sigmask; the fix updates the
-	 * ucontext mask directly. */
+	/* Query the actual mask restored by sigreturn. */
 	uint64_t cur = 0;
 	INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 0 /*SIG_BLOCK*/,
 		    0, &cur, 8, 0, 0, rv);
 	int sigsys_blocked  = (cur & (1ULL << (31 - 1))) != 0;
 	int sigusr1_blocked = (cur & (1ULL << (10 - 1))) != 0;
 	fails += tawc_io_step(
-		"rt_sigprocmask query: SIGSYS shows blocked (shadow)",
-		rv == 0 && sigsys_blocked);
+		"rt_sigprocmask query: reserved SIGSYS remains unblocked",
+		rv == 0 && !sigsys_blocked);
 	fails += tawc_io_step(
 		"rt_sigprocmask query: SIGUSR1 actually blocked (kernel)",
 		rv == 0 && sigusr1_blocked);
 	tawc_io_kv_hex("    cur mask", (unsigned long)cur);
 
-	/* Acid test: with the guest THINKING SIGSYS is blocked, our
-	 * trap must still fire -- proves the kernel mask is clear. */
+	/* Translation must work after an attempted SIGSYS block. */
 	long fd = inline_openat(AT_FDCWD, "/etc/probe", O_RDONLY, 0);
 	fails += tawc_io_step(
 		"path syscall after SIGSYS-block -- trap still fires",
 		fd >= 0);
 	if (fd >= 0) tawc_close((int)fd);
 
-	/* Restore: unblock SIGSYS shadow + whatever we changed. */
+	/* Restore the ordinary signal mask. */
 	uint64_t unblock = (1ULL << (31 - 1)) | (1ULL << (10 - 1));
 	INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 1 /*SIG_UNBLOCK*/,
 		    &unblock, 0, 8, 0, 0, rv);
+	/* SETMASK, aliased input/output, and failed copies must keep the
+	 * same reserved-signal contract as BLOCK/UNBLOCK. */
+	uint64_t alias = set;
+	INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 2 /*SIG_SETMASK*/,
+		    &alias, &alias, 8, 0, 0, rv);
+	fails += tawc_io_step("sigmask: aliased SETMASK returns old mask",
+			      rv == 0 && !(alias & set));
+	uint64_t empty = 0;
+	INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 2 /*SIG_SETMASK*/,
+		    &empty, 1 /*invalid oldset*/, 8, 0, 0, rv);
+	fails += tawc_io_step("sigmask: invalid oldset returns EFAULT", rv == -14);
+	INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 99 /*ignored for query*/,
+		    0, &cur, 8, 0, 0, rv);
+	fails += tawc_io_step("sigmask: failed output leaves ordinary mask unchanged",
+			      rv == 0 && (cur & set) == (1ULL << 9));
+	INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 2 /*SIG_SETMASK*/,
+		    &oldset, 0, 8, 0, 0, rv);
 	return fails;
 }
 
@@ -3287,24 +3297,9 @@ static int test_rt_sigaction_b2_sizing(void)
 	return fails;
 }
 
-/* Multi-thread SIGSYS-blocked shadow, end-to-end through the handler.
- *
- * The unit suite exercises the lock-free primitives directly (16-thread
- * blocked isolation, 4×4 writer/reader seqlock, tombstone probe-chain
- * preservation, slot reclamation). What was missing — and what this
- * test adds — is concurrent coverage with traffic actually flowing
- * through `handle_rt_sigprocmask` on each TID. We
- * spawn N kernel threads via raw clone(2); each blocks/unblocks SIGSYS
- * through the guest's normal sigprocmask, runs a trapping path syscall
- * (proves the kernel mask is clear despite shadow saying "blocked"),
- * reads its mask back, and asserts the SIGSYS bit matches what it
- * just set on every iteration. Each worker explicitly unblocks before
- * exit; exit(2) itself must not be trapped after stack unmap.
- *
- * pthreads are unavailable (testhost is freestanding -nostdlib), so we
- * use raw clone(2). clone3 is intercepted with -ENOSYS, but plain
- * clone (NR 56 on x86_64, 220 on aarch64) is not in our trapped set —
- * RET_ALLOWed by the filter. */
+/* Real cloned threads exercise reserved SIGSYS and ordinary per-thread masks.
+ * Repeated batches exceed the former 256-entry shadow table. Workers exit
+ * after requesting SIGSYS blocked, reproducing the Thunar/Glycin lifecycle. */
 
 /* clone(2) trampoline: parent gets the new TID (or -errno) back; child
  * runs `func(arg)` on the supplied stack and SYS_exits with the return
@@ -3416,39 +3411,30 @@ static int mt_worker(void *p)
 	for (int i = 0; i < MT_ITERS; i++) {
 		int want_blocked = i & 1;
 		int how = want_blocked ? 0 /*SIG_BLOCK*/ : 1 /*SIG_UNBLOCK*/;
-		uint64_t set = sigsys_bit;
+		uint64_t set = sigsys_bit | (1ULL << 9);
 
-		/* Block / unblock SIGSYS through the guest's sigprocmask
-		 * (TRAPs into handle_rt_sigprocmask, which updates this
-		 * thread's per-tid blocked shadow). */
+		/* Exercise the production syscall handler. */
 		INLINE_SYS6(TAWC_SYS_rt_sigprocmask, how, &set, 0, 8,
 			    0, 0, rv);
 		if (rv != 0) { observed_match = 0; st->last_observed = (int)-rv; break; }
 
-		/* Trapping path syscall — the handler runs on this thread
-		 * with the shadow update fresh. If the kernel mask actually
-		 * had SIGSYS blocked, the trap wouldn't fire and we'd see
-		 * a kernel-issued openat with -ENOENT (rootfs not bound
-		 * outside the handler). With the contract intact, this
-		 * resolves through the rootfs to /etc/probe. */
+		/* A translated open must still work. */
 		long fd;
 		INLINE_SYS6(TAWC_SYS_openat, AT_FDCWD, "/etc/probe",
 			    O_RDONLY, 0, 0, 0, fd);
 		if (fd < 0) { observed_match = 0; st->last_observed = (int)-fd; break; }
 		tawc_close((int)fd);
 
-		/* Read the current mask back. The shadow's SIGSYS bit
-		 * must match what we asked for. */
+		/* SIGUSR1 tracks the request; SIGSYS remains available. */
 		uint64_t cur = 0;
 		INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 0 /*SIG_BLOCK*/,
 			    0, &cur, 8, 0, 0, rv);
 		if (rv != 0) { observed_match = 0; st->last_observed = (int)-rv; break; }
 		int sigsys_blocked = (cur & sigsys_bit) != 0;
-		if (sigsys_blocked != want_blocked) {
+		if (sigsys_blocked || ((cur & (1ULL << 9)) != 0) != want_blocked) {
 			observed_match = 0;
-			/* 0xb0 = "we asked for unblocked, got blocked"
-			 * 0xb1 = "we asked for blocked,   got unblocked"
-			 * (high bit makes it unambiguous vs errno values). */
+			/* Distinguish a blocked reserved signal from an ordinary
+			 * signal whose mask did not follow the request. */
 			st->last_observed = sigsys_blocked ? 0xb0 : 0xb1;
 			break;
 		}
@@ -3456,14 +3442,7 @@ static int mt_worker(void *p)
 	}
 	if (observed_match) st->last_observed = -1;
 
-	/* Restore SIGSYS unblocked before the thread exits. */
-	{
-		uint64_t set = sigsys_bit;
-		long rv2;
-		INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 1 /*SIG_UNBLOCK*/,
-			    &set, 0, 8, 0, 0, rv2);
-		(void)rv2;
-	}
+	/* Deliberately exit without unblocking: the old table leaked here. */
 
 	/* Publish done=1 with release ordering — main reads with acquire,
 	 * sees a fully-written `last_observed` / `iters_completed` /
@@ -3472,7 +3451,13 @@ static int mt_worker(void *p)
 	return 0;
 }
 
-static int test_sigsys_block_shadow_multithread(void)
+/* Keep churn output bounded; the caller reports one aggregate result. */
+static int mt_step(const char *name, int ok)
+{
+	return ok ? 0 : tawc_io_step(name, 0);
+}
+
+static int test_reserved_sigsys_multithread(void)
 {
 	int fails = 0;
 
@@ -3487,7 +3472,7 @@ static int test_sigsys_block_shadow_multithread(void)
 	 * teardown: by the time main observes done=1 the worker may
 	 * still be executing instructions on its stack en route to
 	 * SYS_exit, and we'd race the kernel. The testhost exits within
-	 * a second of this test, so leaking 8 × 128 KiB is fine. */
+	 * this test, so retaining 64 MiB across 64 batches is bounded. */
 	void *stacks[MT_THREADS];
 	for (int i = 0; i < MT_THREADS; i++) {
 		long rv = TAWC_RAW(TAWC_SYS_mmap, 0, MT_STACK,
@@ -3495,7 +3480,7 @@ static int test_sigsys_block_shadow_multithread(void)
 				   0x22 /*MAP_PRIVATE|MAP_ANONYMOUS*/,
 				   -1, 0);
 		stacks[i] = (rv > 0 || rv < -4095) ? (void *)rv : 0;
-		fails += tawc_io_step("mt: mmap thread stack",
+		fails += mt_step("mt: mmap thread stack",
 				      stacks[i] != 0);
 	}
 	if (fails) return fails;
@@ -3508,12 +3493,12 @@ static int test_sigsys_block_shadow_multithread(void)
 					       &g_mt[i], MT_CLONE_FLAGS);
 		if (tid <= 0) {
 			tawc_io_kv_dec("    clone errno (-rv)", -tid);
-			fails += tawc_io_step("mt: clone thread", 0);
+			fails += mt_step("mt: clone thread", 0);
 			break;
 		}
 		n_spawned++;
 	}
-	fails += tawc_io_step("mt: spawned all N threads",
+	fails += mt_step("mt: spawned all N threads",
 			      n_spawned == MT_THREADS);
 
 	/* Spin-wait for every thread to publish done=1. Workers do
@@ -3539,7 +3524,7 @@ static int test_sigsys_block_shadow_multithread(void)
 		__asm__ __volatile__ ("yield" ::: "memory");
 #endif
 	}
-	fails += tawc_io_step("mt: all threads finished within bound",
+	fails += mt_step("mt: all threads finished within bound",
 			      all_done_final);
 
 	for (int i = 0; i < n_spawned; i++) {
@@ -3553,31 +3538,28 @@ static int test_sigsys_block_shadow_multithread(void)
 				       (unsigned long)(unsigned int)
 					   g_mt[i].last_observed);
 		}
-		fails += tawc_io_step(
+		fails += mt_step(
 			"mt: thread mask round-trip consistent across iters",
 			ok);
 	}
 
-	/* Verify the main thread's own shadow wasn't corrupted by
-	 * concurrent writers. (The shadow is per-tid, so it shouldn't
-	 * be — this is a belt-and-braces check.) Set + clear once and
-	 * confirm the round-trip. */
+	/* Child mask changes must not affect the main thread. */
 	{
 		long rv;
 		uint64_t set = 1ULL << (31 - 1);
 		uint64_t cur = 0;
 		INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 0 /*SIG_BLOCK*/,
 			    &set, 0, 8, 0, 0, rv);
-		fails += tawc_io_step("mt: main thread can still block SIGSYS shadow",
+		fails += mt_step("mt: main thread attempted block succeeds",
 				      rv == 0);
 		INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 0 /*SIG_BLOCK*/,
 			    0, &cur, 8, 0, 0, rv);
-		fails += tawc_io_step(
-			"mt: main thread shadow read-back shows SIGSYS blocked",
-			rv == 0 && (cur & (1ULL << (31 - 1))) != 0);
+		fails += mt_step(
+			"mt: main thread keeps SIGSYS and SIGUSR1 unblocked",
+			rv == 0 && (cur & ((1ULL << 30) | (1ULL << 9))) == 0);
 		INLINE_SYS6(TAWC_SYS_rt_sigprocmask, 1 /*SIG_UNBLOCK*/,
 			    &set, 0, 8, 0, 0, rv);
-		fails += tawc_io_step("mt: main thread can unblock SIGSYS shadow",
+		fails += mt_step("mt: main thread unblock succeeds",
 				      rv == 0);
 	}
 
@@ -5218,7 +5200,15 @@ int tawcroot_rootfs_smoke_main(const char *rootfs)
 	fails += test_guest_seccomp_prctl_handling();
 	fails += test_sigsys_virtualization();
 	fails += test_rt_sigaction_b2_sizing();
-	fails += test_sigsys_block_shadow_multithread();
+	/* 512 real thread lifecycles, not synthetic TIDs. */
+	int churn_result = 0;
+	for (int batch = 0; batch < 64; batch++) {
+		int result = test_reserved_sigsys_multithread();
+		churn_result += result;
+		if (result) break;
+	}
+	fails += tawc_io_step("512 thread lifecycles preserve reserved and ordinary signal masks",
+			      churn_result == 0);
 	fails += test_proc_self_exe_synthesis();
 	fails += test_proc_self_cwd_synthesis();
 	fails += test_proc_fd_link_readlink();

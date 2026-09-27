@@ -43,6 +43,7 @@ test(exec_state_basic_roundtrip)
 	test_str_eq(out.envp[1], "HOME=/root");
 	test_ptr_eq(out.envp[2], NULL);
 	test_ptr_eq(out.proctitle, NULL);  /* no extras → absent */
+	test_int_eq(out.executable_fd_plus_one, 0);
 	free(buf);
 }
 
@@ -55,6 +56,7 @@ test(exec_state_carries_proctitle)
 	const char *envp[] = { NULL };
 	tawcroot_exec_state_extras ex = { 0 };
 	ex.proctitle = "worker --flag   ";
+	ex.executable_fd_plus_one = 42;
 
 	size_t need = tawcroot_exec_state_estimate_bytes("/bin/worker", 2,
 	                                                 argv, envp, &ex);
@@ -70,6 +72,7 @@ test(exec_state_carries_proctitle)
 	test_int_eq((int)tawcroot_exec_state_read(buf, need, argv_buf,
 	                                          envp_buf, &out), 0);
 	test_str_eq(out.proctitle, "worker --flag   ");
+	test_int_eq(out.executable_fd_plus_one, 42);
 	free(buf);
 }
 

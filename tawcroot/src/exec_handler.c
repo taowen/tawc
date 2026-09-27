@@ -25,19 +25,6 @@
  * shebang-expansion slack. Matches proctitle.c's bounce sizing. */
 #define EXEC_TITLE_BUF_SIZE  ((16 + 64 + 4) * 1024)
 
-/* Cap on serialized exec_state size we'll write into a memfd. Sized to
- * hold the full header (offset arrays for MAX_ARGS args + MAX_ENV envs)
- * plus everything the collection layer (syscalls_exec.c) accepts: 16 KB
- * path + 64 KB argv + 256 KB envp, with slack, plus the proctitle
- * string. Previously this was 64 KB
- * total, so any argv+envp over ~61 KB made the write -ENOSPC, which the
- * guest saw as a nonsensical execve()==ENOSPC for exactly the busy
- * environments the collection layer was sized for. BSS, not stack. */
-#define EXEC_STATE_BUF_SIZE                                            \
-	(sizeof(tawcroot_exec_state_header) +                         \
-	 (16 * 1024) + (64 * 1024) + (256 * 1024) +                    \
-	 EXEC_TITLE_BUF_SIZE + 8192)
-
 /* Validate an exec-probe fd the way execve(2) would validate the file:
  * directories are EISDIR, non-regular files and files with no execute
  * bit at all are EACCES. The O_RDONLY open alone passes for mode-644
@@ -128,9 +115,9 @@ static long classify_loadable(int fd, int depth, size_t *title_extra)
 	return ck;
 }
 
-long tawcroot_exec_handler_prepare(const char *path, int argc,
+static long prepare(const char *path, int argc,
                                    const char *const *argv,
-                                   const char *const *envp)
+                                   const char *const *envp, int *executable_fd)
 {
 	if (!path || !argv || !envp || argc < 0) return TAWC_EINVAL;
 
@@ -170,8 +157,12 @@ long tawcroot_exec_handler_prepare(const char *path, int argc,
 			    magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F')
 				setid_mode = stx.stx_mode & 06000;
 		}
-		tawc_close((int)probe);
-		if (ck < 0) return ck;
+		if (ck < 0) { tawc_close((int)probe); return ck; }
+		/* Pin the executable across our internal exec, even when the
+		 * caller used a CLOEXEC /proc/self/fd path (fexecve). */
+		*executable_fd = (int)probe;
+		long flags = tawc_fcntl((int)probe, F_SETFD, 0);
+		if (flags < 0) return flags;
 	}
 
 	/* (2) Create a non-CLOEXEC memfd. !CLOEXEC is required so the fd
@@ -198,6 +189,7 @@ long tawcroot_exec_handler_prepare(const char *path, int argc,
 	static const char *shm_name_arr[TAWCROOT_EXEC_STATE_MAX_SHM];
 	static int         shm_fd_arr[TAWCROOT_EXEC_STATE_MAX_SHM];
 	tawcroot_exec_state_extras extras = { 0 };
+	extras.executable_fd_plus_one = (uint32_t)*executable_fd + 1;
 
 	/* Virtual identity survives execve (fork inherits it for free;
 	 * exec must ferry it — a dropped sshd session exec'ing the user's
@@ -215,17 +207,12 @@ long tawcroot_exec_handler_prepare(const char *path, int argc,
 
 	if (tawcroot_rootfs_fd >= 0 && tawcroot_rootfs_host_path_len > 0) {
 		extras.rootfs_host = tawcroot_rootfs_host_path;
-		/* Don't ferry the parent's stashed guest_exe through. After
-		 * the guest's execve, /proc/self/exe should resolve to the
-		 * newly-exec'd binary, not the original tawcroot argv. With
-		 * `extras.guest_exe == NULL`, --exec-child's
-		 * `tawcroot_loader_exec_child` falls back to `st.path` — the
-		 * exec target — which is the correct value for AT_EXECFN /
-		 * /proc/self/exe synthesis. Without this, Firefox's stub binary
-		 * (which looks at /proc/self/exe to find its own dir, then
-		 * dlopen's libxul.so relative to it) sees /bin/bash and prints
-		 * "Couldn't load XPCOM." */
-		extras.guest_exe   = (const char *)0;
+		/* /proc/self/exe names the opened file, not the source fd path
+		 * that may disappear at exec. AT_EXECFN still uses `path`. */
+		static char executable_path[16 * 1024];
+		long resolved = tawcroot_fd_to_guest_abs(*executable_fd,
+			executable_path, sizeof executable_path);
+		extras.guest_exe = resolved >= 0 ? executable_path : path;
 		/* Hardlink-emulation store: ferry the ORIGINAL store path.
 		 * Deriving from rootfs_host in the child would be wrong
 		 * after a guest chroot (rootfs_host is then the chrooted
@@ -336,19 +323,36 @@ long tawcroot_exec_handler_prepare(const char *path, int argc,
 		extras.proctitle = title_buf;
 	}
 
-	static uint8_t state_buf[EXEC_STATE_BUF_SIZE];
-	long w = tawcroot_exec_state_write(state_buf, sizeof state_buf,
+	size_t state_size = tawcroot_exec_state_estimate_bytes(path, argc,
+	                                                       argv, envp, &extras);
+	long state_map = tawc_mmap(0, state_size,
+		TAWC_MM_PROT_READ | TAWC_MM_PROT_WRITE,
+		TAWC_MM_MAP_PRIVATE | TAWC_MM_MAP_ANON, -1, 0);
+	if (tawc_loader_mmap_is_err((uintptr_t)state_map)) {
+		tawc_close((int)mfd);
+		return state_map;
+	}
+	uint8_t *state_buf = (uint8_t *)(uintptr_t)state_map;
+	long w = tawcroot_exec_state_write(state_buf, state_size,
 	                                   path, argc, argv, envp, &extras);
-	if (w < 0) { tawc_close((int)mfd); return w; }
+	if (w < 0) {
+		tawc_munmap(state_buf, state_size);
+		tawc_close((int)mfd);
+		return w;
+	}
 
 	long bytes = 0;
 	while (bytes < w) {
 		long r = tawc_write((int)mfd, state_buf + bytes,
 		                    (size_t)(w - bytes));
-		if (r < 0) { tawc_close((int)mfd); return r; }
-		if (r == 0) { tawc_close((int)mfd); return TAWC_EFAULT; }
+		if (r <= 0) {
+			tawc_munmap(state_buf, state_size);
+			tawc_close((int)mfd);
+			return r < 0 ? r : TAWC_EFAULT;
+		}
 		bytes += r;
 	}
+	tawc_munmap(state_buf, state_size);
 
 	/* Rewind the memfd so the child's lseek(SEEK_END) reports the
 	 * right size and its mmap starts at offset 0. */
@@ -360,7 +364,17 @@ long tawcroot_exec_handler_prepare(const char *path, int argc,
 	return mfd;
 }
 
-long tawcroot_exec_handler_commit(int mfd)
+long tawcroot_exec_handler_prepare(const char *path, int argc,
+                                   const char *const *argv,
+                                   const char *const *envp)
+{
+	int executable_fd = -1;
+	long result = prepare(path, argc, argv, envp, &executable_fd);
+	if (result < 0 && executable_fd >= 0) tawc_close(executable_fd);
+	return result;
+}
+
+static long commit(int mfd)
 {
 	/* (4) Open /proc/self/exe so we can execveat ourselves with
 	 * AT_EMPTY_PATH. Going through the path namespace would require
@@ -489,6 +503,20 @@ long tawcroot_exec_handler_commit(int mfd)
 	tawc_close((int)exe_fd);
 	tawc_close((int)mfd);
 	return er;
+}
+
+long tawcroot_exec_handler_commit(int mfd)
+{
+	/* Read ownership before commit closes the state on an error. On
+	 * success the new loader consumes the pinned executable instead. */
+	uint32_t fd_plus_one = 0;
+	long n = tawc_pread64(mfd, &fd_plus_one, sizeof fd_plus_one,
+		offsetof(tawcroot_exec_state_header, executable_fd_plus_one));
+	int fd = n == sizeof fd_plus_one && fd_plus_one && fd_plus_one <= 0x80000000U
+	         ? (int)(fd_plus_one - 1) : -1;
+	long result = commit(mfd);
+	if (fd >= 0) tawc_close(fd);
+	return result;
 }
 
 long tawcroot_exec_handler_perform(const char *path, int argc,

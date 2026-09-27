@@ -3,18 +3,15 @@
  * tawcroot's own invariants.
  *
  * Surface (notes/tawcroot/sigsys-handler.md §"Guest signal/seccomp control"):
- *   - `seccomp(2)` / `prctl(PR_SET_SECCOMP)`: report unsupported.
- *     Never claim to have installed an application filter. Programs that
- *     require one rather than accepting capability failure cannot run.
+ *   - Guest seccomp filters: accept without installing another filter.
+ *     This compatibility runtime provides no guest sandbox isolation.
  *   - `rt_sigaction(SIGSYS, ...)`: virtualize. The guest's intended
  *     disposition lives in a shadow buffer; reads/writes of SIGSYS
  *     hit the shadow and never the kernel. The real kernel disposition
  *     stays our SIGSYS handler.
- *   - `rt_sigprocmask`: pass through, but transparently strip SIGSYS
- *     from any new mask the guest installs and OR-in the shadow bit
- *     when reporting the previous mask. Guest reads back what it set;
- *     the kernel never actually blocks SIGSYS, so traps continue
- *     reaching our handler.
+ *   - `rt_sigprocmask`: SIGSYS is reserved and cannot be blocked.
+ *     Strip it from requested masks and report the actual kernel mask.
+ *     No per-thread shadow or thread-exit bookkeeping is needed.
  *   - `sigaltstack`: virtualize via uc->uc_stack so undersized guest
  *     altstacks never receive our SA_ONSTACK frame (sigalt.h).
  *   - Other signals are unaffected.
@@ -23,6 +20,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <ucontext.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
 
 #include "dispatch.h"
 #include "errno_neg.h"
@@ -52,34 +51,38 @@
 # define SIG_SETMASK 2
 #endif
 
-/* Shadow state for the guest's SIGSYS view lives in signal_shadow.c.
- * Two pieces, scoped differently:
- *   - The sigaction is process-global (POSIX dispositions are
- *     process-wide), protected by a seqlock against concurrent
- *     sigaction(SIGSYS) calls from multiple threads.
- *   - The "blocked" bit is per-thread (POSIX masks are per-thread),
- *     stored in a TID-keyed open-address table — the kernel mask in
- *     uc->uc_sigmask is per-thread for free, but we strip SIGSYS from
- *     it to keep traps coming, so the shadow has to live separately.
- * Sizing of the action buffer (TAWC_KERN_SIGACTION_SIZE) is exposed
- * via signal_shadow.h: handler ptr (8) + flags (8) + sa_restorer (8)
- * + mask (8) = 32 on both arches (both define SA_RESTORER).
- * (Earlier revs oversized to 64; over-read past the guest struct in
- * both directions, review finding B2.) */
+/* Compatibility only: never stack guest BPF over our SIGSYS routing.
+ * Validate readable storage, not BPF semantics. Android's filter remains
+ * active; no application filesystem/network policy is enforced here. */
+static long accept_guest_filter(long pointer)
+{
+	struct sock_fprog program;
+	if (tawc_copy_from_guest(&program, sizeof program, (void *)(uintptr_t)pointer) < 0)
+		return TAWC_EFAULT;
+	if (!program.len || program.len > 4096) return TAWC_EINVAL;
+	struct sock_filter instruction;
+	for (unsigned i = 0; i < program.len; i++)
+		if (tawc_copy_from_guest(&instruction, sizeof instruction, program.filter + i) < 0)
+			return TAWC_EFAULT;
+	return 0;
+}
 
-/* Guest filters cannot be stacked safely over the runtime's SIGSYS routing.
- * Match ARLinux's existing capability contract rather than claiming that an
- * application filter was installed. Android's filter remains active. */
 static long handle_seccomp(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
-	(void)args; (void)uc;
+	(void)uc;
+	if (args->a == SECCOMP_SET_MODE_FILTER) {
+		/* NEW_LISTENER requires a real notification fd, which we cannot supply. */
+		if (args->b & ~SECCOMP_FILTER_FLAG_TSYNC) return TAWC_EINVAL;
+		return accept_guest_filter(args->c);
+	}
 	return TAWC_ENOSYS;
 }
 
 static long handle_prctl(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
-	if ((int)args->a == PR_SET_SECCOMP) return TAWC_EINVAL;
+	if ((int)args->a == PR_SET_SECCOMP)
+		return args->b == SECCOMP_MODE_FILTER ? accept_guest_filter(args->c) : TAWC_EINVAL;
 	return TAWC_RAW(TAWC_SYS_prctl, args->a, args->b, args->c,
 			args->d, args->e, 0);
 }
@@ -144,16 +147,8 @@ static uint64_t *uc_sigmask_word(ucontext_t *uc)
 	return (uint64_t *)&uc->uc_sigmask;
 }
 
-/* State-mutation order:
- *  1. read guest_set into a local
- *  2. compute new kmask + new_blocked locally
- *  3. mutate uc->uc_sigmask in place
- *  4. copy_to_guest old mask; on EFAULT, roll back uc->uc_sigmask
- *  5. publish blocked shadow via tawc_sigshadow_blocked_set if and
- *     only if step 4 succeeded AND new_blocked changed
- *
- * Step 5 is conditional and unconditionally last, so there's no
- * shadow-rollback path. */
+/* Update the saved kernel mask so sigreturn preserves the change.
+ * Copy input before output for aliasing, and roll back on output EFAULT. */
 static long handle_rt_sigprocmask(const tawcroot_syscall_args *args,
 				  ucontext_t *uc)
 {
@@ -163,8 +158,7 @@ static long handle_rt_sigprocmask(const tawcroot_syscall_args *args,
 	size_t sigsetsize  = (size_t)args->d;
 
 	if (sigsetsize != 8) return TAWC_EINVAL;
-	/* No-op call (the kernel returns 0 immediately for this shape).
-	 * Short-circuit before issuing gettid + a shadow table probe. */
+	/* Kernel no-op semantics also ignore how when set is NULL. */
 	if (!guest_set && !guest_oldset) return 0;
 
 	uint64_t set_val = 0;
@@ -176,32 +170,20 @@ static long handle_rt_sigprocmask(const tawcroot_syscall_args *args,
 	}
 
 	uint64_t *kmask = uc_sigmask_word(uc);
-	uint64_t  cur_kmask = *kmask;
-	/* The shadow lives in a TID-keyed table — uc->uc_sigmask is
-	 * already per-thread (the kernel populated it for the trapping
-	 * thread), but we deliberately strip SIGSYS from it, so the
-	 * "guest blocked SIGSYS" bit needs its own per-thread store. */
-	long tid_l = TAWC_RAW(TAWC_SYS_gettid, 0, 0, 0, 0, 0, 0);
-	int  tid   = (int)tid_l;
-	int  prev_blocked = tawc_sigshadow_blocked_get(tid);
-	int  new_blocked  = prev_blocked;
+	uint64_t  cur_kmask = *kmask & ~SIGSYS_BIT;
 
 	if (have_set) {
-		int sigsys_in_set = (set_val & SIGSYS_BIT) != 0;
 		uint64_t kernel_set = set_val & ~SIGSYS_BIT;
 
 		switch (how) {
 		case SIG_BLOCK:
 			*kmask = cur_kmask | kernel_set;
-			if (sigsys_in_set) new_blocked = 1;
 			break;
 		case SIG_UNBLOCK:
 			*kmask = cur_kmask & ~kernel_set;
-			if (sigsys_in_set) new_blocked = 0;
 			break;
 		case SIG_SETMASK:
 			*kmask = kernel_set;
-			new_blocked = sigsys_in_set;
 			break;
 		default:
 			return TAWC_EINVAL;
@@ -210,18 +192,13 @@ static long handle_rt_sigprocmask(const tawcroot_syscall_args *args,
 
 	if (guest_oldset) {
 		uint64_t old = cur_kmask;
-		if (prev_blocked) old |= SIGSYS_BIT;
 		long e = tawc_copy_to_guest(guest_oldset, &old, 8);
 		if (e < 0) {
-			/* Roll back the kernel mask if we'd updated it.
-			 * Shadow doesn't need rollback — we haven't
-			 * published `new_blocked` yet. */
+			/* A failed output copy must not change the mask. */
 			if (have_set) *kmask = cur_kmask;
 			return TAWC_EFAULT;
 		}
 	}
-	if (have_set && new_blocked != prev_blocked)
-		tawc_sigshadow_blocked_set(tid, new_blocked);
 	return 0;
 }
 

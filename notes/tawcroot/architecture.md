@@ -146,6 +146,23 @@ right before the jump, making `/proc/<pid>/cmdline` (and, via
 before manually jumping to guest code. The fd is never visible to the
 guest.
 
+Exec argument strings use a shared argv/envp budget derived from the
+kernel's soft `RLIMIT_STACK`: one quarter, capped at 6 MiB, with a
+32-page floor. Each string (including NUL) is limited to 32 host pages.
+Pointer storage and the executable path are charged before commit.
+Collection uses a temporary anonymous mapping; serialization allocates
+the exact size reported by the state writer. Both mappings are released
+before re-exec, including on error. No libc allocator runs in SIGSYS.
+The versioned state format still limits entry counts to 4096 arguments
+and 1024 environment entries; this is not Linux's full entry-count range.
+
+State v9 also carries a pinned executable fd. Prepare opens and validates
+the executable once, clears CLOEXEC on that private descriptor, and the
+new loader consumes and closes it. A failed prepare/commit closes it too.
+This matters for `execve("/proc/self/fd/N", ...)` with a CLOEXEC source fd:
+the source closes during internal re-exec, but the executable must remain
+loadable. Reopening the original path after commit is not equivalent.
+
 State format is versioned and length-prefixed binary, not ad-hoc
 string parsing. It contains:
 
@@ -180,4 +197,3 @@ argv on re-exec. This makes "envp passes through verbatim"
 practical: the child may enumerate `environ` only to copy the guest
 environment onto the synthesized guest stack, not to interpret
 tawcroot settings.
-

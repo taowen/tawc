@@ -50,6 +50,8 @@ static uint64_t  g_host_at_clktck        = 0;
 static uint64_t  g_host_at_flags         = 0;
 static size_t    g_host_page_size        = 4096;
 
+size_t tawcroot_loader_page_size(void) { return g_host_page_size; }
+
 /* True iff `v` is a non-zero power of two. */
 static int is_pow2(uint64_t v)
 {
@@ -263,8 +265,20 @@ void tawcroot_loader_exec(const struct tawc_loader_exec_args *args)
 	const size_t PAGE = g_host_page_size;
 
 	/* --- 1. Open + parse the guest binary. --- */
-	long bin_fd = tawcroot_rescue_open_in_view(args->guest_path);
-	if (bin_fd < 0) LOADER_FAIL(60);
+	long bin_fd = args->executable_fd_plus_one
+		? (long)args->executable_fd_plus_one - 1
+		: tawcroot_rescue_open_in_view(args->guest_path);
+	if (bin_fd < 0) {
+		static const char message[] = "tawcroot: cannot open guest executable: ";
+		tawc_write(2, message, sizeof message - 1);
+		tawc_write(2, args->guest_path, tawc_strlen(args->guest_path));
+		char error[24];
+		int n = tawc_int_to_str(error, sizeof error, (int)bin_fd);
+		tawc_write(2, " errno=", 7);
+		if (n > 0) tawc_write(2, error, (size_t)n);
+		tawc_write(2, "\n", 1);
+		LOADER_FAIL(60);
+	}
 
 	/* --- 1.5. Resolve any #! shebang chain into ELF + adjusted argv. ---
 	 * Scripts (e.g. pacman-key, gpg wrappers) need the kernel's
@@ -521,6 +535,7 @@ void tawcroot_loader_exec_child(int state_fd, const char *platform)
 	(void)tawc_close(state_fd);
 
 	struct tawc_loader_exec_args ea = {
+		.executable_fd_plus_one = st.executable_fd_plus_one,
 		.guest_path = st.path,
 		.argc       = (int)st.argc,
 		.argv       = (const char *const *)st.argv,

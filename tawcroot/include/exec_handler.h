@@ -41,7 +41,8 @@
  *       `execve` syscall.
  *
  * The handler uses raw_sys.h for every syscall. The exec path stages
- * argv/envp/exec_state in static buffers (here and in syscalls_exec.c);
+ * paths, pointer arrays and metadata in static buffers; argument strings
+ * and serialized state use temporary mappings released before commit;
  * a process-global spinlock in syscalls_exec.c (exec_lock) serializes
  * the static-buffer phase so two concurrent execs — or a CLONE_VM
  * child exec'ing while the parent execs — can't interleave.

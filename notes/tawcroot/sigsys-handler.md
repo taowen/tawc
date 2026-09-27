@@ -373,30 +373,24 @@ hardening:
   kernel disposition remains tawcroot's handler. Other signals pass
   through. If the guest asks for `SIG_DFL`/`SIG_IGN` on `SIGSYS`, store
   that in the shadow table but do not apply it to the kernel.
-- `rt_sigprocmask` / `sigprocmask`: prevent guest code from blocking
-  real `SIGSYS`. Maintain a guest-visible shadow mask if needed, but
-  clear `SIGSYS` before forwarding the real mask to the kernel.
+- `rt_sigprocmask` / `sigprocmask`: reserve `SIGSYS` for translation.
+  Clear it from requested masks and report it unblocked on queries.
+  Update the saved kernel mask in `ucontext` so sigreturn preserves changes
+  to other signals. There is no per-thread mask shadow or TID table.
+  Programs requiring a blockable SIGSYS are not supported; pretending it
+  was blocked cannot provide that behavior.
 - `sigaltstack`: keep guest altstacks big enough for our `SA_ONSTACK`
   frame. See §"Handler stack budget".
-- `seccomp(SECCOMP_SET_MODE_*)` and `prctl(PR_SET_SECCOMP, ...)`:
-  fake-accept — validate arguments with the kernel's exact
-  `EFAULT`/`EINVAL` shapes (NULL-fprog support probes must keep
-  getting `-EFAULT`), then install nothing and return success. We
-  can't honestly install the filter: stacked seccomp can
-  `KILL_PROCESS` our raw_syscall stub, return errno before our
-  path-translation trap, or `RET_TRAP` into a guest-owned `SIGSYS`
-  path. And `-EPERM` (the pre-2026-08 contract) is no longer
-  tolerable: openssh-portable made sandbox-install failure fatal in
-  commit `7ab700f170` (mid-2026, shipped in 10.x), so stock sshd
-  killed every connection preauth on the denial
-  (dropbear/Firefox tolerated it — sshd was the forcing case). The
-  one still-denied shape is `SECCOMP_FILTER_FLAG_NEW_LISTENER` →
-  `-EPERM`: success promises a user-notif fd we can't mint.
-  Read-only seccomp ops (`SECCOMP_GET_ACTION_AVAIL` etc.) still pass
-  through verbatim.
-- `prctl(PR_GET_SECCOMP)` may return the host truth (`2`) or a
-  guest-compatible value if a workload needs it; do not lie in ways
-  that encourage a program to install a filter we will reject.
+- `seccomp(SECCOMP_SET_MODE_FILTER)` and
+  `prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, ...)`: accept without
+  installing a filter. Check nonempty length (maximum 4096 instructions)
+  and readable storage; this is not a BPF verifier. Seccomp syscall flags
+  are limited to zero or TSYNC. Other flags, including NEW_LISTENER,
+  return EINVAL: no notification fd can be supplied. Other seccomp
+  operations return ENOSYS. PR_GET_SECCOMP reports the host's real state.
+  Guest filters can otherwise kill the raw syscall stub or bypass pathname
+  translation. Consequently this runtime does not enforce guest sandboxes;
+  only the Android app boundary remains, not per-project/instance isolation.
 
 The guest-visible `SIGSYS` shadow state is tiny but still mutable
 process state. Store it in fixed-size atomics or a snapshot structure
@@ -405,7 +399,7 @@ malloc-backed containers or libc locks from inside the handler.
 
 Tests must cover at least: guest `sigaction(SIGSYS, SIG_DFL)`, guest
 blocking `SIGSYS`, guest `prctl(PR_SET_SECCOMP)` / `seccomp(2)` (both
-must observe success on `SET_MODE_*` without actually installing the
+must observe success on filter installation without actually installing the
 filter), and a path syscall after each attempt. The expected result
 is that path translation still works.
 
@@ -562,4 +556,3 @@ Refactored conventions every fs-handler follows (June 2026 cleanup):
   `proc_shadow_classify_at` (syscalls_fs.c), which also retries via
   fd-relative composition; `hosted_proc_shadow_open_stat_lockstep`
   fails CI if a new kind lands on only one surface.
-

@@ -167,6 +167,7 @@ long tawcroot_exec_state_write(void *buf, size_t buf_cap,
 			h->proctitle_off = emit_str(strings, &off,
 			                            ex->proctitle);
 		if (ex->namespaces) h->namespaces = *ex->namespaces;
+		h->executable_fd_plus_one = ex->executable_fd_plus_one;
 	}
 
 	h->string_bytes = off;
@@ -187,6 +188,7 @@ long tawcroot_exec_state_read(const void *buf, size_t buf_size,
 	    (const tawcroot_exec_state_header *)buf;
 	if (h->magic != TAWCROOT_EXEC_STATE_MAGIC) return TAWC_EINVAL;
 	if (h->version != TAWCROOT_EXEC_STATE_VERSION) return TAWC_EINVAL;
+	if (h->executable_fd_plus_one > 0x80000000U) return TAWC_EINVAL;
 	if (h->argc > TAWCROOT_EXEC_STATE_MAX_ARGS) return TAWC_EINVAL;
 	if (h->envc > TAWCROOT_EXEC_STATE_MAX_ENV) return TAWC_EINVAL;
 	if (h->n_binds > TAWCROOT_EXEC_STATE_MAX_BINDS) return TAWC_EINVAL;
@@ -261,6 +263,7 @@ long tawcroot_exec_state_read(const void *buf, size_t buf_size,
 		out->shm_name[i] = strings + h->shm_name_off[i];
 		out->shm_fd[i]   = (int)h->shm_fd[i];
 	}
+	out->executable_fd_plus_one = h->executable_fd_plus_one;
 	out->proctitle = h->proctitle_off ? strings + h->proctitle_off
 	                                  : (const char *)0;
 	out->has_identity = h->has_identity ? 1 : 0;
