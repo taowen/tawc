@@ -71,6 +71,9 @@ static long handle_seccomp(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
 	if (args->a == SECCOMP_SET_MODE_FILTER) {
+		/* NULL is a capability probe, not a filter installation. We do
+		 * not provide BPF enforcement; do not advertise that capability. */
+		if (!args->c) return TAWC_ENOSYS;
 		/* NEW_LISTENER requires a real notification fd, which we cannot supply. */
 		if (args->b & ~SECCOMP_FILTER_FLAG_TSYNC) return TAWC_EINVAL;
 		return accept_guest_filter(args->c);
@@ -82,7 +85,7 @@ static long handle_prctl(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
 	if ((int)args->a == PR_SET_SECCOMP)
-		return args->b == SECCOMP_MODE_FILTER ? accept_guest_filter(args->c) : TAWC_EINVAL;
+		return args->b == SECCOMP_MODE_FILTER && args->c ? accept_guest_filter(args->c) : TAWC_EINVAL;
 	return TAWC_RAW(TAWC_SYS_prctl, args->a, args->b, args->c,
 			args->d, args->e, 0);
 }

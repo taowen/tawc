@@ -29,3 +29,6 @@
  * `fake_eperm` in syscalls_control.c — different syscall, different
  * registration site.) */
 void tawcroot_chroot_register(void);
+long tawcroot_fs_share(void);
+void tawcroot_fs_detach(void);
+long tawcroot_fs_sync(void);

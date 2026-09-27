@@ -2625,6 +2625,25 @@ static long handle_statfs(const tawcroot_syscall_args *args, ucontext_t *uc)
  * (Android app-private storage doesn't carry xattrs); the value of
  * trapping is that the guest sees the right errno against the right
  * path rather than a host-relative error. */
+/* Virtual root cannot grant Android capabilities. Accept well-formed package
+ * metadata writes only after the actual kernel operation denied privilege.
+ * No file capability is installed or reported by getxattr. */
+static long capability_metadata(long result, const tawcroot_syscall_args *args)
+{
+	if (result != TAWC_EPERM || tawcroot_identity_euid() != 0) return result;
+	char name[32];
+	if (tawc_copy_string_from_guest(name, sizeof name, (void *)args->b) < 0 ||
+	    !tawc_streq(name, "security.capability")) return result;
+	if (args->e & ~3L || args->e == 3) return TAWC_EINVAL;
+	uint32_t value[6];
+	if (args->d != 20 && args->d != 24) return TAWC_EINVAL;
+	if (tawc_copy_from_guest(value, (size_t)args->d, (void *)args->c) < 0) return TAWC_EFAULT;
+	uint32_t revision = value[0] & ~1u;
+	if ((args->d == 20 && revision != 0x02000000u) ||
+	    (args->d == 24 && revision != 0x03000000u)) return TAWC_EINVAL;
+	return 0;
+}
+
 #define DECLARE_PATH_XATTR(name, sysnr, narg, pmode, pintent)             \
 static long handle_##name(const tawcroot_syscall_args *args, ucontext_t *uc) \
 {                                                                          \
@@ -2643,10 +2662,12 @@ static long handle_##name(const tawcroot_syscall_args *args, ucontext_t *uc) \
 				    TAWCROOT_PATH_SCRATCH_SIZE,               \
 				    t.fd, t.path);                             \
 	if (bp < 0) return bp;                                             \
-	return TAWC_RAW(sysnr, (long)host_path,                            \
+	long result = TAWC_RAW(sysnr, (long)host_path,                            \
 			args->b, args->c, args->d,                         \
 			(narg) > 4 ? args->e : 0,                          \
 			(narg) > 5 ? args->f : 0);                         \
+	return ((sysnr) == TAWC_SYS_setxattr || (sysnr) == TAWC_SYS_lsetxattr) \
+		? capability_metadata(result, args) : result;                       \
 }
 
 DECLARE_PATH_XATTR(setxattr,     TAWC_SYS_setxattr,     5, TAWCROOT_PATH_FOLLOW,
@@ -2679,8 +2700,9 @@ static long handle_fsetxattr(const tawcroot_syscall_args *args,
 	int fd = (int)args->a;
 	if (tawcroot_fd_is_reserved(fd)) return TAWC_EBADF;
 	if (fd_in_ro_bind(fd, 1)) return TAWC_EROFS;
-	return TAWC_RAW(TAWC_SYS_fsetxattr, args->a, args->b, args->c,
+	long result = TAWC_RAW(TAWC_SYS_fsetxattr, args->a, args->b, args->c,
 			args->d, args->e, 0);
+	return capability_metadata(result, args);
 }
 
 static long handle_fremovexattr(const tawcroot_syscall_args *args,

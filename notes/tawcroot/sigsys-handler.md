@@ -388,6 +388,9 @@ hardening:
   are limited to zero or TSYNC. Other flags, including NEW_LISTENER,
   return EINVAL: no notification fd can be supplied. Other seccomp
   operations return ENOSYS. PR_GET_SECCOMP reports the host's real state.
+  NULL filter capability probes report unsupported (seccomp: ENOSYS;
+  prctl: EINVAL), rather than advertising BPF enforcement we do not provide.
+  Applications that can degrade must not enter enforcement-dependent paths.
   Guest filters can otherwise kill the raw syscall stub or bypass pathname
   translation. Consequently this runtime does not enforce guest sandboxes;
   only the Android app boundary remains, not per-project/instance isolation.

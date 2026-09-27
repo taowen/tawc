@@ -953,8 +953,27 @@ Manjaro install (~80 errors per `pacman -Syyu`); the rootfs is left
 without GTK icon caches, GSettings schemas, mime caches, etc. So
 we *emulate* the syscall instead.
 
-The emulation lives in `src/chroot.c`. Per-process state that
-defines "the current root view":
+The emulation lives in `src/chroot.c`.
+
+Non-shared-VM clone calls pass through the namespace handler. `CLONE_FS`
+peers share a small anonymous mapping publishing the current canonical root
+path, read-only flag and generation. Each peer reopens the directory in its
+own fd table and reanchors its local path view before dispatching another
+translated syscall. Ordinary fork and `unshare(CLONE_FS)` detach; exec takes
+the synchronized local snapshot and does not retain sharing. Shared-VM stack
+switches remain on the kernel fast path. Concurrent publication returns
+EAGAIN instead of waiting inside a signal handler. This is root-view
+compatibility, not mount namespaces or filesystem isolation.
+
+An inherited directory fd can also be used for `fchdir` followed by
+`chroot(".")` outside the old root, matching Linux's retained-fd behavior.
+
+Virtual-root `security.capability` writes denied by Android are accepted
+only for readable, well-formed revision 2/3 payloads. They install no Android
+capabilities and do not create attributes visible to `getxattr`; other xattr
+errors remain errors. This supports package metadata, not privileged execution.
+
+Per-process state defining the current root view:
 
 - `tawcroot_rootfs_fd` — O_PATH dirfd. Initially the rootfs the
   supervisor opened; replaced atomically(-ish) on each successful

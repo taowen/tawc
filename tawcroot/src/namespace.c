@@ -5,6 +5,7 @@
 #include <asm/unistd.h>
 #include <sys/stat.h>
 #include "namespace.h"
+#include "chroot.h"
 #include "dispatch.h"
 #include "errno_neg.h"
 #include "fdtab.h"
@@ -114,18 +115,24 @@ static long clone_namespace(const tawcroot_syscall_args *a, ucontext_t *uc)
     unsigned long flags = (unsigned long)a->a;
     if (flags & (CLONE_VM | CLONE_THREAD)) return TAWC_EINVAL;
     if ((flags & CLONE_NEWUSER) && (flags & CLONE_FS)) return TAWC_EINVAL;
-#if defined(__aarch64__)
+    if (flags & CLONE_FS) {
+        long error = tawcroot_fs_share();
+        if (error < 0) return error;
+    }
     long result = TAWC_RAW(TAWC_SYS_clone, flags & ~NS_FLAGS, 0, a->c, a->d, a->e, 0);
     if (!result) {
+        if (!(flags & CLONE_FS)) tawcroot_fs_detach();
         if (flags & CLONE_NEWPID) tawcroot_namespace.init_pid = (int)tawc_getpid();
         if ((flags & CLONE_NEWUSER) && new_user() < 0) tawc_exit_group(125);
-        if (a->b) uc->uc_mcontext.sp = (unsigned long)a->b;
+        if (a->b) {
+#if defined(__aarch64__)
+            uc->uc_mcontext.sp = (unsigned long)a->b;
+#else
+            uc->uc_mcontext.gregs[REG_RSP] = a->b;
+#endif
+        }
     }
     return result;
-#else
-    (void)uc;
-    return TAWC_ENOSYS;
-#endif
 }
 
 static long unshare_namespace(const tawcroot_syscall_args *a, ucontext_t *uc)
@@ -134,6 +141,7 @@ static long unshare_namespace(const tawcroot_syscall_args *a, ucontext_t *uc)
     unsigned long flags = (unsigned long)a->a;
     if (flags & ~(CLONE_NEWUSER | CLONE_NEWNET | CLONE_FS)) return TAWC_EINVAL;
     long result = (flags & CLONE_FS) ? TAWC_RAW(TAWC_SYS_unshare, CLONE_FS, 0, 0, 0, 0, 0) : 0;
+    if (!result && (flags & CLONE_FS)) tawcroot_fs_detach();
     if (!result && (flags & CLONE_NEWUSER)) result = new_user();
     return result;
 }

@@ -35,6 +35,7 @@
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
+#include <linux/sched.h>
 
 #include "filter_build.h"
 #include "sysnr.h"
@@ -79,6 +80,10 @@ static uint32_t run_filter(const struct sock_filter *prog, size_t len,
 		}
 		case BPF_JMP | BPF_JGE | BPF_K: {
 			pc += 1 + (size_t)(A >= ins.k ? ins.jt : ins.jf);
+			break;
+		}
+		case BPF_JMP | BPF_JSET | BPF_K: {
+			pc += 1 + (size_t)((A & ins.k) ? ins.jt : ins.jf);
 			break;
 		}
 		case BPF_RET | BPF_K:
@@ -388,4 +393,20 @@ test(filter_close_range_block_is_fixed_size)
 	test_int_eq(build_and_run(traps, 1, STUB_ADDR, 1000,
 				  TEST_AUDIT_ARCH, &d),
 		    SECCOMP_RET_TRAP);
+}
+
+test(filter_fork_traps_but_shared_vm_stack_switch_does_not)
+{
+	int traps[] = { TAWC_SYS_clone, TAWC_SYS_openat };
+	struct test_seccomp_data d = {
+		.nr = TAWC_SYS_clone, .arch = TEST_AUDIT_ARCH,
+		.instruction_pointer = OUT_OF_STUB,
+	};
+	test_int_eq(build_and_run(traps, 2, STUB_ADDR, 0, TEST_AUDIT_ARCH, &d), SECCOMP_RET_TRAP);
+	d.args[0] = CLONE_FS;
+	test_int_eq(build_and_run(traps, 2, STUB_ADDR, 0, TEST_AUDIT_ARCH, &d), SECCOMP_RET_TRAP);
+	d.args[0] = CLONE_VM | CLONE_FS | CLONE_THREAD;
+	test_int_eq(build_and_run(traps, 2, STUB_ADDR, 0, TEST_AUDIT_ARCH, &d), SECCOMP_RET_ALLOW);
+	d.nr = TAWC_SYS_openat;
+	test_int_eq(build_and_run(traps, 2, STUB_ADDR, 0, TEST_AUDIT_ARCH, &d), SECCOMP_RET_TRAP);
 }

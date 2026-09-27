@@ -73,6 +73,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <ucontext.h>
+#include <sys/mman.h>
+#include <stdatomic.h>
 
 #include "chroot.h"
 #include "dispatch.h"
@@ -87,6 +89,38 @@
 #include "tawc_string.h"
 #include "tawc_uapi.h"
 #include "usercopy.h"
+
+/* Only CLONE_FS peers share this mapping. Ordinary fork snapshots the local
+ * view, unshare detaches, and exec serializes the synchronized local view.
+ * Store paths rather than fd numbers: peers may have separate fd tables. */
+struct shared_root {
+    atomic_uint sequence;
+    int ro;
+    char path[4096];
+};
+static struct shared_root *shared;
+static unsigned seen;
+
+long tawcroot_fs_share(void)
+{
+    if (shared) return 0;
+    long p = tawc_mmap(0, sizeof(*shared), PROT_READ | PROT_WRITE,
+                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (p < 0 && p >= -4095) return p;
+    shared = (void *)p;
+    shared->ro = tawcroot_root_ro;
+    memcpy(shared->path, tawcroot_rootfs_host_path, tawcroot_rootfs_host_path_len + 1);
+    atomic_store(&shared->sequence, 0);
+    seen = 0;
+    return 0;
+}
+
+void tawcroot_fs_detach(void)
+{
+    if (shared) tawc_munmap(shared, sizeof(*shared));
+    shared = 0;
+    seen = 0;
+}
 
 /* Translate the guest's chroot target to (base_fd, suffix) and open
  * an O_PATH dirfd for it. On success returns >=0 (the new fd, not yet
@@ -106,6 +140,12 @@ static long open_chroot_target(const char *guest_path, int *ro_out)
 	tawcroot_path_result r = tawcroot_path_translate(
 		path_buf, suffix, TAWCROOT_PATH_SCRATCH_SIZE,
 		TAWCROOT_PATH_FOLLOW, TAWCROOT_PATH_INTENT_READ);
+	/* An inherited directory fd may retain access outside the old root,
+	 * just as on Linux. Preserve ordinary bind RO checks when in view. */
+	if (r.err == TAWC_ENOENT && tawc_streq(path_buf, ".")) {
+		*ro_out = 0;
+		return tawc_openat(AT_FDCWD, ".", O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+	}
 	if (r.err) return r.err;
 	*ro_out = r.ro;
 
@@ -120,16 +160,8 @@ static long open_chroot_target(const char *guest_path, int *ro_out)
 	return tawc_openat(r.base_fd, p, flags, 0);
 }
 
-static long handle_chroot(const tawcroot_syscall_args *args, ucontext_t *uc)
+static long apply_root(long new_fd, int new_root_ro)
 {
-	(void)uc;
-	const char *gpath = (const char *)(uintptr_t)args->a;
-	if (!gpath) return TAWC_EFAULT;
-
-	int new_root_ro = 0;
-	long new_fd = open_chroot_target(gpath, &new_root_ro);
-	if (new_fd < 0) return new_fd;
-
 	long resv = tawcroot_fd_reserve((int)new_fd);
 	if (resv < 0) {
 		tawc_close((int)new_fd);
@@ -197,6 +229,48 @@ static long handle_chroot(const tawcroot_syscall_args *args, ucontext_t *uc)
 	tawcroot_path_memoize_well_known();
 
 	return 0;
+}
+
+long tawcroot_fs_sync(void)
+{
+    if (!shared) return 0;
+    unsigned version = atomic_load_explicit(&shared->sequence, memory_order_acquire);
+    if (version == seen) return 0;
+    if (version & 1) return TAWC_EAGAIN;
+    TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+    memcpy(scratch->buf[0], shared->path, sizeof(shared->path));
+    int ro = shared->ro;
+    if (atomic_load_explicit(&shared->sequence, memory_order_acquire) != version)
+        return TAWC_EAGAIN;
+    long fd = tawc_openat(AT_FDCWD, scratch->buf[0], O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+    if (fd < 0) return fd;
+    long result = apply_root(fd, ro);
+    if (!result) seen = version;
+    return result;
+}
+
+static long handle_chroot(const tawcroot_syscall_args *args, ucontext_t *uc)
+{
+    (void)uc;
+    if (!args->a) return TAWC_EFAULT;
+    int ro = 0;
+    long fd = open_chroot_target((void *)(uintptr_t)args->a, &ro);
+    if (fd < 0) return fd;
+    unsigned version = seen;
+    if (shared && !atomic_compare_exchange_strong(&shared->sequence, &version, seen + 1)) {
+        tawc_close((int)fd);
+        return TAWC_EAGAIN;
+    }
+    long result = apply_root(fd, ro);
+    if (shared) {
+        if (!result) {
+            memcpy(shared->path, tawcroot_rootfs_host_path, tawcroot_rootfs_host_path_len + 1);
+            shared->ro = ro;
+            seen += 2;
+        }
+        atomic_store_explicit(&shared->sequence, seen, memory_order_release);
+    }
+    return result;
 }
 
 void tawcroot_chroot_register(void)

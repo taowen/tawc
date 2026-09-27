@@ -90,7 +90,7 @@ long tawcroot_build_filter(struct sock_filter *prog, size_t prog_cap,
 			EMIT_OR_FAIL(TAWC_BPF_J(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)trap_nrs[t], 0, 4));
 			EMIT_OR_FAIL(TAWC_BPF_S(BPF_LD | BPF_W | BPF_ABS, 16));
 			EMIT_OR_FAIL(TAWC_BPF_J(BPF_JMP | BPF_JSET | BPF_K,
-				CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET, 0, 1));
+				CLONE_VM, 1, 0));
 			EMIT_OR_FAIL(TAWC_BPF_S(BPF_RET | BPF_K, SECCOMP_RET_TRAP));
 			EMIT_OR_FAIL(TAWC_BPF_S(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
 			EMIT_OR_FAIL(TAWC_BPF_S(BPF_LD | BPF_W | BPF_ABS, 0));
