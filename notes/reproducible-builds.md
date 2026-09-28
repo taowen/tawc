@@ -83,6 +83,9 @@ in the container trust store: fdroidserver's downloader has no plain
 - Rootless podman ignores `--cpuset-cpus` unless systemd delegates the
   cpuset controller to the user slice, so `run.sh` applies the limit with
   `taskset` inside the container. `nproc` respects affinity.
+- `run.sh` deletes this version's previous APK first: `fdroid build`
+  silently skips a version whose output already exists, which once made
+  a determinism rerun "match" by reusing the first APK.
 - Podman records its storage path absolutely. If `build/fdroid/` moves,
   rewrite `StaticDir`/`GraphRoot`/`VolumeDir` in
   `build/fdroid/containers/storage/db.sql` rather than re-downloading.
