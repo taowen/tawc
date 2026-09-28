@@ -59,12 +59,12 @@ Binaries: https://github.com/wmww/tawc/releases/download/v%v/tawc-v%v.apk
 AllowedAPKSigningKeys: 0b2262d221a951b57d847b288324004ce3b2fefe1ef52a1140f2fbc1fbb990be
 
 Builds:
-  - versionName: '3'
-    versionCode: 3
+  - versionName: '4'
+    versionCode: 4
     # fdroiddata reviewers want the tag's full commit hash here
     # (`git rev-parse 'vN^{commit}'`), not the tag. This copy keeps the tag:
     # it is committed inside the release commit, so it cannot name it.
-    commit: v3
+    commit: v4
     subdir: app
     ndk: 27.2.12479018
 
@@ -152,5 +152,5 @@ UpdateCheckMode: Tags ^v[0-9]+$
 # `versionCode = versionName!!.toInt()`, so point both at versionName.
 # Without this it fails with "Couldn't find any version information".
 UpdateCheckData: app/build.gradle.kts|versionName\s*=\s*"(\d+)"|.|versionName\s*=\s*"(\d+)"
-CurrentVersion: '3'
-CurrentVersionCode: 3
+CurrentVersion: '4'
+CurrentVersionCode: 4
