@@ -383,6 +383,17 @@ and host `bits/wordsize.h` gates LP64 on `__x86_64__` being defined
 keeps wayland headers findable while letting the cross-glibc's
 `stdint.h` win.
 
+#### Why `--no-as-needed` is baked into `CC`/`CXX`
+
+Debian's gcc (the F-Droid image, so every release APK) links with
+`--as-needed` by default; Arch's cross gcc doesn't. Under it the GL
+shims lost their `DT_NEEDED` on `libGLESv2_hybris.so`, so
+`libGL.so.1`/`libGLESv2.so.2` exported no GL symbols and every GTK app
+and Firefox crashed (v4 release candidate). It has to be in `CC`/`CXX`:
+libtool places `LDFLAGS` after the libraries, too late to apply. When
+comparing a container build against a local one, diff `readelf -d`
+`NEEDED` lists across the libhybris tar first.
+
 #### Why we skip `common/{mm,n,o}` linker subdirs
 
 `common/Makefile.am` builds four bionic-linker plugin variants
