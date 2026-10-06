@@ -240,6 +240,12 @@ test(hosted_shm_migrated_segment_survives_reregister)
 	th_teardown(&v);
 }
 
+/* Raw syscall: bionic only declares memfd_create from API 30. */
+static int test_memfd(const char *name, unsigned int flags)
+{
+	return (int)syscall(TAWC_SYS_memfd_create, name, flags);
+}
+
 /* Guest memfds reopened via /proc/self/fd/<n> (Firefox's HaveMemfd
  * probe and DupReadOnly). Needs /proc in the view. */
 test(hosted_proc_fd_ro_reopen_of_guest_memfd_migrates)
@@ -249,7 +255,7 @@ test(hosted_proc_fd_ro_reopen_of_guest_memfd_migrates)
 	test_int_eq(tawcroot_path_add_bind("/proc", "/proc", 0), 0);
 	tawcroot_test_raw_hook = deny_memfd_reopen;
 
-	int m = memfd_create("guest", MFD_ALLOW_SEALING);
+	int m = test_memfd("guest", MFD_ALLOW_SEALING);
 	test_true(m >= 0);
 	test_int_eq(write(m, "xyz", 3), 3);
 	test_int_eq(fcntl(m, F_ADD_SEALS, F_SEAL_SHRINK), 0);
@@ -271,7 +277,7 @@ test(hosted_proc_fd_ro_reopen_of_guest_memfd_migrates)
 	test_int_eq(close(m), 0);
 
 	/* Without MFD_ALLOW_SEALING the memfd starts F_SEAL_SEAL'd. */
-	m = memfd_create("noseal", 0);
+	m = test_memfd("noseal", 0);
 	test_true(m >= 0);
 	snprintf(p, sizeof p, "/proc/self/fd/%d", m);
 	r = th_sys(TAWC_SYS_openat, AT_FDCWD, p, O_RDONLY, 0, 0, 0);
@@ -282,7 +288,7 @@ test(hosted_proc_fd_ro_reopen_of_guest_memfd_migrates)
 	test_int_eq(close(m), 0);
 
 	/* Mapped: stays a memfd, the denial reaches the guest. */
-	m = memfd_create("mapped", MFD_ALLOW_SEALING);
+	m = test_memfd("mapped", MFD_ALLOW_SEALING);
 	test_true(m >= 0);
 	test_int_eq(ftruncate(m, 4096), 0);
 	void *map = mmap(NULL, 4096, PROT_READ, MAP_SHARED, m, 0);
