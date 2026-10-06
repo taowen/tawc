@@ -624,3 +624,65 @@ pub fn assert_renders_via_ahb(backend: GraphicsBackend, cmd: &str, name: &str, t
         .unwrap_or_else(|e| panic!("{name} failed to stop cleanly: {e}"));
     assert_compositor_clean();
 }
+
+/// Wait until the test install's terminal is `want` (`pending`,
+/// `inUse:<n>` or `none`).
+pub fn wait_terminal_state(want: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let state = adb::terminal_state().expect("terminal-state");
+        if state == want {
+            return;
+        }
+        assert!(Instant::now() < deadline, "terminal-state {state:?}, want {want:?}");
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Bring the home terminal to the front and wait until MainActivity has
+/// window focus (typed text goes to the focused window).
+pub fn show_home_terminal() {
+    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::home_pane("terminal").expect("home-pane terminal");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let out = adb::shell("dumpsys window | grep mCurrentFocus").expect("dumpsys window");
+        if String::from_utf8_lossy(&out.stdout).contains("me.phie.tawc.MainActivity") {
+            return;
+        }
+        assert!(Instant::now() < deadline, "MainActivity never got focus");
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Type `line` into the focused terminal and press Enter. No spaces or
+/// single quotes: `input text` splits on spaces, use `%s`.
+pub fn terminal_run(line: &str) {
+    assert!(!line.contains(' ') && !line.contains('\''), "bad terminal line {line:?}");
+    adb::shell(&format!("input text '{line}'")).expect("input text");
+    adb::shell("input keyevent 66").expect("enter");
+}
+
+/// `exit` the last terminal tab (which closes the app), then put the
+/// home screen back on apps: later tests expect a TAWC activity in front.
+pub fn close_home_terminal() {
+    terminal_run("exit");
+    wait_terminal_state("none");
+    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::home_pane("apps").expect("home-pane apps");
+}
+
+/// Wait for `path` to exist in the rootfs, then return its contents.
+pub fn wait_for_rootfs_file(backend: GraphicsBackend, path: &str, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let out = adb::rootfs_run_with(backend, &format!("cat {path} 2>/dev/null || printf MISSING"))
+            .expect("rootfs run");
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        if text != "MISSING" {
+            return text;
+        }
+        assert!(Instant::now() < deadline, "{path} never appeared");
+        thread::sleep(Duration::from_millis(200));
+    }
+}

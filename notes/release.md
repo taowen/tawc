@@ -8,7 +8,7 @@ result, and distribute the maintainer-signed APK instead of one signed with
 their own key. One signing lineage means nobody ever has to uninstall (which
 would delete their distros) to switch channels. The container build needs no
 keys, so the agent runs it; the maintainer only signs. See
-[plans/reproducible-builds.md](../plans/reproducible-builds.md) and
+[reproducible-builds.md](reproducible-builds.md) and
 [building.md](building.md) ("F-Droid buildserver rig").
 
 ## Versioning
@@ -115,7 +115,7 @@ Signing cannot be run by the agent: the keystore lives in a different user accou
 
 ## Debuggability over size
 
-Release builds are deliberately NOT minified, obfuscated, or stripped (release block + `packaging.jniLibs.keepDebugSymbols` in `app/build.gradle.kts`): user-reported Java stack traces are readable as-is, and native tombstones come out of the device symbolized — no mapping.txt archiving, no unstripped-artifact hunting. This roughly doubles the APK (~29 vs ~13 MB R8-minified); anything under ~50 MB is an acceptable trade. `proguard-rules.pro` stays correct regardless, so minifying is a one-flag change if a size ceiling ever appears.
+Release builds run R8 (shrink + optimize, `isMinifyEnabled`/`isShrinkResources` in `app/build.gradle.kts`) because F-Droid review asked for it; the APK drops ~29 → ~15 MB. `proguard-rules.pro` sets `-dontobfuscate` and keeps `LineNumberTable`, so user-reported Java traces stay readable without mapping.txt (inlined frames may need `retrace` with the build's mapping to expand). Native libs still ship unstripped (`packaging.jniLibs.keepDebugSymbols`) so device tombstones come out symbolized. New JNI/reflection entry points need keep rules in `proguard-rules.pro`.
 
 ## Keystore
 

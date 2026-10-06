@@ -11,7 +11,7 @@
 #            copy the unsigned result out. Its whole point is that the
 #            build path and toolchain match what F-Droid will use when it
 #            rebuilds the tag, so the two APKs are byte-identical —
-#            see plans/reproducible-builds.md.
+#            see notes/reproducible-builds.md.
 #   reproduce rebuild and check the result against a signed APK, the way
 #            F-Droid will once the recipe carries `Binaries:`. Run it on
 #            the signed release before publishing anything.

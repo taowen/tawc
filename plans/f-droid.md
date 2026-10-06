@@ -141,7 +141,7 @@ then human steps 3.3 and 4.
       still fails once upstream has touched that code. Reporting it
       upstream is the maintainer's call (human-only, as with the MR).
 - No existing RFP/fdroiddata issue or MR mentions the app.
-- 3.3 was on hold pending [reproducible-builds.md](reproducible-builds.md):
+- 3.3 was on hold pending reproducible builds ([notes](../notes/reproducible-builds.md)):
   F-Droid cannot switch an app to the developer's signature after first
   publication, so that call came before the MR. It went ahead — the MR
   targets v3, with "Enable Reproducible Builds" ticked.
@@ -161,7 +161,7 @@ then human steps 3.3 and 4.
 
 - v3 is tagged, signed and published:
   https://github.com/wmww/tawc/releases/tag/v3. Reproducible builds are
-  done end to end (plans/reproducible-builds.md steps 1-7).
+  done end to end (notes/reproducible-builds.md).
 - **fdroiddata CI proved the reproducible build on their own runner**:
   `fdroid build` downloaded the published `tawc-v3.apk`, rebuilt v3 from
   source, and logged "compared built binary to supplied reference binary
@@ -185,6 +185,9 @@ then human steps 3.3 and 4.
   line is `.gitlab-ci.yml:644` between those two writes. Our APK carries
   `~~D8` and no `~~R8`, and that assignment exits 1 under the job's
   `-o pipefail`.
+- MR review (!49349) asked for R8. Enabled after v3 (`-dontobfuscate`,
+  see notes/release.md); the recipe's `check apk` should go green once
+  it builds a tag that includes the change.
 - Remaining: **HUMAN** — open the MR (step 3.3), then step 4.
 
 ## Step 1 — repo hygiene fixes (agent, in this repo)
@@ -265,9 +268,8 @@ then human steps 3.3 and 4.
   (existing release process, `notes/release.md`) and AutoUpdate picks it up.
   Add "push tag to GitHub" and "update fastlane changelog for vN" to the
   release checklist in `notes/release.md` once the recipe is merged.
-- Optional later: reproducible-builds mode (`Binaries:` + published dev-signed
-  APKs) so F-Droid ships the developer signature. Worthwhile but not needed
-  for initial listing; unminified builds make reproducibility more attainable.
+- Every release must reproduce or F-Droid skips it; see
+  `notes/reproducible-builds.md` ("Risks").
 
 ## Known risks / open questions
 

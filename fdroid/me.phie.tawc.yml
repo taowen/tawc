@@ -43,7 +43,7 @@ Repo: https://github.com/wmww/tawc.git
 # Reproducible build: F-Droid rebuilds the tag, checks the result against
 # the APK published on GitHub, and ships *that* APK — so users stay on one
 # signing key whichever channel they install from. See
-# plans/reproducible-builds.md. The release is built in F-Droid's own
+# notes/reproducible-builds.md. The release is built in F-Droid's own
 # buildserver image at their path (scripts/fdroid/run.sh release), which
 # is what makes the two builds match.
 #

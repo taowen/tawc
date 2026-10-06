@@ -76,6 +76,7 @@ NATIVE = {
     "libxkbcommon": "deps/libxkbcommon",
     "smithay (TAWC fork)": "deps/smithay",
     "cleat": "deps/cleat",
+    "OpenSSH (sftp-server)": "deps/openssh-portable",
     "termux-app (terminal-emulator, terminal-view, termux-shared extra-keys)": "deps/termux-app",
 }
 for d in sorted((ROOT / "deps/xwayland-src").iterdir()):
@@ -87,6 +88,10 @@ for d in sorted((ROOT / "deps/xwayland-src").iterdir()):
 CURATED_NATIVE = {
     "libdrm": ("MIT", "deps/xwayland-src/libx11/COPYING"),
     "android-headers (Halium)": ("Apache-2.0", "deps/libhybris/LICENSE.Apache2"),
+    # Data compiled into the remote access crate (remote/src).
+    "RFC 1751 dictionary, sshyeet id word lists": ("RFC 1751; used with permission", "licenses/sshyeet-words.txt"),
+    # Terminal font, checked in as app/src/main/res/font/hack_regular.ttf.
+    "Hack font v3.003": ("MIT, Bitstream Vera", "licenses/hack.txt"),
 }
 
 # Maven artifacts: licenses live in POM metadata, not files in the tree.

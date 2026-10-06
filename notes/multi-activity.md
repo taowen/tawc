@@ -239,6 +239,19 @@ surface. Buffer imports still happen (those are GL-global), so when the
 Activity finally registers its `Surface`, the first frame can render
 without re-importing.
 
+The *initial configure* is deferred the same way: `new_toplevel` sends
+it only if the assigned host already has a size, else
+`reconfigure_all_toplevels` sends it on "Host registered" (~50–500 ms
+later). This avoids configure(0,0) and size guesses, but breaks clients
+that attach a buffer after exactly one roundtrip past the initial
+commit — wl-clipboard's popup-surface fallback died with
+`xdg_surface error 3: must ack the initial configure` this way (it now
+uses data-control; see clipboard.md). If a second such client turns up:
+send a provisional configure with the last registered host's logical
+size (kept in `TawcState` across host teardown) when the assigned host
+has none yet, and let the real registration correct it. Cost: one
+extra resize in split-screen/freeform, where sizes differ.
+
 ## wl_output and toplevel sizing
 
 A single `wl_output` global, created in `TawcState::new` and alive for the
@@ -433,15 +446,14 @@ per-host counters surfaced in `nativeQueryState`.
 
 ## MainActivity role
 
-`MainActivity` becomes a thin launcher:
+`MainActivity` is the home screen: one pane for the open distro
+(terminal, app list, distro info or intro; notes/android.md "Home
+screen"). It never starts the compositor; the first rootfs client's
+connection does, and the first toplevel spawns a `CompositorActivity`.
 
-- `onCreate`: render installed rootfs cards and app-level tools.
-  Compositor startup is deferred until a user launches a rootfs command.
-- Stays the only Activity in `category.LAUNCHER` so the recents view
-  doesn't get a confusing "TAWC home" entry.
-- It does NOT host a SurfaceView; the bootstrap path goes:
-  Service starts → first chroot client connects → first toplevel arrives
-  → policy spawns first `CompositorActivity`.
+- Stays the only Activity in `category.LAUNCHER`; `singleTask`, so one
+  recents card for the app, plus one per window.
+- It does NOT host a SurfaceView.
 
 ## Single-Activity mode toggle
 

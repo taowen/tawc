@@ -20,8 +20,7 @@ fixed by the in-handler `/dev/shm` memfd emulation in `tawcroot/src/shm.c`.
 scripts/rootfs-run.sh 'firefox --no-remote'
 ```
 
-No autoconfig prefs; the only Firefox-specific env var is
-`MOZ_SHM_NO_SEALS=1` (see below). `GDK_GL=gles:always` is
+No autoconfig prefs and no Firefox-specific env vars. `GDK_GL=gles:always` is
 set on every spawn by the in-rootfs `env -i` wrapper (see
 `RootfsEnv.kt` and "Why GDK_GL=gles:always" below). Wayland backend
 and hardware acceleration are auto-selected when `WAYLAND_DISPLAY` is set
@@ -69,20 +68,32 @@ visibility for fork+exec patterns (Mozilla parent → content IPC) is
 preserved via the non-CLOEXEC internal fd surviving `execveat` and
 the `exec_state` ferry rebuilding the (name → fd) map in the child.
 
-### MOZ_SHM_NO_SEALS
+### Memfd read-only reopen
 
-Set on every spawn by `RootfsEnv.kt`. Android SELinux denies `open` on
-`/proc/self/fd/<memfd>` (`appdomain_tmpfs`), so the parent's
-`HaveMemfd()` read-only-reopen probe fails and it creates IPC shm via
-`shm_open` (our emulation; unsealed). Children skip that probe, conclude
-memfd+seals are in use, and since Firefox 156 `IsSafeToMap` rejects any
-handle without `F_SEAL_SHRINK`: "Shared memory PlatformHandle is not
-safe to map", every content process SEGVs, "Gah. Your tab just crashed"
-even on `about:blank`. The env var makes all processes skip seals
-(upstream's own testing opt-out in
-`ipc/glue/SharedMemoryPlatform_posix.cpp`). The `avc: denied { open }
-... memfd:org.mozilla.ipc.*` logcat lines are the same SELinux rule
-hitting `shm.c::reopen_for_guest`, which falls back to `F_DUPFD`; benign.
+Android SELinux denies `open` on `/proc/self/fd/<memfd>`
+(`appdomain_tmpfs`). Firefox's parent probes exactly that in
+`HaveMemfd()` (`ipc/glue/SharedMemoryPlatform_posix.cpp`) and uses it
+for every freezable region's read-only handle. On failure it falls back
+to unsealed `shm_open`, while children skip the probe, assume
+memfd+seals, and since Firefox 156 `IsSafeToMap` rejects any handle
+without `F_SEAL_SHRINK`: every content process SEGVs, "Gah. Your tab
+just crashed" even on `about:blank`.
+
+tawcroot handles the denial: a narrower-mode reopen of a memfd that is
+still private to the process (no other fd, no mapping — always true for
+the probe and for `CreateImpl`, which reopens before `ftruncate`)
+migrates it to an unnamed `O_TMPFILE`, which *can* be reopened, and
+emulates `F_ADD_SEALS`/`F_GET_SEALS` for such files (seals live in the
+file's mode bits, so a child receiving the frozen fd over IPC reads
+them too). See notes/tawcroot/bootstrap-and-modules.md "/dev/shm". So
+the parent takes its memfd path, ordinary segments stay real sealed
+memfds, and only freezable ones become files.
+
+proot and chroot have no such workaround. We no longer set
+`MOZ_SHM_NO_SEALS=1` (upstream's testing opt-out: all processes skip
+seals) anywhere, so Firefox tabs may crash under those debug methods
+when the reopen is denied; setting it by hand in the guest env is the
+escape hatch.
 
 ### Why GDK_GL=gles:always
 

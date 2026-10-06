@@ -45,6 +45,10 @@ race. There's no tracer, so there's no race.
 A `tawcroot` invocation is a single Linux process. Its lifecycle:
 
 1. **Parse argv** — `tawcroot [-r <rootfs>] [-w <cwd>] [-b <src>:<dst>]… -- <cmd> <args…>`.
+   Top-level entries (not `--exec-child`) also arm `PDEATHSIG` and
+   reset SIGHUP to default: Android apps inherit it ignored from
+   zygote, which would make every guest immune to terminal hangups.
+   `--exec-child` keeps whatever the guest set (`nohup`).
 2. **Open the rootfs** with `O_PATH | O_DIRECTORY` and stash the fd in
    global state. All path translation will resolve through this fd
    via `*at` syscalls (no string concatenation, no TOCTOU windows).

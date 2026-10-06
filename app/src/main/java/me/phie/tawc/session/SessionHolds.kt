@@ -9,6 +9,8 @@ sealed interface Reason {
     data class Terminal(val distroId: String) : Reason
     data class Command(val label: String) : Reason
     data class Compositor(val windowCount: Int) : Reason
+    /** Remote access running for [distroId] with [clients] logged in. */
+    data class Remote(val distroId: String, val clients: Int) : Reason
     /** Guest processes that outlived every explicit hold. Only
      *  [SessionService] produces this; it is never acquired. */
     data class Stray(val count: Int) : Reason
@@ -109,6 +111,9 @@ data class SessionSummary(
     val windows: Int,
     val commands: List<String>,
     val strays: Int,
+    /** Remote access on (at most one agent), and its logged-in clients. */
+    val remote: Boolean = false,
+    val remoteClients: Int = 0,
 ) {
     companion object {
         fun of(reasons: List<Reason>): SessionSummary {
@@ -116,15 +121,21 @@ data class SessionSummary(
             var windows = 0
             val commands = ArrayList<String>()
             var strays = 0
+            var remote = false
+            var remoteClients = 0
             for (r in reasons) {
                 when (r) {
                     is Reason.Terminal -> terminals++
                     is Reason.Command -> commands += r.label
                     is Reason.Compositor -> windows += r.windowCount
                     is Reason.Stray -> strays += r.count
+                    is Reason.Remote -> {
+                        remote = true
+                        remoteClients += r.clients
+                    }
                 }
             }
-            return SessionSummary(terminals, windows, commands, strays)
+            return SessionSummary(terminals, windows, commands, strays, remote, remoteClients)
         }
     }
 }

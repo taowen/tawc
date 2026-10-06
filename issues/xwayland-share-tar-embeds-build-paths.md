@@ -26,4 +26,4 @@ The file content depends on where the tree was built, so it used to
 block reproducible builds too. That is no longer the case — releases are
 built in F-Droid's image at F-Droid's path, so the embedded path is the
 same on both sides. See
-[plans/reproducible-builds.md](../plans/reproducible-builds.md).
+[notes/reproducible-builds.md](../notes/reproducible-builds.md).

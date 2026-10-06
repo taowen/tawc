@@ -1,14 +1,17 @@
 # In-app launcher
 
-Per-distro app picker that reads `.desktop` files inside a chroot rootfs
-and lets the user search + launch. Reached from the home screen card's
-**Run** button.
+Per-distro app picker that reads `.desktop` files inside a rootfs and
+lets the user search + launch: the home screen's apps pane
+(`launcher/AppsPane`, for the open distro, notes/android.md "Home
+screen"), plus pinned shortcuts.
 
 ## Pipeline
 
-1. **MainActivity** card → `LauncherActivity` Intent with `EXTRA_ID =
-   <installation id>`.
-2. **LauncherActivity.loadApps()** → `LauncherEntry.scan(rootfs)` on
+1. **MainActivity** shows `AppsPane` for a READY open distro when the
+   chosen pane is apps (or the install can't host the terminal).
+2. **AppsPane.rescan()** — on every show, distro switch and resume, so
+   packages installed from the terminal appear — →
+   `LauncherEntry.scan(rootfs)` on
    `Dispatchers.IO` — the shared wrapper around
    `NativeBridge.nativeLauncherScan` + JSON parse that every scan
    consumer (launcher list, shortcut trampoline, `launcher-list`
@@ -29,22 +32,24 @@ and lets the user search + launch. Reached from the home screen card's
    (`id, name, comment, exec, terminal, iconPath, path` — `path` is the
    absolute host path of the `.desktop` source file, kept so the UI can
    distinguish user-editable entries from distro-owned ones).
-5. **LauncherActivity** filters hidden entries + the search query, then
+5. **AppsPane** filters hidden entries + the search query, then
    renders rows (icon ImageView + name + comment). `IconLoader`
    async-decodes PNGs with `BitmapFactory.inSampleSize` keeping memory
    bounded, and holds them in a byte-bounded `LruCache`. An entry with
    no resolvable icon gets `ic_terminal_fallback` or `ic_app_fallback`.
 6. Tap or Enter → `EntryLauncher.launch(appContext, inst, entry)`, the
    shared dispatch point for every launch surface. `Terminal=true`
-   entries on tawcroot installs open `TerminalActivity` as a command
-   tab instead (see notes/terminal.md "Command sessions"); proot/chroot
+   entries on tawcroot installs open the home terminal pane with a
+   command tab instead (see notes/terminal.md "Command sessions"); proot/chroot
    terminal entries fall through to the headless path with a logcat
    warn. Everything else runs
    `UserRootfsSession.runInside(rootfs, "<exec> </dev/null >/dev/null
    2>&1")` on its process-wide `LAUNCH_SCOPE` (Dispatchers.IO).
    `UserRootfsSession` holds a session reason while the process lives;
-   the program's first Wayland/X11 connection starts the compositor. The Activity
-   `finish()`es immediately; the coroutine keeps blocking in
+   the program's first Wayland/X11 connection starts the compositor. The pane
+   clears the query and drops the IME (a 500 ms debounce stops a
+   hardware Enter's key event + editor action double-launching); the
+   coroutine keeps blocking in
    `runInside` for the program's lifetime, which pins one IO thread
    per running app. We can't `setsid -f` detach: proot's
    `--kill-on-exit` (kept on for pacman cleanup) SIGKILLs any
@@ -59,7 +64,7 @@ and lets the user search + launch. Reached from the home screen card's
 Long-press on a row opens an action-list dialog (plain
 `AlertDialog.setItems`, no Menu resources) built from a per-entry
 `List<EntryAction>` (label + enabled + handler) in
-`LauncherActivity.entryActionsFor` — append there to grow the menu.
+`AppsPane.entryActionsFor` — append there to grow the menu.
 Today's items: **Hide** on visible entries, **Unhide** on hidden ones,
 **Add to home screen** (see "Home-screen shortcuts"), **Edit** on
 managed-dir entries (see "Managed dir + .desktop editor").
@@ -73,7 +78,7 @@ hide state resets with the install; stale ids never match and are not
 pruned.
 
 Filtering is **Kotlin-side** (`LauncherEntry.filter`, a pure
-unit-tested function driven from `LauncherActivity.applyFilter`), not
+unit-tested function driven from `AppsPane.applyFilter`), not
 in `launcher.rs::scan_entries`:
 
 - Hide state is per-install app metadata; the scanner takes only a
@@ -81,17 +86,19 @@ in `launcher.rs::scan_entries`:
 - `resolve_metadata_for_app_id` shares `scan_entries` for window
   icons/titles — a hidden app that is *running* must still resolve.
 
-The search row is `←  [search field]  ⋮`, both buttons background-less
-(`plainIconButton`) so they read as row chrome; the ← is the same mark as
-a child screen's toolbar up arrow. The ← just `finish()`es:
-system back is consumed by the soft keyboard first, so the popup window
-needs its own dismiss.
-
-The ⋮ button beside the search field opens a `PopupMenu`
-with a checkable **"Show hidden (N)"** item (N counts hidden ids that
-match actual entries) and — on editable methods — **"Add entry…"**
-(the editor). Show-hidden is transient per-Activity state, not
-persisted.
+The pane is an Android-launcher-style grid: header `≡ <distro> 🔍 ⋮`
+(64dp, buttons background-less `plainIconButton`), then icons in name
+order with one-line, end-ellipsized names; descriptions are not shown.
+Columns = width / 88dp (min 3). Bottom padding lets the last row scroll
+clear of the FAB, which also hides while scrolling down. 🔍 (or a
+printable hardware key with nothing focused) opens a search field under
+the header; Enter launches the top match; ✕, Back or a launch closes
+and clears it. ≡ opens the home drawer. The ⋮ is the home screen's one
+menu; this pane adds a
+checkable **"Show hidden (N)"** item (N counts hidden ids that match
+actual entries; omitted when N is 0) and, on editable methods, **"Add
+entry…"** (the editor). Show-hidden is transient
+per-pane state, not persisted.
 With it on, hidden entries render dimmed (alpha 0.5) in their normal
 sort position and launch normally on tap. If every entry is hidden,
 the empty-list message appends a "(N hidden)" hint.
@@ -190,7 +197,7 @@ trampoline).
   neutral square at 2/3 edge (adaptive-icon safe zone) and wrapped
   with `IconCompat.createWithAdaptiveBitmap` so it masks correctly on
   every launcher shape; no/undecodable icon falls back to the same
-  glyph the list row uses (`ic_terminal_fallback` for `Terminal=true`,
+  glyph the grid cell uses (`ic_terminal_fallback` for `Terminal=true`,
   `ic_app_fallback` otherwise) on a black backdrop — not the TAWC app
   icon, which would make a pinned icon-less app look like TAWC itself. Geometry (`pinIconFit`) + id mapping are JVM-unit-tested
   (`EntryShortcutsTest`); pinning itself is a launcher-UI interaction,
@@ -326,5 +333,7 @@ or copy icons into an app-uid-readable cache at install time.
 - Window-list integration: show running Wayland windows alongside apps
   to switch.
 - Recently-launched section.
+- Launching from the terminal pane's search (one field for commands
+  and apps).
 
 None of these block today's "type-and-go" flow; revisit after dogfooding.

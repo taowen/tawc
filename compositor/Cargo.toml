@@ -40,6 +40,9 @@ serde_json = "1"
 # default there. `svgz` is kept: gzipped SVGs do turn up in icon
 # themes, and it only costs a deflate decoder.
 resvg = { version = "0.48", default-features = false, features = ["svgz"] }
+# Remote access (sshyeet relay client + embedded sshd). Inert until
+# nativeRemoteStart; see notes/remote-access.md.
+tawc_remote = { path = "../remote" }
 
 # gfxstream-bridge: kumquat server runs as a thread of the compositor
 # process. See notes/gfxstream-bridge.md "Kumquat in-process". The

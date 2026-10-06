@@ -36,7 +36,7 @@ import java.io.IOException
  * that set) loads its known keys and shows a warning that saving drops
  * the rest.
  *
- * Launched by [LauncherActivity] for result (RESULT_OK = the rootfs
+ * Launched by [AppsPane] (via MainActivity) for result (RESULT_OK = the rootfs
  * changed, rescan). Writes are plain app-uid file I/O, so entry points
  * are hidden for chroot installs (root-owned rootfs — see
  * notes/launcher.md "Access model").

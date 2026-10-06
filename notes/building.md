@@ -204,7 +204,7 @@ the epoch from HEAD's commit time (0 outside a git checkout), and its
 `repro_tar` wrapper packs the asset tars with fixed entry order, owner,
 modes and mtime. Gradle reads both back via `scripts/lib/repro.sh
 --epoch` / `--tar-args`. Set `SOURCE_DATE_EPOCH` yourself to override.
-See [reproducible-builds](../plans/reproducible-builds.md).
+See [reproducible-builds.md](reproducible-builds.md).
 
 ## Vendored repos
 
@@ -259,6 +259,7 @@ alone.
 | `./deps/mesa/`                             | `scripts/build-mesa-gfxstream.sh` (gfxstream-vk and Mesa-Zink assets) |
 | `./deps/gfxstream/`                        | `scripts/build-gfxstream-backend.sh`      |
 | `./deps/rutabaga_gfx/`                     | `scripts/ensure-deps.sh --patches rutabaga_gfx deps/rutabaga-patches/rutabaga_gfx`; Rust compositor kumquat server dep |
+| `./deps/openssh-portable/`                 | `remote/sftp-server/build.sh` (remote access sftp-server) |
 
 Two tarball deps (`talloc`, `libmd`) are *not* in `deps.list` — they
 ship as release tarballs, not git repos, so their pin is a
@@ -507,6 +508,33 @@ cd compositor && \
     cargo ndk --target arm64-v8a --platform 29 -- build --release
 ```
 
+The compositor links the `remote/` crate (`tawc_remote`, remote access;
+see [remote-access.md](remote-access.md)) as a path dependency, so
+`remote/src` and `remote/Cargo.toml` are inputs of
+`buildRustLibrary<Abi>`, and its crates are pinned in
+`compositor/Cargo.lock` like the rest (the F-Droid recipe needs nothing
+extra). TLS is rustls with the `ring` backend only: `aws-lc-rs` would
+need cmake under cargo-ndk. `remote/` keeps its own `Cargo.lock` for
+host tests (`cd remote && cargo test`); unlike the compositor it builds
+and tests on the host.
+
+### sftp-server (OpenSSH → ships in APK as jniLib)
+
+Static bionic `sftp-server` for remote access sftp/scp, from the pinned
+`openssh-portable` dep (a release tag: its generated `configure` is used,
+no autotools needed). Needs only the NDK and `make`. The source is copied
+into `build/sftp-server-<abi>/` so the checkout stays clean. Gradle's
+`buildSftpServer<Abi>`; standalone:
+
+```bash
+remote/sftp-server/build.sh [--abi=aarch64|x86_64|both]
+```
+
+Output: `app/src/main/jniLibs/<abi>/libsftp-server.so`, installed into each
+rootfs at `/usr/lib/tawc/sftp-server`. The bionic workarounds and the
+passwd-lookup guard are in [remote-access.md](remote-access.md)
+"sftp-server".
+
 ### proot (Termux fork → ships in APK as jniLib)
 
 Cross-built once per ABI. NDK clang against bionic. Output:
@@ -626,7 +654,7 @@ Two modes:
   F-Droid's path is what makes their independent rebuild of the tag come
   out byte-identical, so they can distribute the maintainer-signed APK.
   `scripts/fdroid/compare-apks.py A.apk B.apk` is the entry-by-entry
-  check. See [plans/reproducible-builds.md](../plans/reproducible-builds.md).
+  check. See [reproducible-builds.md](reproducible-builds.md).
 
 `run.sh --cpuset-cpus <spec>` and `--fresh-cache` vary core count and
 cache warmth, which is how a build gets checked for determinism.
@@ -690,7 +718,8 @@ commit the result. Inputs, all read from the working tree:
   for Maven artifacts, mapped to licenses by the `GRADLE_LICENSES`
   table in the script
 - `licenses/` — checked-in texts for the few artifacts whose license
-  lives only in a POM or on a project website
+  lives only in a POM or on a project website, or that are checked in
+  directly (the Hack terminal font)
 
 So it needs populated dep checkouts and a warm cargo registry. It fails
 loudly rather than silently omitting a component: an unmapped Maven
@@ -714,7 +743,7 @@ generated from it by `scripts/gen-icon.sh`:
 | Generated file | Where it shows up |
 |----------------|-------------------|
 | `app/src/main/res/drawable/ic_launcher_foreground.xml` | foreground layer of the adaptive launcher icon (`mipmap-anydpi-v26/ic_launcher.xml`) — the home screen, the app switcher, and pinned Linux-app shortcuts (`EntryShortcuts` falls back to `R.mipmap.ic_launcher`) |
-| `app/src/main/res/drawable/ic_tawc_logo.xml` | the mark at full size, no safe-zone scale; launcher-row fallback icon for graphical entries with no icon of their own (`LauncherActivity`) |
+| `app/src/main/res/drawable/ic_tawc_logo.xml` | the mark at full size, no safe-zone scale; the home drawer header and intro pane logo (`MainActivity`) |
 | `app/src/main/res/values/icon_colors.xml` | `tawc_icon_bg`, the adaptive icon's background layer |
 | `fastlane/metadata/android/en-US/images/icon.png` | the F-Droid store listing (512×512) |
 

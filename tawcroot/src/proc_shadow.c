@@ -306,6 +306,23 @@ int tawcroot_is_proc_fd_link(const char *path)
 	return tawcroot_proc_link_classify(path) == TAWCROOT_PROC_LINK_FD;
 }
 
+int tawcroot_proc_self_fd_num(const char *path)
+{
+	long tid;
+	const char *tail = strip_proc_pid_prefix(path, &tid);
+	if (!tail || tail[0] != 'f' || tail[1] != 'd' || tail[2] != '/')
+		return -1;
+	const char *p = tail + 3;
+	long n = 0;
+	if (*p < '0' || *p > '9') return -1;
+	while (*p >= '0' && *p <= '9') {
+		n = n * 10 + (*p - '0'); p++;
+		if (n > 0x7fffffff) return -1;
+	}
+	if (*p != 0 || !resolve_mine(tid)) return -1;
+	return (int)n;
+}
+
 static int is_proc_self_maps(const char *path)
 {
 	long tid;

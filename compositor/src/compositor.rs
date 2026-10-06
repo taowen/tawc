@@ -43,6 +43,12 @@ use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::selection::data_device::{
     DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler, set_data_device_focus,
 };
+use smithay::wayland::selection::ext_data_control::{
+    DataControlHandler as ExtDataControlHandler, DataControlState as ExtDataControlState,
+};
+use smithay::wayland::selection::wlr_data_control::{
+    DataControlHandler as WlrDataControlHandler, DataControlState as WlrDataControlState,
+};
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use std::os::fd::OwnedFd;
 use smithay::desktop::{
@@ -124,6 +130,10 @@ pub struct TawcState {
     #[allow(dead_code)]
     pub fractional_scale_manager_state: FractionalScaleManagerState,
     pub data_device_state: DataDeviceState,
+    /// Data-control (wl-copy/wl-paste without a surface); reads are gated
+    /// in `SelectionHandler::allow_data_control_read`.
+    pub ext_data_control_state: ExtDataControlState,
+    pub wlr_data_control_state: WlrDataControlState,
     pub seat_state: SeatState<Self>,
     pub seat: Seat<Self>,
 
@@ -308,6 +318,8 @@ impl TawcState {
         let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(&dh, []);
         let data_device_state = DataDeviceState::new::<Self>(&dh);
+        let ext_data_control_state = ExtDataControlState::new::<Self, _>(&dh, None, |_| true);
+        let wlr_data_control_state = WlrDataControlState::new::<Self, _>(&dh, None, |_| true);
         // wp_viewporter lets clients set a logical destination size separate
         // from the buffer dimensions. Firefox/WebRender allocates HiDPI
         // buffers with buffer_scale=1 and uses viewport.set_destination to
@@ -377,6 +389,8 @@ impl TawcState {
             kde_decoration_state,
             fractional_scale_manager_state,
             data_device_state,
+            ext_data_control_state,
+            wlr_data_control_state,
             seat_state,
             seat,
             desktop: crate::desktop::DesktopRegistry::new(),
@@ -1260,6 +1274,18 @@ impl DataDeviceHandler for TawcState {
     }
 }
 
+impl ExtDataControlHandler for TawcState {
+    fn data_control_state(&mut self) -> &mut ExtDataControlState {
+        &mut self.ext_data_control_state
+    }
+}
+
+impl WlrDataControlHandler for TawcState {
+    fn data_control_state(&mut self) -> &mut WlrDataControlState {
+        &mut self.wlr_data_control_state
+    }
+}
+
 impl WaylandDndGrabHandler for TawcState {}
 impl DndGrabHandler for TawcState {}
 
@@ -1322,6 +1348,10 @@ impl SelectionHandler for TawcState {
                 }
             }
         }
+    }
+
+    fn allow_data_control_read(&mut self, _ty: SelectionTarget, client: &Client) -> bool {
+        crate::clipboard::allow_data_control_read(self, client)
     }
 }
 

@@ -51,9 +51,11 @@ prerequisites are. As of writing the modules are:
 | `text_input`    | `cpu`       | wayland-debug-app text-input-v3, wl_keyboard, clipboard, and cursor-tap coverage. Buffer type is irrelevant. |
 | `touch_input`   | `cpu`       | wayland-debug-app wl_touch routing coverage, including subsurfaces and popups. Buffer type is irrelevant. |
 | `pointer_input` | `cpu`       | wayland-debug-app wl_pointer coverage: the mouse/touch source split, button codes, scroll direction and units, frames, focus targets, and the hover-exit-is-not-leave rule. Buffer type is irrelevant. |
-| `lazy_compositor` | `cpu`    | Socket-activated lifecycle, unpinned: a Wayland client and an X11-only client each cold-start the compositor, it stops after they leave and restarts for the next; fd/thread counts stay flat over start/stop cycles; session holds follow commands and Exit kills everything; hold churn does not crash the session service. |
+| `lazy_compositor` | `cpu`    | Socket-activated lifecycle, unpinned: a Wayland client and an X11-only client each cold-start the compositor, it stops after they leave and restarts for the next; fd/thread counts stay flat over start/stop cycles; session holds follow commands and Exit kills everything; hold churn does not crash the session service; `wl-copy` text survives a stop/start. |
+| `wl_clipboard` | `cpu`       | `wl-copy`/`wl-paste` over data-control: no window mapped, reads gated to the focused home-terminal tab's pty ([clipboard.md](clipboard.md)). Types into the terminal via `input`. |
 | `settings`      | `cpu`       | Runtime settings coverage: output scale, configure-state policy, and GTK3 broken menus workaround. |
 | `tawcroot`      | n/a         | tawcroot device-side smokes (wraps the cleat-driven suite). |
+| `remote`        | n/a         | Remote access ([remote-access.md](remote-access.md)): inert before any start; the live-relay test (`ssh -J sshyeet.com` from the host, Stop hangs up) runs only with `TAWC_LIVE_RELAY=1` (`--cfg tawc_live_relay`, needs network on target and host). |
 | `uninstall_wipe` | n/a        | Wipe-engine edge cases against a *fabricated* KB-scale slot (mount gate, su-retry ladder). Rooted target only. |
 
 **Persistent-state policy.** Integration tests must not mutate state

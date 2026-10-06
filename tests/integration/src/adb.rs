@@ -758,9 +758,78 @@ pub fn session_state() -> io::Result<Vec<String>> {
         .collect())
 }
 
+/// Set "Keep awake" (`Some`) or just read it: `held`, `released` or
+/// `unavailable` (`session-wake`).
+pub fn session_wake(wake: Option<bool>) -> io::Result<String> {
+    let args: &[(&str, &str)] = match wake {
+        Some(true) => &[("wake", "on")],
+        Some(false) => &[("wake", "off")],
+        None => &[],
+    };
+    let output = broker_action("session-wake", args)?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// What the notification's Exit does: kill everything in every rootfs.
 pub fn session_exit() -> io::Result<Output> {
     broker_action("session-exit", &[])
+}
+
+/// Put the home screen on `pane` (`terminal` / `apps`) for the test
+/// install, without the IME (notes/exec-broker.md `home-pane`).
+pub fn home_pane(pane: &str) -> io::Result<Output> {
+    let install_id = crate::install_id();
+    broker_action("home-pane", &[("pane", pane), ("installId", &install_id)])
+}
+
+/// The test install's terminal: `pending`, `inUse:<n>` or `none`.
+pub fn terminal_state() -> io::Result<String> {
+    let install_id = crate::install_id();
+    let output = broker_action("terminal-state", &[("installId", &install_id)])?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Remote access agent status JSON (`tawc_remote::Status`; see
+/// notes/remote-access.md). `{"state":"stopped",…}` before any start.
+pub fn remote_status() -> io::Result<String> {
+    let output = broker_action("remote-status", &[])?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Start remote access for the test install (live relay). `idle_secs`
+/// 0 = until stopped.
+pub fn remote_start(idle_secs: u32) -> io::Result<Output> {
+    let install_id = crate::install_id();
+    broker_action("remote-start", &[("installId", &install_id), ("idle", &idle_secs.to_string())])
+}
+
+/// Start remote access in local-network mode on `addrs` (`ip:port,…`),
+/// with key login when `keys` (authorized_keys text) is given.
+pub fn remote_start_local(addrs: &str, keys: Option<&str>) -> io::Result<Output> {
+    let install_id = crate::install_id();
+    let mut args = vec![("installId", install_id.as_str()), ("addrs", addrs)];
+    if let Some(k) = keys {
+        args.push(("keys", k));
+    }
+    broker_action("remote-start", &args)
+}
+
+/// Stop remote access and wait for the agent to go.
+pub fn remote_stop() -> io::Result<Output> {
+    broker_action("remote-stop", &[])
+}
+
+/// A plain string field of a flat JSON object (no escapes in the value).
+pub fn json_str(json: &str, key: &str) -> Option<String> {
+    let start = json.find(&format!("\"{key}\":\""))? + key.len() + 4;
+    let end = json[start..].find('"')? + start;
+    Some(json[start..end].to_string())
+}
+
+/// Whether the session foreground service is up.
+pub fn session_service_running() -> io::Result<bool> {
+    let output = shell("dumpsys activity services me.phie.tawc/.session.SessionService")?;
+    Ok(String::from_utf8_lossy(&output.stdout).contains("ServiceRecord"))
 }
 
 /// The app's `nativeLibraryDir` (where the APK's jniLibs land on this

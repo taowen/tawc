@@ -20,13 +20,16 @@ reports. The registry itself never touches Android (JVM-unit-tested);
 
 | Reason | Acquired | Released |
 |---|---|---|
-| `Terminal(distroId)` | `TerminalSessions.add` | `remove` / `removeAll` |
+| `Terminal(distroId)` | `TerminalSessions.add` / `promote` (first input to a pending shell) | `remove` / `removeAll` |
 | `Command(label)` | around the process in `UserRootfsSession.startInside` (launcher headless launch, `RunCommandOp`, broker `RUNINSIDE`) | a waiter thread on process exit |
 | `Compositor(windowCount)` | `CompositorService`, when `nativeStartCompositor` spawned a thread | `onCompositorStopped` |
+| `Remote(distroId, clients)` | `RemoteSession.start` (remote access, [remote-access.md](remote-access.md)); client count updated from the agent's status | the agent ending (Stop, TTL, failure, Exit, uninstall) |
 | `Stray(count)` | never acquired; service-internal | — |
 
-Terminal holds live in `TerminalSessions`, not the activity — sessions
-outlive it. Command holds follow the `Process`, so no caller cooperates.
+Terminal holds live in `TerminalSessions`, not the pane — sessions
+outlive it. The home screen's *pending* shell (auto-spawned, nothing
+typed yet) holds nothing on purpose: opening the app must not start a
+foreground service (notes/terminal.md "Session model"). Command holds follow the `Process`, so no caller cooperates.
 
 ## Service
 
@@ -50,15 +53,21 @@ the spawn carries on unprotected (the next acquire retries).
 **Stray tail.** A `nohup`/`setsid` job outlives its tab and holds nothing.
 When the last hold releases, the service runs `ProcessScanner.scan`
 off-thread; if guests remain it stays up as "N background processes" and
-re-scans every 15 s until none do. Only this tail state polls.
+re-scans every 15 s until none do. Only this tail state polls. The scan
+excludes pending terminal pids (`TerminalSessions.pendingPids`); a
+pending shell has no children, so its pid is enough
+(`lazy_compositor::test_session_holds_ignore_pending_terminal`).
 
 **Notification.** Channel `tawc_session` (the old `tawc_compositor`
 channel is deleted), low importance, ongoing. Title "TAWC running", text
 e.g. "2 terminals · 3 windows", "Running: htop", "3 background
-processes". Tap opens `MainActivity`.
+processes". Tap opens `MainActivity` on its last pane. Swiping the
+home screen's recents card hangs up its shells (`onTaskRemoved`,
+[terminal.md](terminal.md) "Swipe = closing the windows"); what they
+leave behind shows as background processes.
 
 **Exit** (`SessionExit.killEverything`) kills everything: finishes every
-terminal session (tabs/activities close through the normal
+terminal session, pending ones included (tabs close through the normal
 `onSessionFinished` path), stops the compositor, and
 `ProcessScanner.killAllInRootfs` for every install — except installs that
 are not `READY` or have a live `install:`/`uninstall:` operation, whose
@@ -66,11 +75,45 @@ processes belong to the installer. One notification stands for every
 reason, so a partial exit would leave it up. Holds are not force-released;
 each follows its own process down.
 
+## Keep awake
+
+The FGS keeps the process alive, not the CPU: screen off and unplugged,
+the SoC suspends and every guest stops mid-syscall. Measured on the
+OnePlus 9 (2026-09-28): a 1 s rootfs ticker went to bursts with 3–45 s
+gaps and 79 kernel suspends over ~15 min. With the lock held: 0
+suspends, no tick gap over 2 s, and 122/122 curls over Wi-Fi OK across ~21
+min. USB-attached never suspends (`a600000.ssusb` and the charger hold
+kernel wakeup sources), so measure unplugged: leave a ticker writing to a
+file in the rootfs and read it back after replugging. Compare
+`/sys/power/suspend_stats/success` (root) before and after.
+
+Manual, off by default, Termux-style. Holding the CPU for an idle shell
+costs battery, and only the user knows whether the job matters.
+`SessionWake` holds the state (main thread only). While on,
+`SessionService` holds a non-reference-counted `PARTIAL_WAKE_LOCK`
+`tawc:session` and a `WIFI_MODE_FULL_LOW_LATENCY` Wi-Fi lock. Android
+applies low-latency mode only in the foreground with the screen on, and
+`FULL_HIGH_PERF` is a no-op from API 34, so the Wi-Fi lock does little.
+The CPU lock is what keeps the network up. The lock never outlives the
+service. It is dropped on toggle-off, on Exit, and when the service stops,
+and each new service lifetime starts released. Nothing is persisted.
+
+Toggles: a second notification action ("Keep awake" / "Release
+wakelock"; the text gains "· awake") and a checkable "Keep awake" in the
+in-use terminal's ⋮ menu (shown only while the service is up). The first
+enable while TAWC is battery-optimized offers, once
+(`Settings.batteryPromptShown`), the system's battery-optimization list
+(`ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`). The direct
+`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` dialog would need a
+Play-restricted permission.
+
 ## Debug surfaces
 
-Broker actions `session-state` (one line per held reason) and
-`session-exit` (what the Exit button does). Covered by
-`lazy_compositor::test_session_holds_*`.
+Broker actions `session-state` (one line per held reason),
+`session-exit` (what the Exit button does) and `session-wake [--arg
+wake=on|off]` (prints `held`, `released` or `unavailable`). Covered by
+`lazy_compositor::test_session_holds_*` and
+`test_session_wake_follows_toggle_and_exit`.
 
 ## Start/stop must share the main thread
 
@@ -96,7 +139,7 @@ other apps → `procState=16`, adj 910, and `am kill me.phie.tawc` took
 every guest with it. About a minute after screen-off, light Doze's
 `fw_dozable` chain cut all guest network (guests run as the app uid):
 DNS-shaped failures, curl exit 6, unreproducible while watching because
-`TerminalActivity` keeps the screen on.
+the in-use terminal keeps the screen on.
 
 After, with a rootfs command running and the app behind three others:
 `procState=4` (FGS), adj 50, `am kill` a no-op, a 1 s ticker unbroken. A
@@ -117,5 +160,5 @@ bucket, user "restrict battery usage", or an aggressive OEM ROM can still
 cut the uid, and the app is not on the device-idle allowlist
 (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` is the lever). It does nothing
 for the phantom-process killer or CPU sleep — see
-`issues/phantom-process-killer-kills-rootfs-processes.md` and
-`plans/wakelock.md`.
+`issues/phantom-process-killer-kills-rootfs-processes.md` and "Keep
+awake" below.

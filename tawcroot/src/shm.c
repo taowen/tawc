@@ -23,6 +23,8 @@
 #include "errno_neg.h"
 #include "fdtab.h"
 #include "io.h"
+#include "path.h"
+#include "path_scratch.h"
 #include "raw_sys.h"
 #include "shm.h"
 #include "syscalls_fs.h"
@@ -120,26 +122,42 @@ static long dup_to_reserved_inheritable(int fd)
 }
 
 /* Hand the guest a fresh open file description on the segment by
- * re-opening the internal memfd through /proc/self/fd/<internal> with
+ * re-opening the internal fd through /proc/self/fd/<internal> with
  * the guest's requested access mode. A plain F_DUPFD shares ONE file
  * description, so (a) an O_RDONLY opener got a writable fd and (b) all
  * guest fds for a name shared a read/write/lseek offset. The re-open
  * gives a distinct description with the right access mode and its own
- * offset — matching real /dev/shm. Falls back to F_DUPFD (degraded but
- * functional: shared offset, access mode = internal's) if /proc isn't
- * available. Returns the new guest fd or -errno. */
-static long reopen_for_guest(int internal_fd, int flags)
+ * offset — matching real /dev/shm. Android SELinux denies it for
+ * memfds; see reopen_for_guest. Returns the new guest fd or -errno. */
+static long proc_reopen(int internal_fd, int flags)
 {
 	char path[32];
-	if (tawc_proc_fd_path(path, sizeof path, internal_fd, 0) > 0) {
-		int oflags = (flags & O_ACCMODE);
-		if (flags & O_CLOEXEC) oflags |= O_CLOEXEC;
-		long fd = tawc_openat(AT_FDCWD, path, oflags, 0);
-		if (fd >= 0) return fd;
+	long n = tawc_proc_fd_path(path, sizeof path, internal_fd, 0);
+	if (n < 0) return n;
+	int oflags = (flags & O_ACCMODE);
+	if (flags & O_CLOEXEC) oflags |= O_CLOEXEC;
+	return tawc_openat(AT_FDCWD, path, oflags, 0);
+}
+
+static long migrate_fds(const int *fds, size_t n);
+
+/* proc_reopen, else — for a narrower-mode reopen of a segment this
+ * process created — migrate it to a file (which /proc/self/fd can
+ * reopen) and retry, else F_DUPFD (degraded but functional: shared
+ * offset, access mode = internal's). Caller holds g_shm_lock. */
+static long reopen_for_guest(struct tawcroot_shm_entry *e, int flags)
+{
+	long fd = proc_reopen(e->fd, flags);
+	if (fd >= 0) return fd;
+	if ((flags & O_ACCMODE) != O_RDWR && e->guest_fd >= 0 &&
+	    e->pid == (int)tawc_getpid()) {
+		int fds[2] = { e->guest_fd, e->fd };
+		if (migrate_fds(fds, 2) == 0) {
+			fd = proc_reopen(e->fd, flags);
+			if (fd >= 0) return fd;
+		}
 	}
-	/* Fallback: dup shares the file description but keeps the segment
-	 * usable when /proc/self/fd is unreachable. */
-	return tawc_fcntl(internal_fd,
+	return tawc_fcntl(e->fd,
 			  (flags & O_CLOEXEC) ? F_DUPFD_CLOEXEC : F_DUPFD, 0);
 }
 
@@ -180,7 +198,7 @@ long tawcroot_shm_open(const char *name, int flags, int mode)
 		 * LOCK so a concurrent unlink+create-different-name can't
 		 * recycle the kernel slot underneath us. Re-open (not dup)
 		 * gives the guest its own file description + access mode. */
-		guest_fd = reopen_for_guest(e->fd, flags);
+		guest_fd = reopen_for_guest(e, flags);
 		shm_unlock();
 		if (guest_fd < 0) return guest_fd;
 	} else {
@@ -210,7 +228,11 @@ long tawcroot_shm_open(const char *name, int flags, int mode)
 			return internal;
 		}
 		add_to_reserved_list((int)internal);
-		guest_fd = reopen_for_guest((int)internal, flags);
+		guest_fd = proc_reopen((int)internal, flags);
+		if (guest_fd < 0)
+			guest_fd = tawc_fcntl((int)internal,
+					      (flags & O_CLOEXEC)
+					      ? F_DUPFD_CLOEXEC : F_DUPFD, 0);
 		if (guest_fd < 0) {
 			tawc_close((int)internal);
 			shm_unlock();
@@ -220,6 +242,8 @@ long tawcroot_shm_open(const char *name, int flags, int mode)
 		for (size_t i = 0; i < nlen; i++) slot->name[i] = name[i];
 		slot->name[nlen] = 0;
 		slot->fd = (int)internal;
+		slot->guest_fd = (int)guest_fd;
+		slot->pid = (int)tawc_getpid();
 		slot->in_use = 1;
 		shm_unlock();
 	}
@@ -250,6 +274,7 @@ long tawcroot_shm_unlink(const char *name)
 	internal_fd = e->fd;
 	e->in_use = 0;
 	e->fd = -1;
+	e->guest_fd = -1;
 	e->name[0] = 0;
 	shm_unlock();
 
@@ -264,6 +289,253 @@ long tawcroot_shm_unlink(const char *name)
 		(void)tawc_close(internal_fd);
 	}
 	return 0;
+}
+
+/* ---------- migration to file backing ---------- */
+
+/* A migrated segment is an unnamed O_TMPFILE with mode
+ * SHM_FILE_TAG | seals: sticky + nlink 0 marks it (recognisable from
+ * the fd alone, in any process it reaches), and the group/other bits
+ * hold its F_SEAL_* set (SEAL..EXEC, 6 bits). */
+#define SHM_FILE_TAG   01600
+#define SHM_SEAL_MASK  077
+
+static long raw_fstat(int fd, struct stat *st)
+{
+	return TAWC_RAW(TAWC_SYS_fstat, fd, (long)st, 0, 0, 0, 0);
+}
+
+static int in_list(int fd, const int *fds, size_t n)
+{
+	for (size_t i = 0; i < n; i++)
+		if (fds[i] == fd) return 1;
+	return 0;
+}
+
+/* 1 if an open fd outside `fds` refers to (dev, ino), 0 if none,
+ * -errno if the scan failed. `buf` is one scratch buffer. */
+static long other_fd_has_inode(const int *fds, size_t nfds,
+			       unsigned long dev, unsigned long ino,
+			       char *buf)
+{
+	long dfd = tawc_openat(AT_FDCWD, "/proc/self/fd",
+			       O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+	if (dfd < 0) return dfd;
+	long found = 0;
+	for (;;) {
+		long n = tawc_getdents64((int)dfd, buf,
+					 TAWCROOT_PATH_SCRATCH_SIZE);
+		if (n <= 0) {
+			if (n < 0) found = n;
+			break;
+		}
+		long off = 0;
+		/* linux_dirent64: d_reclen u16 at +16, d_name at +19. */
+		while (off + 19 < n) {
+			unsigned short reclen;
+			memcpy(&reclen, buf + off + 16, sizeof reclen);
+			if (reclen < 20 || off + reclen > n) break;
+			const char *nm = buf + off + 19;
+			off += reclen;
+			if (nm[0] < '0' || nm[0] > '9') continue;
+			long k = tawc_parse_long(nm);
+			if (k < 0 || k == dfd || in_list((int)k, fds, nfds))
+				continue;
+			struct stat st;
+			if (raw_fstat((int)k, &st) == 0 &&
+			    st.st_dev == dev && st.st_ino == ino) {
+				found = 1;
+				goto out;
+			}
+		}
+	}
+out:
+	tawc_close((int)dfd);
+	return found;
+}
+
+/* 1 if /proc/self/maps has a mapping of (dev, ino), 0 if none,
+ * -errno on failure. Line shape: "range perms offset MAJ:MIN inode
+ * path"; parsed as a stream so lines may straddle reads. */
+static long maps_has_inode(unsigned long dev, unsigned long ino, char *buf)
+{
+	unsigned long want_maj = ((dev >> 8) & 0xfff) |
+				 ((dev >> 32) & ~0xfffUL);
+	unsigned long want_min = (dev & 0xff) | ((dev >> 12) & ~0xffUL);
+	long fd = tawc_openat(AT_FDCWD, "/proc/self/maps",
+			      O_RDONLY | O_CLOEXEC, 0);
+	if (fd < 0) return fd;
+	long found = 0;
+	int field = 0, prev_space = 0, colon = 0;
+	unsigned long maj = 0, min = 0, in = 0;
+	for (;;) {
+		long n = tawc_read((int)fd, buf, TAWCROOT_PATH_SCRATCH_SIZE);
+		if (n <= 0) {
+			if (n < 0) found = n;
+			break;
+		}
+		for (long i = 0; i < n; i++) {
+			char c = buf[i];
+			if (c == '\n') {
+				if (field >= 4 && in == ino &&
+				    maj == want_maj && min == want_min) {
+					found = 1;
+					goto out;
+				}
+				field = prev_space = colon = 0;
+				maj = min = in = 0;
+				continue;
+			}
+			if (field > 4) continue;
+			if (c == ' ') {
+				if (!prev_space) field++;
+				prev_space = 1;
+				continue;
+			}
+			prev_space = 0;
+			if (field == 3) {
+				if (c == ':') { colon = 1; continue; }
+				unsigned long d =
+					(c >= '0' && c <= '9') ? (unsigned long)(c - '0') :
+					(c >= 'a' && c <= 'f') ? (unsigned long)(c - 'a' + 10) :
+					(unsigned long)(c - 'A' + 10);
+				if (colon) min = min * 16 + d;
+				else maj = maj * 16 + d;
+			} else if (field == 4) {
+				in = in * 10 + (unsigned long)(c - '0');
+			}
+		}
+	}
+out:
+	tawc_close((int)fd);
+	return found;
+}
+
+/* Copy `size` bytes src → dst, skipping all-zero chunks (dst was
+ * ftruncated to size, so holes read back as zeros). */
+static long copy_contents(int src, int dst, long size, char *buf)
+{
+	long r = TAWC_RAW(TAWC_SYS_ftruncate, dst, size, 0, 0, 0, 0);
+	if (r < 0) return r;
+	for (long off = 0; off < size; ) {
+		long n = tawc_pread64(src, buf, TAWCROOT_PATH_SCRATCH_SIZE,
+				      off);
+		if (n < 0) return n;
+		if (n == 0) break;
+		int zero = 1;
+		for (long i = 0; i < n; i++)
+			if (buf[i]) { zero = 0; break; }
+		if (!zero) {
+			long w = TAWC_RAW(TAWC_SYS_pwrite64, dst, (long)buf,
+					  n, off, 0, 0);
+			if (w != n) return w < 0 ? w : TAWC_EIO;
+		}
+		off += n;
+	}
+	return 0;
+}
+
+/* Move the memfd behind `fds` (all naming one inode) onto a fresh
+ * file: dup3 it over each fd so holders keep their numbers, CLOEXEC
+ * state, status flags and offset. Refuses (-EBUSY) when the memfd is
+ * visible anywhere else in this process — another fd or a mapping
+ * would silently keep the old object. Fds in other processes (a child
+ * forked in between) can't be seen; accepted, neither browser forks
+ * between create and reopen. Returns 0 or -errno (nothing changed). */
+static long migrate_fds(const int *fds, size_t n)
+{
+	struct stat st;
+	long r = raw_fstat(fds[0], &st);
+	if (r < 0) return r;
+	for (size_t i = 1; i < n; i++) {
+		struct stat o;
+		r = raw_fstat(fds[i], &o);
+		if (r < 0) return r;
+		if (o.st_dev != st.st_dev || o.st_ino != st.st_ino)
+			return TAWC_EBUSY;
+	}
+	/* Memfds (shmem) answer F_GET_SEALS; plain files EINVAL. */
+	long seals = tawc_fcntl(fds[0], F_GET_SEALS, 0);
+	if (seals < 0) return seals;
+	if (tawcroot_rootfs_fd < 0) return TAWC_ENOENT;
+
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	r = other_fd_has_inode(fds, n, st.st_dev, st.st_ino, scratch->buf[0]);
+	if (r == 0) r = maps_has_inode(st.st_dev, st.st_ino, scratch->buf[0]);
+	if (r != 0) return r > 0 ? TAWC_EBUSY : r;
+
+	/* Unnamed, so nothing to unlink or sweep, and the rootfs dir is
+	 * app-private (the guest can't see the inode by name). */
+	long tf = tawc_openat(tawcroot_rootfs_fd, ".",
+			      TAWC_O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
+	if (tf < 0) return tf;
+	r = TAWC_RAW(TAWC_SYS_fchmod, tf,
+		     SHM_FILE_TAG | (seals & SHM_SEAL_MASK), 0, 0, 0, 0);
+	if (r == 0 && st.st_size > 0)
+		r = copy_contents(fds[0], (int)tf, (long)st.st_size,
+				  scratch->buf[0]);
+	long fl = tawc_fcntl(fds[0], F_GETFL, 0);
+	long off = tawc_lseek(fds[0], 0, 1 /* SEEK_CUR */);
+	if (r == 0 && fl >= 0) r = tawc_fcntl((int)tf, F_SETFL, fl);
+	if (r == 0 && off > 0) {
+		long s2 = tawc_lseek((int)tf, off, 0 /* SEEK_SET */);
+		if (s2 < 0) r = s2;
+	}
+	if (r < 0) {
+		tawc_close((int)tf);
+		return r;
+	}
+	for (size_t i = 0; i < n; i++) {
+		long fdfl = tawc_fcntl(fds[i], F_GETFD, 0);
+		if (fdfl < 0) fdfl = 0;
+		(void)TAWC_RAW(TAWC_SYS_dup3, tf, fds[i],
+			       (fdfl & FD_CLOEXEC) ? O_CLOEXEC : 0, 0, 0, 0);
+	}
+	tawc_close((int)tf);
+	return 0;
+}
+
+long tawcroot_shm_migrate_guest_memfd(int fd)
+{
+	if (fd < 0 || tawcroot_fd_is_reserved(fd)) return TAWC_EBADF;
+	/* Only memfds: tmpfs files also answer F_GET_SEALS. */
+	char path[32], link[7];
+	long r = tawc_proc_fd_path(path, sizeof path, fd, 0);
+	if (r < 0) return r;
+	r = tawc_readlinkat(AT_FDCWD, path, link, sizeof link);
+	if (r < 0) return r;
+	if (r != sizeof link || memcmp(link, "/memfd:", sizeof link) != 0)
+		return TAWC_EINVAL;
+	int fds[1] = { fd };
+	return migrate_fds(fds, 1);
+}
+
+int tawcroot_shm_seal_fcntl(int fd, int op, long arg, long *ret)
+{
+	if (op != F_ADD_SEALS && op != F_GET_SEALS) return 0;
+	struct stat st;
+	if (raw_fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) ||
+	    st.st_nlink != 0 || (st.st_mode & 07700) != SHM_FILE_TAG)
+		return 0;
+	long cur = (long)(st.st_mode & SHM_SEAL_MASK);
+	if (op == F_GET_SEALS) {
+		*ret = cur;
+		return 1;
+	}
+	/* Kernel order: fd must be writable, known bits, not sealed. */
+	long fl = tawc_fcntl(fd, F_GETFL, 0);
+	if (fl < 0)
+		*ret = fl;
+	else if ((fl & O_ACCMODE) == O_RDONLY)
+		*ret = TAWC_EPERM;
+	else if ((unsigned long)arg & ~(unsigned long)SHM_SEAL_MASK)
+		*ret = TAWC_EINVAL;
+	else if (cur & F_SEAL_SEAL)
+		*ret = TAWC_EPERM;
+	else
+		*ret = TAWC_RAW(TAWC_SYS_fchmod, fd,
+				SHM_FILE_TAG | cur | arg, 0, 0, 0, 0);
+	return 1;
 }
 
 /* ---------- stat / statx synthesis ---------- */
@@ -441,6 +713,9 @@ long tawcroot_shm_register(const char *name, int fd)
 	for (size_t i = 0; i < nlen; i++) slot->name[i] = name[i];
 	slot->name[nlen] = 0;
 	slot->fd = fd;
+	/* The creator's guest fd isn't ferried: no migration after exec. */
+	slot->guest_fd = -1;
+	slot->pid = 0;
 	slot->in_use = 1;
 	add_to_reserved_list(fd);
 	shm_unlock();
@@ -453,6 +728,7 @@ void tawcroot_shm_reset(void)
 	for (size_t i = 0; i < TAWCROOT_SHM_MAX; i++) {
 		g_shm[i].in_use = 0;
 		g_shm[i].fd = -1;
+		g_shm[i].guest_fd = -1;
 		g_shm[i].name[0] = 0;
 	}
 	shm_unlock();

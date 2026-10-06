@@ -8,12 +8,16 @@ import me.phie.tawc.compositor.NativeBridge
 import me.phie.tawc.session.Reason
 import me.phie.tawc.session.SessionExit
 import me.phie.tawc.session.SessionHolds
+import me.phie.tawc.session.SessionWake
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
 
 /** Session-service test surfaces; see notes/session-service.md. */
 internal object SessionActions {
     fun registerAll() {
         ActionRegistry.register("session-state", StateAction)
         ActionRegistry.register("session-exit", ExitAction)
+        ActionRegistry.register("session-wake", WakeAction)
         ActionRegistry.register("compositor-hold", CompositorHoldAction)
     }
 
@@ -55,9 +59,40 @@ internal object SessionActions {
                         is Reason.Command -> "command ${r.label}"
                         is Reason.Compositor -> "compositor ${r.windowCount}"
                         is Reason.Stray -> "stray ${r.count}"
+                        is Reason.Remote -> "remote ${r.distroId} ${r.clients}"
                     },
                 )
             }
+            return 0
+        }
+    }
+
+    /**
+     * `session-wake [--arg wake=on|off]` — set "Keep awake" like the
+     * notification action, then print `held`, `released` or `unavailable`
+     * (no service up).
+     */
+    private object WakeAction : BrokerAction {
+        override fun run(args: Map<String, String>, ctx: ActionContext): Int {
+            val want = when (args["wake"]) {
+                null -> null
+                "on" -> true
+                "off" -> false
+                else -> {
+                    ctx.err("session-wake: --arg wake=on|off")
+                    return 2
+                }
+            }
+            val task = FutureTask {
+                if (want != null) SessionWake.set(want)
+                when {
+                    !SessionWake.available.value -> "unavailable"
+                    SessionWake.held.value -> "held"
+                    else -> "released"
+                }
+            }
+            Handler(Looper.getMainLooper()).post(task)
+            ctx.out(task.get(5, TimeUnit.SECONDS))
             return 0
         }
     }

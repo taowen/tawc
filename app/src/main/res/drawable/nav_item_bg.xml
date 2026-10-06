@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Home drawer rows: the checked (open) distro gets a neutral fill
+     with an accent strip along its left edge. The mask keeps the press
+     ripple visible on unchecked (transparent) rows. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="?attr/colorControlHighlight">
+    <item android:id="@android:id/mask">
+        <color android:color="@android:color/white" />
+    </item>
+    <item>
+        <selector>
+            <item android:state_checked="true">
+                <layer-list>
+                    <item>
+                        <color android:color="@color/tawc_nav_selected" />
+                    </item>
+                    <item android:gravity="start|fill_vertical" android:width="3dp">
+                        <color android:color="@color/tawc_accent" />
+                    </item>
+                </layer-list>
+            </item>
+            <item>
+                <color android:color="@android:color/transparent" />
+            </item>
+        </selector>
+    </item>
+</ripple>

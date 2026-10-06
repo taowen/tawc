@@ -25,7 +25,7 @@ The compositor (`compositor/src/`) is split into:
   by walking the installed icon themes and their `Inherits=` chains; SVG
   sources are rasterized into a per-install cache by **icon_cache.rs**, XPM is
   skipped (see notes/launcher.md "Icon resolution").
-  Returns a JSON array string to Kotlin (`LauncherActivity`) via the
+  Returns a JSON array string to Kotlin (`LauncherEntry.scan`) via the
   `nativeLauncherScan` JNI entry. No compositor-state interaction — just pure
   file I/O, safe to call from any thread.
 - **text_input.rs** -- `zwp_text_input_v3` server impl bridging Android InputConnection.
@@ -56,18 +56,20 @@ The compositor (`compositor/src/`) is split into:
 
 Kotlin side (`app/src/main/java/me/phie/tawc/`):
 
-- **MainActivity.kt** -- Home screen (only Activity in `category.LAUNCHER`). Renders
-  one card per installed distro (each with Info + Run buttons) plus "Task manager" /
-  "Install new distro" buttons. Nothing starts the compositor explicitly (see
+- **MainActivity.kt** -- Home screen (only Activity in `category.LAUNCHER`). Hosts
+  one pane for the open distro — intro, distro info, terminal
+  (`terminal/TerminalPane`) or app list (`launcher/AppsPane`) — with a FAB
+  toggling terminal/apps, a drawer to switch distros or install one, and
+  one ⋮ menu (notes/android.md "Home screen"). Nothing starts the compositor explicitly (see
   "Compositor lifecycle" below); user-launched rootfs commands go through
   `UserRootfsSession`, which holds a session reason for the process's lifetime.
-- **launcher/LauncherActivity.kt** -- Per-distro app picker. Reads the rootfs's
+- **launcher/AppsPane.kt** -- Per-distro app list on the home screen. Reads the rootfs's
   `.desktop` files via [`NativeBridge.nativeLauncherScan`][launcher.rs] (Rust does the
-  scan + parsing), shows a type-to-filter list with each entry's icon, fires
-  `UserRootfsSession.runInside` on a process-wide `LAUNCH_SCOPE` so the
-  launcher Activity can finish without killing the launched program. `Enter`
+  scan + parsing), shows an icon grid with an optional search filter, and
+  launches through `EntryLauncher` (`UserRootfsSession.runInside` on a
+  process-wide `LAUNCH_SCOPE`, so nothing on screen owns the program). `Enter`
   launches the top filtered match.
-- **launcher/IconLoader.kt** -- Async PNG icon decoder for launcher rows.
+- **launcher/IconLoader.kt** -- Async PNG icon decoder for launcher cells.
   Caches `path → Bitmap` in a byte-bounded `LruCache` (an eighth of the heap,
   floored at ~32 icons) so re-renders on filter keystrokes don't re-decode
   without letting a big distro's icon set grow unbounded;
@@ -76,14 +78,14 @@ Kotlin side (`app/src/main/java/me/phie/tawc/`):
   typing) doesn't slam the wrong bitmap into a recycled view.
 - **ui/Scaffold.kt** -- Helpers shared by the non-compositor activities — builds the
   `MaterialToolbar` (with back/up arrow on child screens) plus the content column, and
-  exposes the button factories. Buttons with text keep a visible fill
+  exposes the button factories. `buildDrawerScreen` is the home variant
+  (drawer + FAB overlay, `tawcFab`). Buttons with text keep a visible fill
   (`primaryButton` accent / `destructiveButton` red / `tonalButton` muted;
   `tonalIconButton` is the icon-only filled base). Narrow icon-only buttons use
   `plainIconButton`: no fill, circular ripple, and a 24dp `?attr/colorControlNormal`
   glyph — the same mark a toolbar's own up arrow draws, so back arrows match
-  wherever they appear. Two deliberate exceptions: the home card's gear/terminal
-  run at 28dp (`HOME_ICON_SIZE_DP` — the card's only controls, in open space) and
-  the launcher's ⋮ at 21dp (solid dots read heavier than the line icons). Colour
+  wherever they appear. One deliberate exception: the
+  launcher's ⋮ at 21dp (solid dots read heavier than the line icons). Colour
   carries meaning where it did before: the `+` on a bind suggestion is an
   accent-tinted glyph.
 - **compositor/CompositorService.kt** -- Bound (never started, not foreground) service
@@ -141,7 +143,7 @@ explicitly, and an idle one stops.
   `CompositorService.ensureActivation` (asset extraction + `TAWC_*` env +
   `nativeStartActivation`), which every spawn path calls first
   (`TawcApplication` startup thread, `UserRootfsSession.startInside`,
-  `TerminalActivity.spawnSession`) so the sockets are listening before any
+  `TerminalPane.spawnSession`) so the sockets are listening before any
   guest exists and extraction never sits in the connect→accept gap. No
   `.lock` file: one process, one holder.
 - While no compositor thread exists the holder thread `poll()`s both sockets
@@ -181,8 +183,8 @@ explicitly, and an idle one stops.
   (`TawcState::selection_mirrored`), the compositor installs the payloadless
   Android selection: the owner gets `cancelled` and exits, pastes are served
   from Android. An unmirrored selection (non-text, over cap) keeps its owner
-  and pins the compositor — it is the only copy. Not exercised end to end
-  yet: `wl-copy` itself fails earlier, see `plans/wl-clipboard-support.md`.
+  and pins the compositor — it is the only copy. Covered by
+  `lazy_compositor::test_wl_copy_survives_compositor_stop`.
 - The kumquat listener is one thread for the life of the process.
 - Verified by `lazy_compositor::*`: Wayland and X11-only cold start, idle
   stop, restart, and flat fd/thread counts over start/stop cycles.

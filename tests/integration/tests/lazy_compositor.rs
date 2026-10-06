@@ -7,7 +7,10 @@
 
 use std::time::{Duration, Instant};
 
-use tawc_integration::helpers::{ensure_wayland_debug_app, has_shm_surface, TIMEOUT};
+use tawc_integration::helpers::{
+    close_home_terminal, ensure_wayland_debug_app, has_shm_surface, show_home_terminal,
+    terminal_run, wait_for_rootfs_file, wait_terminal_state, TIMEOUT,
+};
 use tawc_integration::rootfs_process::RootfsProcess;
 use tawc_integration::{adb, compositor, GraphicsBackend};
 
@@ -253,4 +256,193 @@ fn test_session_holds_follow_commands_and_exit_kills_everything() {
         std::thread::sleep(Duration::from_millis(100));
     }
     let _ = cmd.stop();
+}
+
+/// The home screen's pending shell (nobody typed into it yet) holds no
+/// session reason and is not a stray: once a command's hold is gone the
+/// service stops with the shell still running.
+#[test]
+fn test_session_holds_ignore_pending_terminal() {
+    let _unpinned = Unpinned::new();
+    // Visible, so the terminal view lays out and starts the shell.
+    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::home_pane("terminal").expect("home-pane terminal");
+    let wait_state = |want: &str| {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let state = adb::terminal_state().expect("terminal-state");
+            if state == want {
+                return;
+            }
+            assert!(Instant::now() < deadline, "terminal-state {state:?}, want {want:?}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    wait_state("pending");
+    let reasons = adb::session_state().expect("session-state");
+    assert!(reasons.is_empty(), "pending shell took a hold: {reasons:?}");
+
+    // A command's hold starts the service; releasing it enters the
+    // stray tail, which must not count the pending shell.
+    let out = adb::rootfs_run_with(BACKEND, "true").expect("run true");
+    assert!(out.status.success(), "`true` failed");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while adb::session_service_running().expect("dumpsys") {
+        assert!(
+            Instant::now() < deadline,
+            "session service stayed up with only a pending shell: {:?}",
+            adb::session_state()
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    wait_state("pending");
+
+    adb::home_pane("apps").expect("home-pane apps");
+    wait_state("none");
+}
+
+/// `am stack remove` on MainActivity's root task: the recents swipe.
+fn remove_main_task() {
+    let out = adb::shell("am stack list").expect("am stack list");
+    let list = String::from_utf8_lossy(&out.stdout);
+    let mut root = None;
+    let mut found = None;
+    for line in list.lines() {
+        if let Some(rest) = line.trim().strip_prefix("RootTask id=") {
+            root = rest.split_whitespace().next().map(str::to_string);
+        } else if line.contains("me.phie.tawc/me.phie.tawc.MainActivity") {
+            found = root.clone();
+        }
+    }
+    let id = found.expect("MainActivity task");
+    adb::shell(&format!("am stack remove {id}")).expect("am stack remove");
+}
+
+/// Swiping the home screen away hangs up its shells like closing
+/// desktop terminal windows: a plain background job dies, a `nohup`
+/// one survives and keeps the service up as a stray until Exit.
+#[test]
+fn test_swipe_hangs_up_terminals() {
+    let _unpinned = Unpinned::new();
+    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::home_pane("terminal").expect("home-pane terminal");
+    let wait_until = |what: &str, f: &mut dyn FnMut() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !f() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    };
+    let state = || adb::terminal_state().expect("terminal-state");
+    wait_until("pending shell", &mut || state() == "pending");
+    // Let bash print its first prompt before typing.
+    std::thread::sleep(Duration::from_secs(1));
+
+    let sleepers = || {
+        let ps = adb::host_sh("ps -A -o ARGS | grep -E 'sleep 392[12]' | grep -v grep; true").expect("ps");
+        String::from_utf8_lossy(&ps.stdout).trim().to_string()
+    };
+    for line in ["sleep%s3921%s&", "nohup%ssleep%s3922%s>/dev/null%s2>&1%s&"] {
+        adb::shell(&format!("input text '{line}'")).expect("input text");
+        adb::shell("input keyevent 66").expect("enter");
+    }
+    wait_until("both sleepers", &mut || {
+        let s = sleepers();
+        s.contains("sleep 3921") && s.contains("sleep 3922")
+    });
+
+    remove_main_task();
+    wait_until("the shell to close", &mut || state() == "none");
+    wait_until("the plain job to die", &mut || !sleepers().contains("sleep 3921"));
+    assert!(sleepers().contains("sleep 3922"), "nohup child died with the shell");
+    let reasons = adb::session_state().expect("session-state");
+    assert!(reasons.is_empty(), "hung-up shell still holds: {reasons:?}");
+    assert!(adb::session_service_running().expect("service state"), "stray tail should keep the service up");
+
+    adb::session_exit().expect("session-exit");
+    wait_until("the service to stop", &mut || !adb::session_service_running().expect("service state"));
+    assert!(sleepers().is_empty(), "exit left {}", sleepers());
+
+    // Later tests expect a TAWC activity in front: compositor windows
+    // can't launch from the background.
+    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::home_pane("apps").expect("home-pane apps");
+}
+
+/// `wl-copy` from a cold terminal starts the compositor, which mirrors
+/// the text into Android, takes the selection over from the surfaceless
+/// daemon (which then exits) and stops; `wl-paste` restarts it and reads
+/// the text back from Android.
+#[test]
+fn test_wl_copy_survives_compositor_stop() {
+    let _unpinned = Unpinned::new();
+    let _ = adb::rootfs_run_with(BACKEND, "rm -f /tmp/tawc-wlp-lazy*");
+    show_home_terminal();
+    wait_terminal_state("pending");
+    // Let the shell print its first prompt before typing.
+    std::thread::sleep(Duration::from_secs(1));
+
+    terminal_run("wl-copy%slazy-wl-copy");
+    let deadline = Instant::now() + START_TIMEOUT;
+    while adb::clipboard_get_text().expect("get Android clipboard") != "lazy-wl-copy" {
+        assert!(Instant::now() < deadline, "wl-copy text never reached Android");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    compositor::wait_for_stopped(STOP_TIMEOUT).expect("compositor should stop after wl-copy");
+
+    terminal_run("wl-paste%s-n>/tmp/tawc-wlp-lazy;touch%s/tmp/tawc-wlp-lazy.done");
+    wait_for_rootfs_file(BACKEND, "/tmp/tawc-wlp-lazy.done", START_TIMEOUT);
+    assert_eq!(wait_for_rootfs_file(BACKEND, "/tmp/tawc-wlp-lazy", TIMEOUT), "lazy-wl-copy");
+    let _ = adb::rootfs_run_with(BACKEND, "rm -f /tmp/tawc-wlp-lazy*");
+    close_home_terminal();
+}
+
+/// "Keep awake" holds `tawc:session` only while on; off, Exit and the
+/// service stopping all drop it, and a new service starts released.
+#[test]
+fn test_session_wake_follows_toggle_and_exit() {
+    let _unpinned = Unpinned::new();
+    let wake_lock_held = || {
+        let out = adb::shell("dumpsys power").expect("dumpsys power");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .any(|l| l.contains("PARTIAL_WAKE_LOCK") && l.contains("'tawc:session'"))
+    };
+    let wait_lock = |want: bool| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while wake_lock_held() != want {
+            assert!(Instant::now() < deadline, "tawc:session held != {want}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+
+    let mut cmd = RootfsProcess::spawn_with(BACKEND, "exec sleep 3919").expect("spawn sleeper");
+    let deadline = Instant::now() + TIMEOUT;
+    while adb::session_wake(None).expect("session-wake") != "released" {
+        assert!(Instant::now() < deadline, "session service never came up released");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!wake_lock_held(), "lock held before the toggle");
+
+    assert_eq!(adb::session_wake(Some(true)).expect("wake on"), "held");
+    wait_lock(true);
+    assert_eq!(adb::session_wake(Some(false)).expect("wake off"), "released");
+    wait_lock(false);
+
+    assert_eq!(adb::session_wake(Some(true)).expect("wake on"), "held");
+    wait_lock(true);
+    adb::session_exit().expect("session-exit");
+    wait_lock(false);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while adb::session_service_running().expect("dumpsys") {
+        assert!(Instant::now() < deadline, "session service stayed up after Exit");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    assert_eq!(adb::session_wake(Some(true)).expect("wake on"), "unavailable");
+    let _ = cmd.stop();
+
+    // A new service lifetime starts released.
+    let out = adb::rootfs_run_with(BACKEND, "true").expect("run true");
+    assert!(out.status.success(), "`true` failed");
+    assert!(!wake_lock_held(), "lock carried over into a new service");
 }

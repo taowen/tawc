@@ -102,6 +102,10 @@ int tawcroot_is_proc_self_cwd(const char *path);
  * back as guest paths (outside-view targets pass through verbatim). */
 int tawcroot_is_proc_fd_link(const char *path);
 
+/* If `path` is /proc/(self|thread-self|<own pid/tid>)/[task/<tid>/]fd/<n>,
+ * returns n; else -1. For triggers that act on the named fd itself. */
+int tawcroot_proc_self_fd_num(const char *path);
+
 /* Byte length of the dir/entry magic-link prefix in a /proc-RELATIVE
  * suffix (no leading "/proc/"): (self|thread-self|<pid>)/(task/<tid>/)?
  * then fd/<entry>, map_files/<entry>, cwd, or root. 0 = no match. Used

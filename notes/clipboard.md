@@ -90,6 +90,29 @@ window; judged not worth it. Xdnd is unaffected (its selection has no
 `SelectionTarget`, so smithay skips the callback), and an X11 client that
 owns the selection itself is never routed through the WM.
 
+**Data-control — the reader's tty.** `ext_data_control_v1` and
+`zwlr_data_control_v1` are advertised so `wl-copy`/`wl-paste` (and other
+CLI tools) work without mapping a window; wl-clipboard's fallback
+without them maps a 1×1 toplevel, i.e. a full-screen Activity per call.
+Data-control needs no focus, so any client could read at any time.
+Reads (Android-owned and client-owned selections alike) therefore go
+through `SelectionHandler::allow_data_control_read`, a hook added to the
+smithay fork in `selection/offer.rs`: `clipboard::allow_data_control_read`
+takes the client's pid (SO_PEERCRED), reads `tty_nr` from
+`/proc/<pid>/stat`, and allows the read only if it equals
+reverse-JNI `NativeBridge.focusedTerminalTty()` — the pty of the home
+terminal's selected tab while its window has Android focus
+(`TerminalPane.focusedTty`, 0 otherwise). Refused reads close the fd
+(empty paste) before any Android fetch. Writes (`wl-copy`) are never
+gated; the new selection takes the normal `new_selection` → eager
+mirror path. Accepted limits: anything on the focused tab's pty (a
+background job from that shell) can read; an fd passed to another
+process inherits the verdict; proot/chroot guests with another uid or
+unreadable `/proc` are denied; background clipboard managers (cliphist)
+can't read. Android's own foreground rule still bounds Android clips if
+this gate regresses. A surfaceless `wl-copy` daemon is handled by the
+idle takeover in `event_loop::check_idle`.
+
 Per-distro isolation is a separate, unaddressed boundary: the clipboard,
 the Wayland socket, and the X display are all shared across installs by
 design.
@@ -135,6 +158,11 @@ bursts. See the module doc in clipboard.rs.
   (x11-debug-app `paste-loop` behind a Wayland window). Both clients
   report every attempt as `CLIPBOARD_TRY:ok=<text>` vs
   `CLIPBOARD_TRY:empty` / `:denied`.
+- `wl_clipboard` (wl-copy maps no window; wl-paste allowed from the
+  focused terminal, denied from the broker, a `setsid` child and an
+  unfocused terminal) and
+  `lazy_compositor::test_wl_copy_survives_compositor_stop` (cold
+  `wl-copy`, compositor stops, `wl-paste` restarts it and reads back).
 - Toast behavior (none on screen open, one per paste) can only be
   judged manually on a per-read-toast OEM device; AOSP/emulator dedupes
   per app+clip.

@@ -55,9 +55,10 @@ libxshmfence	https://gitlab.freedesktop.org/xorg/lib/libxshmfence.git	89f0647485
 xkbcomp	https://gitlab.freedesktop.org/xorg/app/xkbcomp.git	e26102f28f08e5432b1ad44bbaef7f32aff199f6	xkbcomp-1.4.7	deps/xwayland-src/xkbcomp
 xkeyboard-config	https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config.git	a8b1be93168cbd3246359c724f090e821079b313	xkeyboard-config-2.45	deps/xwayland-src/xkeyboard-config
 xwayland	https://gitlab.freedesktop.org/xorg/xserver.git	a0241c1d38297a800d2aae3d8ca7213b7b873879	xwayland-24.1.11	deps/xwayland-src/xwayland
-smithay	https://github.com/wmww/smithay.git	29d3dd3b6fb0e4557a93916b9996768831df81db	tawc-patches	deps/smithay
+smithay	https://github.com/wmww/smithay.git	61bec1efdd0b487601d9bcbca8670949c8254756	tawc-patches	deps/smithay
 
 # gfxstream-bridge deps (Phase 1.1+; see notes/gfxstream-bridge.md)
 mesa	https://gitlab.freedesktop.org/mesa/mesa.git	06f9e28304d5d3f109c33535c1c25b9df5769af2	mesa-25.3.6	deps/mesa
 gfxstream	https://github.com/google/gfxstream.git	7f77a8faf1d67311deec9d9a1e5301223c06a039	main	deps/gfxstream
 rutabaga_gfx	https://github.com/magma-gpu/rutabaga_gfx.git	2f0c6a55fd36e61b22a1b3679f69d4273c056602	main	deps/rutabaga_gfx
+openssh-portable	https://github.com/openssh/openssh-portable.git	b3f7344209832eea8ece447d871ea748767c444b	V_10_5_P1	deps/openssh-portable

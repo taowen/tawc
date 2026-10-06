@@ -26,6 +26,7 @@ mod gtk3_menus_workaround;
 mod gl_import;
 mod host;
 mod protocol;
+mod remote_jni;
 mod wlegl;
 mod clipboard;
 mod compositor;
@@ -166,7 +167,7 @@ fn init_native_logging() {
             // Default everything to warn and keep only our crate at debug.
             .with_filter(
                 android_logger::FilterBuilder::new()
-                    .parse("warn,compositor=debug")
+                    .parse("warn,compositor=debug,russh=error")
                     .build(),
             ),
     );
@@ -181,6 +182,8 @@ fn init_native_logging() {
     // leave the JVM running on a dead native worker. The ando broker
     // threads (`ando-*`) instead unwind into their per-connection
     // `catch_unwind` — a malformed request must not take down the app.
+    // Remote access (`tawc-remote*`) likewise: tokio contains a panic to
+    // its task, and the agent thread catches the rest.
     static PANIC_HOOK: OnceLock<()> = OnceLock::new();
     PANIC_HOOK.get_or_init(|| {
         std::panic::set_hook(Box::new(|info| {
@@ -194,7 +197,7 @@ fn init_native_logging() {
             let thread = std::thread::current();
             let name = thread.name().unwrap_or("<unnamed>");
             log::error!("panic in thread {} at {}: {}", name, location, msg);
-            if !name.starts_with("ando-") {
+            if !name.starts_with("ando-") && !name.starts_with("tawc-remote") {
                 std::process::abort();
             }
         }));
@@ -1088,6 +1091,15 @@ pub fn fetch_android_clipboard_text() -> Option<String> {
         Ok(Some(text))
     })
     .flatten()
+}
+
+/// Reverse-JNI: `tty_nr` of the terminal tab the user is looking at, 0
+/// for none (see [`clipboard::allow_data_control_read`]).
+pub fn focused_terminal_tty() -> i32 {
+    with_native_bridge_result("focusedTerminalTty", |env, class| {
+        env.call_static_method(class, "focusedTerminalTty", "()I", &[])?.i()
+    })
+    .unwrap_or(0)
 }
 
 /// Reverse-JNI: push compositor/Wayland-owned text into Android's real

@@ -136,7 +136,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
     /**
      * Spawn parameters for an interactive in-rootfs login shell on a
      * caller-owned pty — the in-app terminal
-     * ([me.phie.tawc.terminal.TerminalActivity]), whose termux
+     * ([me.phie.tawc.terminal.TerminalPane]), whose termux
      * terminal-emulator JNI forks the pty pair and execs [argv]
      * directly. Same envelope as [startInside] minus the `setsid`
      * prefix: the pty spawn setsid()s the child itself, which both
@@ -171,24 +171,47 @@ class TawcrootMethod(context: Context) : InstallationMethod {
         graphics: GraphicsBackend? = null,
         command: String? = null,
     ): PtyExec {
-        val externalBinds = externalBindsFor(rootfs)
-        val assetBinds = assetBinds()
-        val andoHostDir = store.andoHostDir(rootfs)
-        val tmpdir = prepareSpawn(rootfs, assetBinds, externalBinds)
-        val shell = RootShell.resolve(File(rootfs))
+        val env = spawnEnvelope(rootfs, graphics)
         val argv = buildList {
-            addAll(rootfsArgv(rootfs, graphics, assetBinds, externalBinds, andoHostDir, shell))
+            addAll(env.argv)
             add("TERM=xterm-256color")
             add("COLORTERM=truecolor")
             if (command != null) {
                 add(RootShell.DEFAULT)
                 add("-lc"); add(command)
             } else {
-                add(shell)
+                add(env.shell)
                 add("-l")
             }
         }
-        return PtyExec(argv, listOf("TMPDIR=$tmpdir"), tmpdir)
+        return PtyExec(argv, env.hostEnv, env.cwd)
+    }
+
+    /**
+     * The tawcroot spawn envelope with no program baked in: [argv] runs up
+     * to and including the rootfs env (`… -- /usr/bin/env -i -C /root
+     * K=V …`), so callers append more `K=V` args and then the program.
+     * [shell] is root's resolved passwd shell ([RootShell.resolve]);
+     * [hostEnv]/[cwd] are for the host-side tawcroot process (see
+     * [prepareSpawn]). The in-app terminal and remote access
+     * (me.phie.tawc.remote, which hands this to native as JSON) spawn
+     * from it; the caller owns setsid.
+     */
+    data class SpawnEnvelope(
+        val argv: List<String>,
+        val shell: String,
+        val hostEnv: List<String>,
+        val cwd: String,
+    )
+
+    fun spawnEnvelope(rootfs: String, graphics: GraphicsBackend? = null): SpawnEnvelope {
+        val externalBinds = externalBindsFor(rootfs)
+        val assetBinds = assetBinds()
+        val andoHostDir = store.andoHostDir(rootfs)
+        val tmpdir = prepareSpawn(rootfs, assetBinds, externalBinds)
+        val shell = RootShell.resolve(File(rootfs))
+        val argv = rootfsArgv(rootfs, graphics, assetBinds, externalBinds, andoHostDir, shell)
+        return SpawnEnvelope(argv, shell, listOf("TMPDIR=$tmpdir"), tmpdir)
     }
 
     /**

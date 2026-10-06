@@ -8,6 +8,10 @@
 <resources>
     <color name="tawc_accent">#FF621F</color>
 
+    <!-- Soft accent fill for a selected row (the drawer's open
+         distro), where the full accent would shout. -->
+    <color name="tawc_accent_container">#FFD8C7</color>
+
     <color name="tawc_danger">#C62828</color>
     <color name="tawc_on_danger">#FFFFFF</color>
 
@@ -35,4 +39,6 @@
          button on the page). -->
     <color name="tawc_tonal_bg">#D5D4D2</color>
     <color name="tawc_on_tonal">#000000</color>
+    <!-- Checked home-drawer row (drawable/nav_item_bg). -->
+    <color name="tawc_nav_selected">#E4E3E1</color>
 </resources>

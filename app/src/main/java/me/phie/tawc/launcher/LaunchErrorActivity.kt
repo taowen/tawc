@@ -8,10 +8,11 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 /**
- * Transparent host for the launch-failure dialog. [LauncherActivity]
- * finishes before a spawn failure arrives, so the failure handler
- * starts this from the application context instead of toasting —
- * bind errors are full sentences with paths and don't fit a toast.
+ * Transparent host for the launch-failure dialog. Launches are
+ * fire-and-forget ([EntryLauncher]) and the launching screen may be
+ * gone when a spawn failure arrives, so the failure handler starts this
+ * from the application context instead of toasting — bind errors are
+ * full sentences with paths and don't fit a toast.
  */
 class LaunchErrorActivity : AppCompatActivity() {
 

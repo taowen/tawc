@@ -2,17 +2,26 @@ package me.phie.tawc.ui
 
 import android.content.Context
 import android.content.res.ColorStateList
+import android.view.ContextThemeWrapper
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.widget.FrameLayout
 import android.widget.LinearLayout
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.drawerlayout.widget.DrawerLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.floatingactionbutton.FloatingActionButton
+import com.google.android.material.navigation.NavigationView
+import com.google.android.material.shape.RelativeCornerSize
+import com.google.android.material.shape.ShapeAppearanceModel
 import me.phie.tawc.R
 
 /**
@@ -40,12 +49,73 @@ data class Scaffold(
 fun AppCompatActivity.buildChildScreen(title: CharSequence): Scaffold =
     buildScreenInternal(title, withUp = true)
 
-/** Top-level screen (Home): toolbar with title only, no up arrow. */
-fun AppCompatActivity.buildHomeScreen(title: CharSequence): Scaffold =
-    buildScreenInternal(title, withUp = false).also {
-        it.toolbar.setTitleCentered(true)
-        it.toolbar.setTitleTextAppearance(this, R.style.TextAppearance_Tawc_HomeTitle)
+/**
+ * Home screen shell: a [DrawerLayout] with a start-edge
+ * [NavigationView] around a toolbar-less [body]. The body hosts one
+ * pane, which supplies its own top row (with a ≡ that calls
+ * [DrawerScreen.openDrawer]); a FAB can float over it. [root] pads
+ * system bars and the IME so pane content shrinks above the keyboard
+ * (the window must be `adjustResize`). Back closes an open drawer.
+ * Set `setContentView(drawerScreen.drawer)`.
+ */
+class DrawerScreen(
+    val drawer: DrawerLayout,
+    val nav: NavigationView,
+    val root: FrameLayout,
+    val body: FrameLayout,
+) {
+    fun openDrawer() = drawer.openDrawer(nav)
+}
+
+fun AppCompatActivity.buildDrawerScreen(): DrawerScreen {
+    // Insets stay on the main column: the drawer runs under the status
+    // bar and pads its own contents.
+    val root = FrameLayout(this)
+    ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+        val bars = insets.getInsets(
+            WindowInsetsCompat.Type.systemBars() or
+                WindowInsetsCompat.Type.displayCutout() or
+                WindowInsetsCompat.Type.ime()
+        )
+        view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+        insets
     }
+    val body = FrameLayout(this)
+    root.addView(body, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+
+    val drawer = DrawerLayout(this)
+    drawer.addView(root, DrawerLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+    val surfaces = ContextThemeWrapper(this, R.style.ThemeOverlay_Tawc_Surfaces)
+    val nav = NavigationView(surfaces).apply {
+        fitsSystemWindows = true
+        // The inset scrims paint grey bands over the drawer's white.
+        isTopInsetScrimEnabled = false
+        isBottomInsetScrimEnabled = false
+    }
+    drawer.addView(
+        nav,
+        DrawerLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT).also { it.gravity = Gravity.START },
+    )
+
+    val backCloses = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() = drawer.closeDrawer(nav)
+    }
+    onBackPressedDispatcher.addCallback(this, backCloses)
+    drawer.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
+        override fun onDrawerOpened(drawerView: View) { backCloses.isEnabled = true }
+        override fun onDrawerClosed(drawerView: View) { backCloses.isEnabled = false }
+    })
+
+    return DrawerScreen(drawer, nav, root, body)
+}
+
+/**
+ * Height of every home pane's top row, so switching panes doesn't
+ * move the chrome.
+ */
+fun Context.paneTopRowHeightPx(): Int = (PANE_TOP_ROW_DP * resources.displayMetrics.density).toInt()
+
+private const val PANE_TOP_ROW_DP = 48
 
 private fun AppCompatActivity.buildScreenInternal(title: CharSequence, withUp: Boolean): Scaffold {
     val root = LinearLayout(this).apply {
@@ -164,8 +234,8 @@ fun Context.tonalButton(label: CharSequence, onClick: () -> Unit): MaterialButto
     }
 
 /**
- * Square icon-only variant of [tonalButton] (e.g. the per-distro
- * gear/Terminal buttons on the home screen). Fixed
+ * Square icon-only variant of [tonalButton]; base of
+ * [plainIconButton]. Fixed
  * [BUTTON_HEIGHT_DP]-square so every icon button matches the text
  * buttons' height regardless of icon size. MaterialButton centers a
  * TEXT_START icon when there's no text and iconPadding is 0.
@@ -244,7 +314,7 @@ private fun Context.controlTint(): ColorStateList {
 
 /**
  * Card / panel surface used for distro rows on the home screen, the
- * task manager's per-install group cards, the launcher's app rows, and
+ * task manager's per-install group cards, the launcher's search field, and
  * the operation log panel. Filled with [R.color.tawc_card_bg] (a
  * slight contrast against the window surface) and no stroke — the
  * fill alone is what separates the card from the background.
@@ -255,6 +325,33 @@ fun Context.tawcCard(): MaterialCardView =
         cardElevation = 0f
         setCardBackgroundColor(getColor(R.color.tawc_card_bg))
     }
+
+/**
+ * Round accent floating action button for a screen's one headline
+ * action (the home screen's Terminal). Same accent/on-tonal pairing as
+ * the primary-styled install button. Add it to a [DrawerScreen.body]
+ * with [fabLp].
+ */
+fun Context.tawcFab(iconRes: Int, description: CharSequence, onClick: () -> Unit): FloatingActionButton =
+    FloatingActionButton(this).apply {
+        setImageResource(iconRes)
+        contentDescription = description
+        backgroundTintList = ColorStateList.valueOf(getColor(R.color.tawc_accent))
+        imageTintList = ColorStateList.valueOf(getColor(R.color.tawc_on_tonal))
+        shapeAppearanceModel = ShapeAppearanceModel.builder()
+            .setAllCornerSizes(RelativeCornerSize(0.5f))
+            .build()
+        setOnClickListener { onClick() }
+    }
+
+/** Bottom-end placement for [tawcFab] inside a FrameLayout. */
+fun Context.fabLp(): FrameLayout.LayoutParams {
+    val margin = (16 * resources.displayMetrics.density).toInt()
+    return FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).also {
+        it.gravity = Gravity.BOTTOM or Gravity.END
+        it.setMargins(margin, margin, margin, margin)
+    }
+}
 
 /** Convenience: vertical [LinearLayout.LayoutParams] with a bottom margin. */
 fun verticalLp(width: Int, height: Int, bottomMargin: Int = 0): LinearLayout.LayoutParams =

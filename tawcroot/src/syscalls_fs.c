@@ -323,6 +323,13 @@ static long handle_openat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	 * translator returns -ENOENT, matching what a host with no
 	 * /dev/shm dir would do. */
 
+	/* Narrower-mode reopen of our own memfd via /proc/self/fd/<n>:
+	 * SELinux denies it; see the retry below. Parsed before
+	 * translation reuses the scratch. */
+	int self_fd = -1;
+	if ((flags & O_ACCMODE) != O_RDWR && tawc_starts_with(path, "/proc/"))
+		self_fd = tawcroot_proc_self_fd_num(path);
+
 	struct fs_path t;
 	long e = translate_local(scratch, 0, dirfd, openat_mode(flags),
 				 tawcroot_openat_intent(flags), &t);
@@ -421,6 +428,14 @@ static long handle_openat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	 * bind src. See test_prod_rootfs.c::prod_rootfs_cross_bind_abs_symlink
 	 * and notes/tawcroot/path-translation.md "Cross-bind absolute symlinks". */
 	long fd = tawc_openat(t.fd, p, flags, mode);
+
+	/* Android SELinux denies `open` on the app's memfds, so a guest
+	 * can't get a read-only description of its own memfd (Firefox's
+	 * HaveMemfd probe and freezable regions). Move a still-private
+	 * memfd to a file and retry (shm.h). */
+	if (fd == TAWC_EACCES && self_fd >= 0 &&
+	    tawcroot_shm_migrate_guest_memfd(self_fd) == 0)
+		fd = tawc_openat(t.fd, p, flags, mode);
 
 	/* Reactive O_NOFOLLOW: the kernel just ELOOPed a leaf symlink; if
 	 * it is an emulated name, open the object KEEPING O_NOFOLLOW — a

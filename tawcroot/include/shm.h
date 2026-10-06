@@ -22,6 +22,17 @@
  * re-registers them, preserving cross-process visibility for
  * fork+execve patterns (Mozilla parent → content IPC).
  *
+ * Narrower-mode reopens: Android SELinux denies `open` on the app's
+ * own memfds, so an O_RDONLY reopen via /proc/self/fd can't get a
+ * read-only description. When that happens and the segment is still
+ * private to the caller (no other fd, no mapping), it is migrated to
+ * an unnamed O_TMPFILE under the rootfs dir, which /proc/self/fd CAN
+ * reopen. Only segments that ask for a narrower mode pay the
+ * file-backing cost. Guest memfds reopened via /proc/self/fd/<n> get
+ * the same treatment (Firefox's HaveMemfd probe + freezable regions).
+ * Migrated files carry their seals in the mode bits (see
+ * tawcroot_shm_seal_fcntl); enforcement is advisory.
+ *
  * Async-signal-safe: a tiny spinlock guards the table; no malloc,
  * no libc.
  */
@@ -37,6 +48,8 @@
 struct tawcroot_shm_entry {
 	int  in_use;       /* 0 = free; 1 = active                     */
 	int  fd;           /* internal memfd at high reserved range    */
+	int  guest_fd;     /* fd handed out at create, -1 if unknown   */
+	int  pid;          /* process that created it (guest_fd owner) */
 	char name[TAWCROOT_SHM_NAME_MAX + 1];
 };
 
@@ -52,6 +65,16 @@ int tawcroot_shm_is_dir(const char *path);
 /* shm_open(name, flags, mode). Returns a guest-visible fd, or
  * -errno. Honors O_CREAT, O_EXCL, O_TRUNC, O_CLOEXEC. */
 long tawcroot_shm_open(const char *name, int flags, int mode);
+
+/* Migrate guest memfd `fd` to a file-backed segment (see top) after
+ * a denied /proc/self/fd/<fd> reopen, so a retry can succeed. Returns
+ * 0 on migration, -errno if `fd` isn't a memfd or isn't private. */
+long tawcroot_shm_migrate_guest_memfd(int fd);
+
+/* fcntl F_ADD_SEALS / F_GET_SEALS on a migrated file: emulated from
+ * its mode bits. Returns 1 with *ret set when handled, 0 to pass the
+ * call through. */
+int tawcroot_shm_seal_fcntl(int fd, int op, long arg, long *ret);
 
 /* Drop a name from the table. Returns 0 / -ENOENT. The internal
  * memfd is closed; the segment survives if the guest still holds

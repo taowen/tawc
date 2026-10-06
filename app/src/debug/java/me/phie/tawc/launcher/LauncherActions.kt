@@ -19,7 +19,7 @@ import org.json.JSONObject
  * | `launcher-list` | `installId`, optional `showHidden` ∈ true|false | print the launcher entry list as a JSON array on stdout |
  * | `set-entry-hidden` | `installId`, `entryId`, `hidden` ∈ true|false | persist hide/unhide through the same metadata write the UI uses |
  *
- * `launcher-list` mirrors what [LauncherActivity] renders: hidden
+ * `launcher-list` mirrors what [me.phie.tawc.launcher.AppsPane] renders: hidden
  * entries are filtered out unless `showHidden=true` (the UI's
  * "Show hidden" toggle). Each element is
  * `{id, name, exec, terminal, iconPath, path, hidden}` — `iconPath` is

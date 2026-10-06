@@ -44,7 +44,9 @@ to a small (name → memfd) table in `src/shm.c`:
   stores an internal **non-CLOEXEC** dup at the high reserved-fd
   range, and hands a fresh dup to the guest. `O_EXCL` and `O_TRUNC`
   honored.
-- `openat` on an existing name returns a fresh dup of the cached fd.
+- `openat` on an existing name re-opens the internal fd via
+  `/proc/self/fd/<n>` (own description + access mode); see below for
+  Android, where that is denied for memfds.
 - `unlinkat` drops the name; the segment lives on as long as any
   fd is open (POSIX shm semantics, kernel refcount).
 - `fstatat`/`statx`/`faccessat` synthesize sensible answers for both
@@ -66,6 +68,32 @@ Mozilla's IPC SHM is not contended in practice (a tiny spinlock
 guards the table; held only across the create/unlink syscalls).
 `mmap`/`ftruncate`/`mremap`/etc. operate on the returned fd as
 real kernel operations — no further handler involvement.
+
+**Narrower-mode reopens on Android.** SELinux denies `open` on the
+app's own memfds, and an fd's access mode is fixed at `open()`, so a
+memfd can only ever yield one (RDWR) description. Chromium (create
+`O_RDWR|O_EXCL`, reopen `O_RDONLY`, unlink) and Firefox (read-only
+`/proc/self/fd/<memfd>` reopen, see [../firefox.md](../firefox.md))
+`CHECK` that the second fd really is read-only. On such a denied
+`O_RDONLY`/`O_WRONLY` reopen, if the memfd is still private — for
+`/dev/shm`: created by this pid and its creation fd still names it; in
+all cases no other fd in `/proc/self/fd` and no mapping in
+`/proc/self/maps` — the contents move to an unnamed `O_TMPFILE` in the
+rootfs dir, `dup3`ed over the guest fd (and the table's internal fd),
+keeping fd numbers, CLOEXEC, status flags and offset. `/proc/self/fd`
+reopens of that file are allowed, so this and every later open gets a
+real description. Otherwise it falls back to `F_DUPFD` (writable fd).
+Segments are empty at trigger time in both browsers, so only the
+rarely-written read-only-shared regions become file-backed; ordinary
+IPC memory stays on memfds. Unnamed means nothing to unlink or sweep
+after a crash. A child forked between create and reopen keeps the old
+memfd (accepted; neither browser does that).
+
+Migrated files are tagged by mode `01600 | seals` with nlink 0, and
+the `fcntl` handler emulates `F_ADD_SEALS`/`F_GET_SEALS` for them from
+those bits (recognisable from the fd alone, so it works in a sandboxed
+child that got the fd over SCM_RIGHTS). Seals are advisory: nothing
+enforces them.
 
 Known low-value fidelity gaps vs. real `/dev/shm` (the
 program-tripping ones — O_RDONLY access mode, per-open file offsets,

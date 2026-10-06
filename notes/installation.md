@@ -259,19 +259,19 @@ The package is split into three layers:
 | `InstallActions.kt`            | Broker action handlers (`install` / `uninstall`) registered from [TawcApplication.onCreate] (debug builds only). Validate args, call [InstallationService] companion-object helpers, open [LogScreenActivity] best-effort, and mirror the registered Operation's flows back to the broker socket until terminal. Host disconnect → `Operation.cancel()`. See `notes/exec-broker.md` for protocol. |
 | `InstallActivity.kt`           | Install form (distro radio, free-form Label EditText with live slug-derived id hint, vertical method radio in `tawcroot (recommended) / proot / chroot (requires root)` order, "What's the difference?" link to [InstallMethodInfoActivity]) → Install button → calls [InstallationService.startInstall], opens [LogScreenActivity], and finishes itself. The Install button is disabled while the label is empty / unslugifiable / collides with an existing installation. The activity is `exported="false"` — there is no CLI launch path. |
 | `InstallMethodInfoActivity.kt` | Read-only reference page describing the three install methods (tawcroot / proot / chroot). Linked from the install form's "What's the difference?" affordance so users can compare tradeoffs without leaving the app. |
-| `DistroInfoActivity.kt`        | Per-distro detail page (id, label, registry-resolved distro/arch, method, source URL, installed-at, state/failure, full rootfs path) + an async `du -sk` size readout (only for `READY`) + a red Delete button (Are-You-Sure dialog → [InstallationService.startUninstall] + opens [LogScreenActivity]). The view is rebuilt in `onResume` so a returning trip from a cancelled uninstall (FAILED) refreshes the State row instead of showing the stale READY pre-uninstall snapshot. Reached from a tap on a home-screen row. |
+| `DistroInfoView.kt` / `DistroInfoActivity.kt` | Per-distro detail column (label, registry-resolved distro/arch, method, bootstrap, state/failure, source URL, installed-at, full rootfs path) + an async `du -sk` size readout (READY/FAILED/CORRUPT) + a red Delete button (Are-You-Sure dialog → [InstallationService.startUninstall] + opens [LogScreenActivity]). The state row links to the live op log while installing/uninstalling. `DistroInfoView` is shared: the home screen shows it inline as the info pane for a non-READY open distro, and `DistroInfoActivity` wraps it under a toolbar (home ⋮ or drawer row ⋮ → Distro info, any install). Both re-render in `onResume`, so a return from a cancelled uninstall (FAILED) shows the fresh state. Run lives in the home ⋮ menu (`RunCommandDialog.kt`). |
 
-The `MainActivity` home screen lists the on-disk installations
-(distro + arch only — size lives on [DistroInfoActivity] because
-`du -sk` over a multi-GB rootfs costs seconds via `su` and would slow
-down opening the launcher). Each row is tappable and opens the info
-page; the page itself hosts the Uninstall button.
+The `MainActivity` home screen shows the open installation as a
+terminal or app list once READY, and `DistroInfoView` before that (see
+notes/android.md "Home screen"). Size lives on distro info because
+`du -sk` over a multi-GB rootfs costs seconds.
 
 The non-compositor activities (`MainActivity`, `InstallActivity`,
 `DistroInfoActivity`, [LogScreenActivity]) extend `AppCompatActivity`
 and share a small `me.phie.tawc.ui.Scaffold` helper that builds a
 `MaterialToolbar` (with a back/up arrow on child screens) plus a
-content column. The theme is `Theme.Material3.DayNight.NoActionBar`
+content column; `MainActivity` uses its toolbar-less
+`buildDrawerScreen` (panes bring their own top rows). The theme is `Theme.Material3.DayNight.NoActionBar`
 with a warm orange `colorPrimary` (`@color/tawc_accent`) for primary
 buttons and `@color/tawc_danger` (red) for destructive ones; both have
 night-mode variants in `res/values-night/`. The compositor activity

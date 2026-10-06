@@ -39,13 +39,21 @@
         <item name="android:textStyle">bold</item>
     </style>
 
-    <style name="Theme.Tawc.Launcher" parent="Theme.Tawc">
-        <item name="android:windowIsFloating">true</item>
-        <item name="android:windowCloseOnTouchOutside">true</item>
-        <item name="android:backgroundDimEnabled">true</item>
-        <item name="android:windowBackground">@drawable/tawc_popup_bg</item>
-        <item name="android:windowMinWidthMajor">0%</item>
-        <item name="android:windowMinWidthMinor">0%</item>
+    <!-- Home drawer and ⋮ popup: the app's neutral surfaces instead of
+         Material3's lavender containers. Applied as overlays so dialogs
+         keep their look. -->
+    <style name="ThemeOverlay.Tawc.Surfaces" parent="">
+        <item name="colorSurfaceContainerLow">@color/tawc_card_bg</item>
+        <item name="colorSurfaceContainer">@color/tawc_card_bg</item>
+        <item name="colorSecondaryContainer">@color/tawc_accent_container</item>
+        <item name="colorOnSecondaryContainer">@color/tawc_on_tonal</item>
+        <item name="navigationViewStyle">@style/Widget.Tawc.NavigationView</item>
+    </style>
+
+    <!-- Selected row: neutral fill plus a left accent strip
+         (drawable/nav_item_bg), not Material3's tinted pill. -->
+    <style name="Widget.Tawc.NavigationView" parent="Widget.Material3.NavigationView">
+        <item name="itemBackground">@drawable/nav_item_bg</item>
     </style>
 
     <!-- Host theme for activities that only show a dialog

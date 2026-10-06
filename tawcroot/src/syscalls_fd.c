@@ -27,6 +27,7 @@
 #include "path.h"
 #include "path_scratch.h"
 #include "raw_sys.h"
+#include "shm.h"
 #include "sysnr.h"
 #include "tawc_string.h"
 #include "tawc_uapi.h"
@@ -357,6 +358,8 @@ static long handle_fcntl(const tawcroot_syscall_args *args, ucontext_t *uc)
 	 * lowest free fd at or above the requested minimum, and our
 	 * reserved fds are not free. (This used to -EINVAL any minimum at
 	 * or above the base, which broke guests holding that many fds.) */
+	long sr;
+	if (tawcroot_shm_seal_fcntl(fd, op, a3, &sr)) return sr;
 	return TAWC_RAW(TAWC_SYS_fcntl, fd, op, a3, 0, 0, 0);
 }
 

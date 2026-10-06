@@ -107,7 +107,7 @@ set_required_packages() {
                 gtk4 cairo wayland libx11 libxcb libglvnd
                 gtk3 gtk3-demos gtk4-demos firefox supertuxkart lxterminal
                 mesa-utils weston vulkan-tools
-                xorg-xclock
+                xorg-xclock wl-clipboard
                 mesa-demos python
             )
             PACKAGE_CHECK_CMD="pacman -Q ${REQUIRED_PKGS[*]} >/dev/null 2>&1"
@@ -118,7 +118,7 @@ set_required_packages() {
                 gtk4 cairo wayland libX11 libxcb libglvnd
                 gtk+3 gtk+3-demo gtk4-demo firefox supertuxkart lxterminal
                 glxinfo weston Vulkan-Tools python3
-                xclock
+                xclock wl-clipboard
                 mesa-demos mesa-dri
                 dejavu-fonts-ttf
             )
@@ -130,7 +130,7 @@ set_required_packages() {
                 libgtk-4-1 libcairo2 libwayland-client0 libx11-6 libxcb1 libglvnd0
                 libgtk-3-0 gtk-3-examples gtk-4-examples firefox supertuxkart lxterminal
                 mesa-utils mesa-utils-extra weston vulkan-tools gstreamer1.0-plugins-base
-                x11-apps dbus-x11 python3
+                x11-apps dbus-x11 python3 wl-clipboard
                 libgl1-mesa-dri mesa-vulkan-drivers fonts-dejavu-core
             )
             # `dpkg-query -W <pkg>` exits 0 for a merely *known* name (dpkg
@@ -401,6 +401,12 @@ esac
 if [ "$(adb shell "su -c 'id -u'" 2>/dev/null | tr -d '\r\n')" != "0" ]; then
     echo "=== Marking root-requiring tests ignored (no Magisk-style su on target) ==="
     EXTRA_RUSTFLAGS+=(--cfg tawc_skip_root_on_target)
+fi
+# The live remote-access test needs network on both the target and this
+# host (it goes through sshyeet.com); opt in with TAWC_LIVE_RELAY=1.
+if [ "${TAWC_LIVE_RELAY:-}" = 1 ]; then
+    echo "=== Enabling the live-relay remote access test ==="
+    EXTRA_RUSTFLAGS+=(--cfg tawc_live_relay)
 fi
 if [ "${#EXTRA_RUSTFLAGS[@]}" -gt 0 ]; then
     export RUSTFLAGS="${RUSTFLAGS:-} ${EXTRA_RUSTFLAGS[*]}"

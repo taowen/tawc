@@ -124,6 +124,18 @@ static void bind_top_level_to_parent(void)
 	if (tawc_getppid() == 1) tawc_exit_group(0);
 }
 
+/* Android apps inherit SIGHUP ignored from zygote, and ignored
+ * dispositions survive exec — so a terminal hangup (or bash passing
+ * one on to its jobs) would reach nothing. Guests expect the default,
+ * as under a desktop login. Top-level only: an `--exec-child` carries
+ * the guest's own choice (`nohup`). */
+static void reset_android_sighup(void)
+{
+	/* Kernel sigaction layout, all zero = SIG_DFL, no flags/mask. */
+	struct { unsigned long handler, flags, restorer, mask; } sa = { 0 };
+	(void)tawc_rt_sigaction(SIGHUP, &sa, NULL, 8);
+}
+
 /* Locate envp by walking past argv's NULL terminator on the kernel-
  * built initial stack. _start hands us argc/argv but not envp — we
  * recover it here. argv[argc] is NULL; envp = &argv[argc + 1]. */
@@ -510,7 +522,10 @@ void tawcroot_main(int argc, char **argv)
 	/* Top-level binding (PDEATHSIG + orphan-detect) is unsafe on the
 	 * --exec-child re-exec; see bind_top_level_to_parent's docstring
 	 * for the gpgme posix_spawn rationale. */
-	if (entry != ENTRY_EXEC_CHILD) bind_top_level_to_parent();
+	if (entry != ENTRY_EXEC_CHILD) {
+		bind_top_level_to_parent();
+		reset_android_sighup();
+	}
 
 	switch (entry) {
 		case ENTRY_USAGE_ERROR:

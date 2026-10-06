@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare two APKs entry by entry.
 
-The reproducibility check behind plans/reproducible-builds.md: F-Droid
+The reproducibility check behind notes/reproducible-builds.md: F-Droid
 rebuilds a tag and only ships the maintainer-signed APK if its rebuild
 matches. This is the same comparison, run before tagging.
 

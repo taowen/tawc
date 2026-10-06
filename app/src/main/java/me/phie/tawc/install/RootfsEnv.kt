@@ -165,11 +165,13 @@ internal object RootfsEnv {
         // GLAMOR-disabled — SDL apps that probe X11 die on createWindow.
         // Force Wayland-first.
         put("SDL_VIDEODRIVER", "wayland,x11")
-        // Android SELinux denies re-opening a memfd via /proc/self/fd, so
-        // Firefox's parent falls back to (unsealed) shm_open while its
-        // children still demand F_SEAL_SHRINK on every handle and crash
-        // (Firefox >= 156). See notes/firefox.md "MOZ_SHM_NO_SEALS".
-        put("MOZ_SHM_NO_SEALS", "1")
+        // Chromium/Electron's ozone auto-pick keys off this; unset they
+        // fall back to X11 via Xwayland.
+        put("XDG_SESSION_TYPE", "wayland")
+        // Electron's sandbox can't come up under any method (no user
+        // namespaces, setuid helper vs NO_NEW_PRIVS, and it refuses to
+        // run as root anyway). Electron reads this as --no-sandbox.
+        put("ELECTRON_DISABLE_SANDBOX", "1")
         if (method == Method.PROOT) {
             put("MOZ_DISABLE_CONTENT_SANDBOX", "1")
             put("MOZ_DISABLE_GPU_SANDBOX", "1")

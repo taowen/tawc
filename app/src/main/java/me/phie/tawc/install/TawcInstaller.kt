@@ -58,6 +58,7 @@ internal object TawcInstaller {
         BridgeInstallProvider,
         MesaZinkInstallProvider,
         AndoInstallProvider,
+        SftpServerInstallProvider,
         ShellDefaultsInstallProvider,
     )
 

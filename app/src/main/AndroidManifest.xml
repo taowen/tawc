@@ -4,6 +4,9 @@
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
 
     <!-- Bootstrap tarballs are downloaded directly by the install package. -->
+    <!-- Remote access local-network mode: tells cellular interfaces
+         apart so it never listens on one (remote/LocalNetwork.kt). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- SessionService keeps the process in the foreground while anything
          is alive in a rootfs (terminals, commands, the compositor);
@@ -14,6 +17,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- SessionService's opt-in "Keep awake" (CPU + Wi-Fi locks). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- All-files access backs the external-storage bind feature
          (notes/external-binds.md): the user binds e.g.
@@ -45,14 +50,30 @@
         android:theme="@style/Theme.Tawc"
         android:extractNativeLibs="true">
 
+        <!-- Home screen and in-app terminal (notes/android.md "Home
+             screen"). singleTask: launcher entries' command tabs and
+             the session notification reach the one instance via
+             onNewIntent. configChanges keeps rotation from rebuilding
+             the terminal; adjustResize lets the IME shrink the panes. -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The only way in for command launches (EntryLauncher):
+             MainActivity is exported, so it honors EXTRA_COMMAND only
+             when the intent names this non-exported alias. -->
+        <activity-alias
+            android:name=".CommandLaunch"
+            android:exported="false"
+            android:targetActivity=".MainActivity" />
 
         <!-- CompositorActivity hosts one window. The combination of
              documentLaunchMode="intoExisting", taskAffinity="" and a
@@ -94,6 +115,11 @@
             android:name=".install.DistroInfoActivity"
             android:exported="false"
             android:label="@string/title_distro_info" />
+
+        <activity
+            android:name=".remote.RemoteAccessActivity"
+            android:exported="false"
+            android:label="@string/title_remote_access" />
 
         <activity
             android:name=".install.InstallMethodInfoActivity"
@@ -150,25 +176,8 @@
             android:name=".ops.CancelOperationReceiver"
             android:exported="false" />
 
-        <!-- In-app terminal, one per distro. Same document trick as
-             CompositorActivity: documentLaunchMode="intoExisting" +
-             taskAffinity="" + a unique tawc://terminal/<id> data URI
-             gives each distro's terminal its own recents card and
-             reuses the existing instance on relaunch. The shell session
-             itself lives in TerminalSessions, so relaunch/rotation
-             reattaches instead of respawning. adjustResize so the soft
-             keyboard resizes the terminal grid. -->
-        <activity
-            android:name=".terminal.TerminalActivity"
-            android:exported="false"
-            android:documentLaunchMode="intoExisting"
-            android:taskAffinity=""
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:windowSoftInputMode="adjustResize" />
-
         <!-- Launch-failure dialog. Started from the application context
-             by LauncherActivity's fire-and-forget failure handler (the
-             launcher itself is finished by then). -->
+             by EntryLauncher's fire-and-forget failure handler. -->
         <activity
             android:name=".launcher.LaunchErrorActivity"
             android:exported="false"
@@ -176,16 +185,9 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:excludeFromRecents="true" />
 
-        <activity
-            android:name=".launcher.LauncherActivity"
-            android:exported="false"
-            android:label="@string/title_launcher"
-            android:theme="@style/Theme.Tawc.Launcher"
-            android:windowSoftInputMode="stateVisible|adjustResize" />
-
         <!-- Personal .desktop editor for the managed dir
              (root/.local/share/applications). Launched for result by
-             LauncherActivity; RESULT_OK triggers a rescan. -->
+             the home screen's apps pane; RESULT_OK triggers a rescan. -->
         <activity
             android:name=".launcher.DesktopFileEditorActivity"
             android:exported="false"

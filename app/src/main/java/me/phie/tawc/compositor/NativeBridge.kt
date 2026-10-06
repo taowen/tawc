@@ -10,6 +10,7 @@ import android.view.PointerIcon
 import android.view.Surface
 import android.view.inputmethod.EditorInfo
 import androidx.core.net.toUri
+import me.phie.tawc.terminal.TerminalPane
 import java.lang.ref.WeakReference
 
 object NativeBridge {
@@ -316,9 +317,21 @@ object NativeBridge {
      * de-duplicated by id, NoDisplay/Hidden filtered out). Empty `[]` if
      * the rootfs has no apps or doesn't exist. The work is pure file I/O
      * with no compositor-state interaction, so this is safe to call from
-     * any thread (LauncherActivity dispatches it on Dispatchers.IO).
+     * any thread (AppsPane dispatches it on Dispatchers.IO).
      */
     external fun nativeLauncherScan(rootfs: String): String
+
+    // --- Remote access (me.phie.tawc.remote.RemoteSession; notes/remote-access.md) ---
+
+    /** Start the agent from a JSON request; null when started, else why
+     *  not (one already runs, bad relay URL, …). */
+    external fun nativeRemoteStart(request: String): String?
+
+    /** Stop and join the agent, hanging up every login. Idempotent. */
+    external fun nativeRemoteStop()
+
+    /** Agent status JSON; `{"state":"stopped"}` if nothing ever ran. */
+    external fun nativeRemoteStatus(): String
 
     // --- Reverse JNI: Compositor → Android (called from compositor thread) ---
 
@@ -539,6 +552,14 @@ object NativeBridge {
         CompositorService.ensureRunning(ctx)
     }
 
+    /** Called from the remote agent's thread for each event. Must not
+     *  call the remote natives synchronously ([nativeRemoteStop] joins
+     *  that thread). */
+    @JvmStatic
+    fun onRemoteEvent(json: String) {
+        me.phie.tawc.remote.RemoteSession.onNativeEvent(json)
+    }
+
     /** Called from the compositor thread as its very last act. */
     @JvmStatic
     fun onCompositorStopped() {
@@ -610,6 +631,12 @@ object NativeBridge {
             ClipboardBridge.setTextFromCompositor(text)
         }
     }
+
+    /** Called from native, on the event loop, to gate data-control
+     *  clipboard reads (`wl-paste`): the `tty_nr` of the terminal tab the
+     *  user is looking at, 0 for none. */
+    @JvmStatic
+    fun focusedTerminalTty(): Int = TerminalPane.focusedTty()
 
     /** Called from a native clipboard-fetch thread when a client pastes the
      *  compositor-owned Android selection. Runs the real clipboard read —

@@ -2,30 +2,30 @@ package me.phie.tawc.launcher
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import me.phie.tawc.MainActivity
 import me.phie.tawc.R
 import me.phie.tawc.install.Installation
 import me.phie.tawc.install.InstallationMethod
 import me.phie.tawc.install.InstallationStore
 import me.phie.tawc.install.TawcrootMethod
 import me.phie.tawc.install.UserRootfsSession
-import me.phie.tawc.terminal.TerminalActivity
 
 /**
  * Shared fire-and-forget dispatch of a launcher entry into its rootfs —
- * the single point every launch surface goes through ([LauncherActivity]
- * today; home-screen shortcuts later).
+ * the single point every launch surface goes through (the home
+ * screen's [AppsPane] and pinned shortcuts via [ShortcutLaunchActivity]).
  *
- * `Terminal=true` entries on tawcroot installs open [TerminalActivity]
- * with the entry's Exec as a command tab instead of a headless spawn —
- * a CLI program run to /dev/null would be invisible. The terminal is
- * tawcroot-only (see the gate in MainActivity), so proot/chroot keep
- * the headless launch with a logcat warn; those methods are debug-only.
+ * `Terminal=true` entries on tawcroot installs open the home screen's
+ * terminal pane ([MainActivity.commandIntent]) with the entry's Exec as
+ * a command tab instead of a headless spawn — a CLI program run to
+ * /dev/null would be invisible. The terminal is tawcroot-only, so
+ * proot/chroot keep the headless launch with a logcat warn; those
+ * methods are debug-only.
  *
  * For GUI entries, stdio is redirected to /dev/null so a chatty program
  * can't fill the pipe back to the JVM (which we never read).
@@ -76,13 +76,7 @@ object EntryLauncher {
         if (entry.terminal) {
             if (method is TawcrootMethod) {
                 appContext.startActivity(
-                    Intent(appContext, TerminalActivity::class.java)
-                        .putExtra(TerminalActivity.EXTRA_ID, inst.id)
-                        .putExtra(TerminalActivity.EXTRA_COMMAND, entry.exec)
-                        .putExtra(TerminalActivity.EXTRA_LABEL, entry.name.ifEmpty { entry.id })
-                        // Per-distro document URI — see the manifest
-                        // comment on TerminalActivity.
-                        .setData(Uri.parse("tawc://terminal/${inst.id}"))
+                    MainActivity.commandIntent(appContext, inst.id, entry.exec, entry.name.ifEmpty { entry.id })
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
                 return

@@ -11,7 +11,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Async PNG icon loader for launcher rows.
+ * Async PNG icon loader for launcher cells.
  *
  * Backed by an in-memory `path → Bitmap` cache so the same icon shown on
  * different filter states (or the same row re-rendered after a filter
