@@ -144,9 +144,11 @@ form and keep behaving as plain symlinks; no migration.
 - Emulated names are never planted inside binds: the resolver
   deliberately skips bind-routed paths, so a token symlink there would
   be unresolvable on FOLLOW opens (data marooned). linkat degrades
-  instead — NEW with either operand on a bind takes the v1 fallback
-  (both names real/openable), ADD with a bind destination returns
-  EXDEV (tools fall back to copy). Legacy token names inside binds
+  instead — a denied host link with either operand on a bind returns
+  EXDEV without changing either name (tools fall back to copy). A
+  rename/back-symlink is not safe: Gradle deleting a build output
+  would also lose its NDK library source. ADD with a bind destination
+  also returns EXDEV. Legacy token names inside binds
   (from before this gate) still kernel-chase the literal → ENOENT;
   their d_type is rewritten and NOFOLLOW stats fixed up like rootfs
   names.
@@ -165,7 +167,7 @@ form and keep behaving as plain symlinks; no migration.
 - fd-path introspection (`readlink /proc/self/fd/N`, `/proc/self/maps`)
   of emulated hardlinks leaks raw store paths (the store is outside the
   reverse-translation prefixes). `/proc/self/exe` is unaffected.
-- Cross-fs binds: no emulation (v1 fallback).
+- Cross-fs binds: no emulation (EXDEV).
 - One-syscall old-name-missing window during first link; crash windows
   leave counts high (never low); power loss can leak one object.
 

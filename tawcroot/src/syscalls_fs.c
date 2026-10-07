@@ -1940,9 +1940,9 @@ static long link_fallback_v1(int src_fd, const char *src_suf,
  * planted there: the orchestrator skips the symlink resolver for
  * bind-routed paths, so a token symlink inside a bind is unresolvable
  * on FOLLOW opens (the data would be marooned in the store while
- * lstat claims a regular file). linkat instead degrades: NEW takes
- * the v1 fallback (both names stay real/openable), ADD returns EXDEV
- * (tools fall back to copy). Guest-supplied dirfd passthroughs are
+ * lstat claims a regular file). linkat instead returns EXDEV after
+ * a denied host link, letting tools copy without changing the source.
+ * Guest-supplied dirfd passthroughs are
  * not reserved and fall through unchanged. */
 static int fs_path_in_bind(const struct fs_path *t)
 {
@@ -2037,7 +2037,7 @@ static long linkat_empty_path(struct tawcroot_path_scratch *scratch,
 					    TAWCROOT_PATH_SCRATCH_SIZE) <= 0)
 		return TAWC_EXDEV;
 
-	/* Either name landing in a bind: v1, not token symlinks
+	/* Either name landing in a bind: no token symlinks
 	 * (fs_path_in_bind). The source side is judged by host path —
 	 * in-view but not under the rootfs prefix means a bind. */
 	int src_in_bind =
@@ -2047,8 +2047,7 @@ static long linkat_empty_path(struct tawcroot_path_scratch *scratch,
 		  ((size_t)hn == tawcroot_rootfs_host_path_len ||
 		   hostp[tawcroot_rootfs_host_path_len] == '/'));
 	if (fs_path_in_bind(&tnew) || src_in_bind)
-		return link_fallback_v1(AT_FDCWD, hostp,
-					tnew.fd, tnew.path, rv);
+		return TAWC_EXDEV;
 
 	switch (tawcroot_linkstore_state()) {
 	case TAWCROOT_STORE_READY:
@@ -2234,12 +2233,12 @@ static long handle_linkat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	 * semantics, relative targets resolving against each NAME's
 	 * directory. */
 
-	/* Either operand on a bind: v1 keeps both names real/openable
-	 * where NEW's token symlinks would be unresolvable (see
-	 * fs_path_in_bind). */
+	/* Bind paths are also consumed by the Android host. Token links
+	 * cannot live there, and a rename/back-symlink is not a hardlink:
+	 * deleting dst would destroy src (Gradle's NDK library clean).
+	 * Report EXDEV so ordinary hardlink-or-copy callers safely copy. */
 	if (fs_path_in_bind(&told) || fs_path_in_bind(&tnew))
-		return link_fallback_v1(told.fd, told.path,
-					tnew.fd, tnew.path, rv);
+		return TAWC_EXDEV;
 
 	switch (tawcroot_linkstore_state()) {
 	case TAWCROOT_STORE_READY:
