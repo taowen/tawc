@@ -59,13 +59,23 @@ impl GraphicsBackend {
     }
 }
 
+/// App package under test: `TAWC_PACKAGE`, else `me.phie.tawc`. A
+/// `-PtawcAppIdSuffix` debug build (e.g. `me.phie.tawc.dev`) installs
+/// beside a release-signed app; see notes/building.md.
+pub fn app_package() -> String {
+    std::env::var("TAWC_PACKAGE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "me.phie.tawc".to_string())
+}
+
 fn resolve_install_id() -> String {
     if let Ok(v) = std::env::var("TAWC_INSTALL_ID") {
         if !v.is_empty() {
             return v;
         }
     }
-    let pkg = "me.phie.tawc";
+    let pkg = app_package();
     let probe = format!(
         "for d in /data/data/{pkg}/distros/*/metadata.json; \
          do test -f \"$d\" && basename \"$(dirname \"$d\")\"; done"

@@ -507,7 +507,8 @@ fn start_main_activity(serial: Option<&str>) -> io::Result<()> {
         if let Some(s) = serial {
             start.args(["-s", s]);
         }
-        start.args(["shell", "am", "start", "-n", "me.phie.tawc/.MainActivity"]);
+        let component = format!("{}/me.phie.tawc.MainActivity", crate::app_package());
+        start.args(["shell", "am", "start", "-n", &component]);
         let out = start.output()?;
         // `am start` exits 0 but prints `Error:` for some failures
         // (e.g. unresolvable intent); treat those as failures too.
@@ -891,7 +892,7 @@ fn app_running(serial: Option<&str>) -> bool {
     if let Some(s) = serial {
         cmd.args(["-s", s]);
     }
-    cmd.args(["shell", "pidof", "me.phie.tawc"]);
+    cmd.args(["shell", "pidof", &crate::app_package()]);
     cmd.output()
         .map(|o| o.stdout.iter().any(|b| b.is_ascii_digit()))
         .unwrap_or(false)

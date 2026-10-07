@@ -814,6 +814,15 @@ installs, force-stops, and launches `MainActivity` (which starts
 `--no-launch` to install without starting (used by
 `run-integration-tests.sh`).
 
+**Side-by-side dev package.** A phone holding a release-signed
+`me.phie.tawc` can't take a debug-signed build without an uninstall
+(which deletes its distros). `TAWC_PACKAGE=me.phie.tawc.dev` makes
+`build-app.sh` pass `-PtawcAppIdSuffix=.dev` (debug `applicationIdSuffix`)
+and makes `app-build-install.sh`, `tawc-exec.sh` / `rootfs-run.sh` and
+the install-id lookup target that package; it has its own data dir, so
+install a distro into it first. The integration suite doesn't follow
+`TAWC_PACKAGE` yet. Only run one of the two compositors at a time.
+
 Note: `am start` directly into `.compositor.CompositorActivity` does
 not work — go through `MainActivity` (the script does this).
 

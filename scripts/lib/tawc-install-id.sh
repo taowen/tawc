@@ -11,7 +11,7 @@ if [ -n "${TAWC_INSTALL_ID:-}" ]; then
     return 0 2>/dev/null || exit 0
 fi
 
-_pkg=me.phie.tawc
+_pkg=${TAWC_PACKAGE:-me.phie.tawc}
 _distros=/data/data/$_pkg/distros
 
 _lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

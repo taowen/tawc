@@ -98,6 +98,11 @@ val xwaylandPackageAbis: List<String> =
     if (xwaylandRequested) tawcAbis.filter { it in xwaylandScriptAbiFor } else emptyList()
 val xwaylandPackaged: Boolean = xwaylandPackageAbis.isNotEmpty()
 
+// Debug-only applicationId suffix (e.g. `.dev`) so a dev build installs
+// beside a release-signed me.phie.tawc. Host tools follow via
+// TAWC_PACKAGE; see notes/building.md.
+val tawcAppIdSuffix: String = (project.findProperty("tawcAppIdSuffix") as String?) ?: ""
+
 android {
     namespace = "me.phie.tawc"
     compileSdk = 36
@@ -117,6 +122,7 @@ android {
 
     buildTypes {
         getByName("debug") {
+            applicationIdSuffix = tawcAppIdSuffix
             // LogScreenActivity is exported in debug only — the export
             // exists so `am start … --es operationId` from adb can
             // attach to a running op; release keeps it app-internal.
