@@ -1173,29 +1173,48 @@ test(linkstore_latent_linkat_of_token_name_adds)
 	th_teardown(&v);
 }
 
-test(linkstore_v1_fallback_bind_dst_symlink_target)
+test(linkstore_shm_bind_publish_keeps_inode)
 {
 	th_view v;
 	th_setup(&v, "ls-v1bind");
 	/* No store configured: pure v1 fallback territory. */
-	(void)th_add_bind(&v, "/usr/share/tawc");
+	(void)th_add_bind(&v, "/dev/shm");
 
-	write_file(test_ctx, "/run/f", "v1b\n");
+	/* glibc sem_open publishes link(tmp, final) + unlink(tmp) on a
+	 * file it has already mapped; the final name must be that inode. */
+	write_file(test_ctx, "/dev/shm/sem.tmp", "v1b\n");
+	struct stat before;
+	test_int_eq(lstat_guest("/dev/shm/sem.tmp", &before), 0);
 	install_eperm_linkat();
-	test_int_eq(th_sys(TAWC_SYS_linkat, AT_FDCWD, "/run/f",
-			   AT_FDCWD, "/usr/share/tawc/copy", 0, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_linkat, AT_FDCWD, "/dev/shm/sem.tmp",
+			   AT_FDCWD, "/dev/shm/sem.final", 0, 0), 0);
 	tawcroot_test_raw_hook = NULL;
+	struct stat after;
+	test_int_eq(lstat_guest("/dev/shm/sem.final", &after), 0);
+	test_int_eq((long)after.st_ino, (long)before.st_ino);
 
-	/* The back-symlink must carry the GUEST-absolute destination —
-	 * "/" + suffix was bind-RELATIVE for a bind dst ("/copy"), and
-	 * the original name dangled forever. */
+	/* The resolver skips binds, so the back-symlink is relative: the
+	 * kernel follows it on the host, where an absolute one dangles. */
 	char lnk[128] = {0};
-	long n = th_sys(TAWC_SYS_readlinkat, AT_FDCWD, "/run/f",
+	long n = th_sys(TAWC_SYS_readlinkat, AT_FDCWD, "/dev/shm/sem.tmp",
 			lnk, sizeof lnk, 0, 0);
 	test_true(n > 0);
-	test_str_eq(lnk, "/usr/share/tawc/copy");
-	check_content(test_ctx, "/run/f", "v1b\n");
-	check_content(test_ctx, "/usr/share/tawc/copy", "v1b\n");
+	test_str_eq(lnk, "sem.final");
+	check_content(test_ctx, "/dev/shm/sem.tmp", "v1b\n");
+	check_content(test_ctx, "/dev/shm/sem.final", "v1b\n");
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD, "/dev/shm/sem.tmp",
+			   0, 0, 0, 0), 0);
+	check_content(test_ctx, "/dev/shm/sem.final", "v1b\n");
+
+	/* Nested names are not IPC objects: EXDEV, unchanged. */
+	test_int_eq(th_sys(TAWC_SYS_mkdirat, AT_FDCWD, "/dev/shm/d", 0755,
+			   0, 0, 0), 0);
+	write_file(test_ctx, "/dev/shm/d/f", "nested\n");
+	install_eperm_linkat();
+	test_int_eq(th_sys(TAWC_SYS_linkat, AT_FDCWD, "/dev/shm/d/f",
+			   AT_FDCWD, "/dev/shm/d/g", 0, 0), TAWC_EXDEV);
+	tawcroot_test_raw_hook = NULL;
+	check_content(test_ctx, "/dev/shm/d/f", "nested\n");
 
 	th_teardown(&v);
 }
@@ -1207,15 +1226,23 @@ test(linkstore_bind_operands_degrade)
 	store_setup(&v);
 	(void)th_add_bind(&v, "/usr/share/tawc");
 
-	/* NEW with a bind destination: v1, never a token symlink in the
-	 * bind (the resolver skips binds — the data would be marooned). */
+	/* NEW with a bind operand: EXDEV with both names unchanged. Never
+	 * a token symlink in the bind (the resolver skips binds), and never
+	 * a rename/back-symlink: deleting the new name would lose the
+	 * source (Gradle cleaning an NDK library it hardlinked). */
 	write_file(test_ctx, "/run/f", "bo\n");
 	install_eperm_linkat();
 	test_int_eq(th_sys(TAWC_SYS_linkat, AT_FDCWD, "/run/f",
-			   AT_FDCWD, "/usr/share/tawc/b", 0, 0), 0);
+			   AT_FDCWD, "/usr/share/tawc/b", 0, 0), TAWC_EXDEV);
+	test_int_eq(th_sys(TAWC_SYS_linkat, AT_FDCWD, "/usr/share/tawc/probe.txt",
+			   AT_FDCWD, "/run/p", 0, 0), TAWC_EXDEV);
 	tawcroot_test_raw_hook = NULL;
-	check_content(test_ctx, "/run/f", "bo\n");
-	check_content(test_ctx, "/usr/share/tawc/b", "bo\n");
+	struct stat st;
+	test_int_eq(lstat_guest("/run/f", &st), 0);
+	test_true(S_ISREG(st.st_mode));
+	test_int_eq(lstat_guest("/usr/share/tawc/b", &st), TAWC_ENOENT);
+	test_int_eq(lstat_guest("/usr/share/tawc/probe.txt", &st), 0);
+	test_true(S_ISREG(st.st_mode));
 	test_true(store_link_entries() <= 0);  /* no cluster minted */
 
 	/* ADD (emulated source) with a bind destination: EXDEV — tools
@@ -1225,7 +1252,6 @@ test(linkstore_bind_operands_degrade)
 	make_pair(test_ctx, "/run/g", "/run/g2");
 	test_int_eq(th_sys(TAWC_SYS_linkat, AT_FDCWD, "/run/g2",
 			   AT_FDCWD, "/usr/share/tawc/c", 0, 0), TAWC_EXDEV);
-	struct stat st;
 	test_int_eq(lstat_guest("/run/g", &st), 0);
 	test_int_eq((long)st.st_nlink, 2);
 

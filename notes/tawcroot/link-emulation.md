@@ -147,7 +147,10 @@ form and keep behaving as plain symlinks; no migration.
   instead — a denied host link with either operand on a bind returns
   EXDEV without changing either name (tools fall back to copy). A
   rename/back-symlink is not safe: Gradle deleting a build output
-  would also lose its NDK library source. ADD with a bind destination
+  would also lose its NDK library source. Exception: two names directly
+  in the `/dev/shm` bind are renamed with a relative back-symlink, since
+  glibc sem_open publishes an already-mapped file by link(tmp, final)
+  and has no EXDEV fallback. ADD with a bind destination
   also returns EXDEV. Legacy token names inside binds
   (from before this gate) still kernel-chase the literal → ENOENT;
   their d_type is rewritten and NOFOLLOW stats fixed up like rootfs

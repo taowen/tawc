@@ -1951,6 +1951,49 @@ static int fs_path_in_bind(const struct fs_path *t)
 	       tawcroot_fd_is_reserved(t->fd);
 }
 
+/* True when a translate result landed in the explicit `/dev/shm` bind.
+ * Its names are IPC objects, published by glibc sem_open as
+ * link(tmp, final) + unlink(tmp) on a file it has already mapped: the
+ * final name must be that inode (a copy is a different semaphore), and
+ * glibc has no EXDEV fallback. The v1 rename keeps the inode. */
+static int fs_path_in_shm_bind(const struct fs_path *t)
+{
+	for (size_t i = 0; i < tawcroot_n_binds; ++i)
+		if (tawcroot_binds[i].active &&
+		    tawcroot_binds[i].src_fd == t->fd &&
+		    tawc_streq(tawcroot_binds[i].dst, "dev/shm"))
+			return 1;
+	return 0;
+}
+
+static int has_slash(const char *s)
+{
+	for (; *s; ++s)
+		if (*s == '/') return 1;
+	return 0;
+}
+
+/* v1 for two names directly in the `/dev/shm` bind: move the inode to
+ * the new name and leave a RELATIVE back-symlink. The resolver skips
+ * binds, so the kernel follows it on the host, where a guest-absolute
+ * target would dangle. Anything nested gets EXDEV. */
+static long link_shm_bind(const struct fs_path *o, const struct fs_path *n,
+			  long orig_rv)
+{
+	if (o->fd != n->fd || has_slash(o->path) || has_slash(n->path))
+		return TAWC_EXDEV;
+	long re = TAWC_RAW(TAWC_SYS_renameat2, o->fd, (long)o->path,
+			   n->fd, (long)n->path, RENAME_NOREPLACE, 0);
+	if (re == TAWC_EEXIST || re == TAWC_EXDEV) return re;
+	if (re) return orig_rv;
+	if (!TAWC_RAW(TAWC_SYS_symlinkat, (long)n->path, o->fd,
+		      (long)o->path, 0, 0, 0))
+		return 0;
+	TAWC_RAW(TAWC_SYS_renameat2, n->fd, (long)n->path,
+		 o->fd, (long)o->path, 0, 0);
+	return orig_rv;
+}
+
 /* linkat AT_EMPTY_PATH source: the file `olddirfd` itself refers to.
  * A store-resident fd (an open link object) is detected BEFORE the
  * host attempt — a host linkat from an object fd would mint an
@@ -2236,7 +2279,10 @@ static long handle_linkat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	/* Bind paths are also consumed by the Android host. Token links
 	 * cannot live there, and a rename/back-symlink is not a hardlink:
 	 * deleting dst would destroy src (Gradle's NDK library clean).
-	 * Report EXDEV so ordinary hardlink-or-copy callers safely copy. */
+	 * Report EXDEV so ordinary hardlink-or-copy callers safely copy.
+	 * Within /dev/shm, only the rename keeps sem_open working. */
+	if (fs_path_in_shm_bind(&told) && fs_path_in_shm_bind(&tnew))
+		return link_shm_bind(&told, &tnew, rv);
 	if (fs_path_in_bind(&told) || fs_path_in_bind(&tnew))
 		return TAWC_EXDEV;
 
