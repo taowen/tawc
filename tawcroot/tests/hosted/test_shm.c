@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "hosted.h"
+#include "linkstore_fixture.h"
 
 #include "errno_neg.h"
 #include "path.h"
@@ -306,5 +307,36 @@ test(hosted_proc_fd_ro_reopen_of_guest_memfd_migrates)
 	test_int_eq(th_sys(TAWC_SYS_fcntl, f, F_GET_SEALS, 0, 0, 0, 0),
 		    TAWC_EINVAL);
 	test_int_eq(close(f), 0);
+	th_teardown(&v);
+}
+
+/* Arch ships `/` 0555: O_TMPFILE in the rootfs root is EACCES for the
+ * owner, so the migrated file must come from the store's tmp/. */
+test(hosted_proc_fd_ro_reopen_migrates_under_readonly_root)
+{
+	th_view v;
+	th_setup(&v, "shm-ro-root");
+	store_setup(&v);
+	test_int_eq(tawcroot_path_add_bind("/proc", "/proc", 0), 0);
+	tawcroot_test_raw_hook = deny_memfd_reopen;
+	test_int_eq(chmod(v.root, 0555), 0);
+
+	int m = test_memfd("guest", MFD_ALLOW_SEALING);
+	test_true(m >= 0);
+	test_int_eq(fcntl(m, F_ADD_SEALS, F_SEAL_SHRINK), 0);
+	char p[64];
+	snprintf(p, sizeof p, "/proc/self/fd/%d", m);
+	long r = th_sys(TAWC_SYS_openat, AT_FDCWD, p, O_RDONLY | O_CLOEXEC,
+			0, 0, 0);
+	test_true(r >= 0);
+	test_false(is_memfd(m));
+	test_int_eq(th_sys(TAWC_SYS_fcntl, r, F_GET_SEALS, 0, 0, 0, 0),
+		    F_SEAL_SHRINK);
+	test_int_eq(close((int)r), 0);
+	test_int_eq(close(m), 0);
+
+	tawcroot_test_raw_hook = NULL;
+	test_int_eq(chmod(v.root, 0755), 0);
+	store_teardown();
 	th_teardown(&v);
 }

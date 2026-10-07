@@ -79,7 +79,9 @@ memfd can only ever yield one (RDWR) description. Chromium (create
 `/dev/shm`: created by this pid and its creation fd still names it; in
 all cases no other fd in `/proc/self/fd` and no mapping in
 `/proc/self/maps` — the contents move to an unnamed `O_TMPFILE` in the
-rootfs dir, `dup3`ed over the guest fd (and the table's internal fd),
+link store's `tmp/` (rootfs dir only when no store is configured:
+`O_TMPFILE` needs owner write on the dir, and Arch ships `/` as 0555,
+which broke every Firefox tab there), `dup3`ed over the guest fd (and the table's internal fd),
 keeping fd numbers, CLOEXEC, status flags and offset. `/proc/self/fd`
 reopens of that file are allowed, so this and every later open gets a
 real description. Otherwise it falls back to `F_DUPFD` (writable fd).
