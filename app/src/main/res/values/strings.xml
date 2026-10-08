@@ -39,7 +39,7 @@
     <string name="hint_run_command">e.g. firefox</string>
 
     <string name="home_drawer_item_state">%1$s · %2$s</string>
-    <string name="home_intro_blurb">Run desktop Linux programs on Android. Install a distro to get started.</string>
+    <string name="home_intro_blurb">Install a Linux distro to get started</string>
     <string name="home_menu_description">More options</string>
     <string name="home_state_view_log">%1$s (view log)</string>
     <string name="install_state_installing">installing&#8230;</string>
