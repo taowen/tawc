@@ -56,10 +56,27 @@ const APPS_SUBDIRS: &[&str] = &[
 /// so an inherited parent theme still gets a look in first.
 const ICON_THEMES: &[&str] = &["default", "Adwaita", "Papirus", "breeze", "hicolor"];
 
-/// Icon-theme contexts searched, in order. Applications ship into
+/// Icon base dirs under a rootfs, in lookup order: `$XDG_DATA_HOME`
+/// (`/root`, see [APPS_SUBDIRS]) first, as the icon theme spec
+/// requires, then `$XDG_DATA_DIRS`, then flatpak's exports, whose apps
+/// [APPS_SUBDIRS] already lists. A theme may span several bases.
+const ICON_BASES: &[&str] = &[
+    "root/.local/share/icons",
+    "usr/local/share/icons",
+    "usr/share/icons",
+    "var/lib/flatpak/exports/share/icons",
+];
+
+/// Index of the user base in [ICON_BASES]; [list_icons_json] flags
+/// names found there.
+const USER_ICON_BASE: usize = 0;
+
+/// Preferred icon-theme contexts, in order. Applications ship into
 /// `apps`; the generic names apps reference instead of their own icon
 /// (`utilities-terminal`, `system-file-manager`, …) live in `legacy` or
-/// `categories` in several themes.
+/// `categories` in several themes. Every other context the theme has
+/// (`places`, `mimetypes`, …) is searched after these, so an app's own
+/// icon beats a same-named generic one.
 const ICON_CONTEXTS: &[&str] = &["apps", "legacy", "categories"];
 
 /// Size directories to try, in preference order, as they appear in a
@@ -68,6 +85,8 @@ const ICON_CONTEXTS: &[&str] = &["apps", "legacy", "categories"];
 /// density phone) — a 128 PNG scales cleanly to that without burning
 /// the memory of a 256. `scalable` sits between the big and the small
 /// sizes: a vector icon beats a 16 px PNG blown up to a launcher row.
+/// Any other size dir a theme has (`512x512`, `36`, `48x48@2`, …) is
+/// tried after these, largest first.
 const ICON_SIZES: &[&str] = &[
     "128", "96", "256", "64", "48", "scalable", "32", "24", "22", "16",
 ];
@@ -267,21 +286,58 @@ pub fn scan_json(rootfs: &Path) -> String {
     serde_json::Value::Array(arr).to_string()
 }
 
+/// Resolve one `Icon=` value against [rootfs] the way [scan_json]
+/// does: an absolute PNG path, or empty. For the editor's preview and
+/// icon picker cells.
+pub fn resolve_icon(rootfs: &Path, icon: &str) -> String {
+    IconResolver::new(rootfs).resolve_string(icon)
+}
+
+/// Every icon name in [rootfs] as a JSON array of `{name, user}`,
+/// sorted, one entry per name; `user` marks names with a copy in the
+/// user base (`/root/.local/share/icons`, where imports go). Names
+/// only: resolving thousands of icons up front would take seconds, so
+/// the picker resolves its cells lazily via [resolve_icon].
+pub fn list_icons_json(rootfs: &Path) -> String {
+    let arr: Vec<_> = IconResolver::new(rootfs)
+        .list()
+        .into_iter()
+        .map(|(name, user)| json!({ "name": name, "user": user }))
+        .collect();
+    serde_json::Value::Array(arr).to_string()
+}
+
 /// `Type=Application` and not `Hidden`; `launchable_only` (see
 /// `scan_entries`) also requires not `NoDisplay`.
 fn is_relevant(de: &DesktopEntry, launchable_only: bool) -> bool {
     de.type_() == Some("Application") && !de.hidden() && (!launchable_only || !de.no_display())
 }
 
-/// An icon theme that exists under `usr/share/icons`, with its
-/// immediate subdirectory names read once. The listing lets the walk
-/// skip whole size tiers without stat'ing every
+/// One icon theme, possibly spread over several [ICON_BASES], with its
+/// icon directories listed once in search order. The listing lets the
+/// walk skip absent size tiers without stat'ing every
 /// `<size>/<context>/<name>.png` combination — Adwaita ships three size
-/// dirs, not ten — which is what keeps a spec-shaped walk cheaper than
-/// the fixed grid it replaced.
+/// dirs, not ten.
 struct ThemeDir {
-    root: PathBuf,
-    subdirs: HashSet<String>,
+    /// Directories holding `<name>.<ext>` files, in search order.
+    dirs: Vec<IconDir>,
+    /// `symbolic/<context>` dirs, preferred contexts first. Kept out of
+    /// [ThemeDir::dirs] so a symbolic glyph never beats a real icon.
+    symbolic: Vec<IconDir>,
+}
+
+struct IconDir {
+    path: PathBuf,
+    /// Under the user base ([USER_ICON_BASE]).
+    user: bool,
+}
+
+/// An icon source the walk visits, in resolver order.
+enum Source<'a> {
+    /// A theme or pixmaps dir holding `<name>.<ext>`.
+    Plain(&'a Path, bool),
+    /// A theme's `symbolic/<context>` dir, holding `<name>-symbolic.svg`.
+    Symbolic(&'a Path, bool),
 }
 
 /// Resolves `Icon=` values against one rootfs. Holds the theme order
@@ -290,6 +346,7 @@ struct ThemeDir {
 struct IconResolver {
     rootfs: PathBuf,
     themes: Vec<ThemeDir>,
+    pixmaps: PathBuf,
     cache: Option<IconCache>,
 }
 
@@ -301,7 +358,8 @@ impl IconResolver {
         // `/data/data/<pkg>/…`, and the entry walk reports the latter.
         let rootfs = rootfs.canonicalize().unwrap_or_else(|_| rootfs.to_path_buf());
         Self {
-            themes: resolve_theme_order(&rootfs.join("usr/share/icons")),
+            themes: resolve_theme_order(&rootfs),
+            pixmaps: rootfs.join("usr/share/pixmaps"),
             cache: IconCache::new(&rootfs),
             rootfs,
         }
@@ -338,34 +396,82 @@ impl IconResolver {
             return p.is_file().then(|| self.as_png(p)).flatten();
         }
         let stem = strip_known_ext(icon);
-        // A theme whose match fails to rasterize falls through to the
+        // A source whose match fails to rasterize falls through to the
         // next one rather than losing the icon: the `.fail` marker means
         // the broken source is parsed once, not once per scan.
-        for theme in &self.themes {
-            if let Some(png) = theme.find(stem).and_then(|found| self.as_png(found)) {
-                return Some(png);
-            }
-        }
-        // Legacy pre-theme location. Still where a fair number of
-        // Debian packages put their only icon.
-        let pixmaps = self.rootfs.join("usr/share/pixmaps");
-        for ext in ICON_FILE_EXTS {
-            let p = pixmaps.join(format!("{stem}.{ext}"));
-            if p.is_file() {
-                if let Some(png) = self.as_png(p) {
-                    return Some(png);
+        let symbolic_name = match stem.strip_suffix("-symbolic") {
+            // `Icon=foo-symbolic` is legal; don't ask for `-symbolic-symbolic`.
+            Some(_) => stem.to_string(),
+            None => format!("{stem}-symbolic"),
+        };
+        for source in self.sources() {
+            let png = match source {
+                Source::Plain(dir, _) => ICON_FILE_EXTS
+                    .iter()
+                    .map(|ext| dir.join(format!("{stem}.{ext}")))
+                    .find(|p| p.is_file())
+                    .and_then(|p| self.as_png(p)),
+                Source::Symbolic(dir, _) => {
+                    let p = dir.join(format!("{symbolic_name}.svg"));
+                    if p.is_file() { self.symbolic_png(p) } else { None }
                 }
-            }
-        }
-        // Last resort: a symbolic glyph, tiled (see [icon_cache]). Only
-        // after everything else, because it loses the app's colours.
-        for theme in &self.themes {
-            let found = theme.find_symbolic(stem);
-            if let Some(png) = found.and_then(|src| self.symbolic_png(src)) {
-                return Some(png);
+            };
+            if png.is_some() {
+                return png;
             }
         }
         None
+    }
+
+    /// Every icon source, in resolution order: each theme's dirs, then
+    /// `usr/share/pixmaps` (the legacy pre-theme location, still where a
+    /// fair number of Debian packages put their only icon), then, last
+    /// because it loses the app's colours, each theme's symbolic glyphs.
+    fn sources(&self) -> impl Iterator<Item = Source<'_>> {
+        let plain = self
+            .themes
+            .iter()
+            .flat_map(|t| &t.dirs)
+            .map(|d| Source::Plain(&d.path, d.user));
+        let pixmaps = std::iter::once(Source::Plain(&self.pixmaps, false));
+        let symbolic = self
+            .themes
+            .iter()
+            .flat_map(|t| &t.symbolic)
+            .map(|d| Source::Symbolic(&d.path, d.user));
+        plain.chain(pixmaps).chain(symbolic)
+    }
+
+    /// Every name [IconResolver::resolve] can find, once each, sorted
+    /// case-insensitively, with whether any copy lives in the user base.
+    /// Walks the same [IconResolver::sources], so a listed name
+    /// resolves to the file the launcher would use.
+    fn list(&self) -> Vec<(String, bool)> {
+        let mut names: std::collections::HashMap<String, bool> = Default::default();
+        for source in self.sources() {
+            let (dir, user, symbolic) = match source {
+                Source::Plain(dir, user) => (dir, user, false),
+                Source::Symbolic(dir, user) => (dir, user, true),
+            };
+            let Ok(rd) = std::fs::read_dir(dir) else { continue };
+            for entry in rd.flatten() {
+                let Ok(file) = entry.file_name().into_string() else { continue };
+                let Some(name) = listed_name(&file, symbolic) else { continue };
+                // Dirents are free, but a symlink (themes are full of
+                // them) may dangle, and resolve would skip it.
+                let is_file = match entry.file_type() {
+                    Ok(t) if t.is_file() => true,
+                    Ok(t) if t.is_symlink() => entry.path().is_file(),
+                    _ => false,
+                };
+                if is_file {
+                    *names.entry(name.to_string()).or_default() |= user;
+                }
+            }
+        }
+        let mut out: Vec<_> = names.into_iter().collect();
+        out.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()).then_with(|| a.0.cmp(&b.0)));
+        out
     }
 
     /// End-of-scan bookkeeping for the launcher list: drop cache
@@ -411,110 +517,143 @@ impl IconResolver {
 }
 
 impl ThemeDir {
-    /// First existing `<context>/<size>` (either layout) holding
-    /// `<stem>.<ext>`, in [ICON_CONTEXTS] × [ICON_SIZES] ×
-    /// [ICON_FILE_EXTS] order.
-    fn find(&self, stem: &str) -> Option<PathBuf> {
-        for context in ICON_CONTEXTS {
-            for size in ICON_SIZES {
-                for dir in self.size_dirs(context, size) {
-                    for ext in ICON_FILE_EXTS {
-                        let p = dir.join(format!("{stem}.{ext}"));
-                        if p.is_file() {
-                            return Some(p);
+    /// List theme [name]'s icon dirs across [bases] (absolute, in
+    /// [ICON_BASES] order). Both layouts in the wild are read:
+    /// `<size>/<context>` (hicolor, Adwaita) and `<context>/<size>`
+    /// (breeze). Order: preferred [ICON_CONTEXTS] first, then every
+    /// other context by name; within a context, by [size_rank]; then
+    /// layout, then base, so the user base wins a tie.
+    fn new(bases: &[PathBuf], name: &str) -> Self {
+        // (context tier, context, size rank, layout, base, dir)
+        let mut dirs: Vec<(usize, String, (u32, u32), u8, usize, PathBuf)> = Vec::new();
+        let mut symbolic: Vec<(usize, String, usize, PathBuf)> = Vec::new();
+        for (base, base_dir) in bases.iter().enumerate() {
+            let root = base_dir.join(name);
+            for top in read_subdir_names(&root) {
+                let top_dir = root.join(&top);
+                if top == "symbolic" {
+                    for context in read_subdir_names(&top_dir) {
+                        let dir = top_dir.join(&context);
+                        symbolic.push((context_tier(&context), context, base, dir));
+                    }
+                } else if let Some(rank) = size_rank(&top) {
+                    for context in read_subdir_names(&top_dir) {
+                        let dir = top_dir.join(&context);
+                        dirs.push((context_tier(&context), context, rank, 0, base, dir));
+                    }
+                } else {
+                    for size in read_subdir_names(&top_dir) {
+                        if let Some(rank) = size_rank(&size) {
+                            let dir = top_dir.join(&size);
+                            dirs.push((context_tier(&top), top.clone(), rank, 1, base, dir));
                         }
                     }
                 }
             }
         }
-        None
-    }
-
-    /// `<theme>/symbolic/<context>/<stem>-symbolic.svg`, the monochrome
-    /// fallback several themes ship instead of a full-colour icon. Kept
-    /// out of [ThemeDir::find] so it can never beat a real icon.
-    fn find_symbolic(&self, stem: &str) -> Option<PathBuf> {
-        if !self.subdirs.contains("symbolic") {
-            return None;
+        dirs.sort();
+        symbolic.sort();
+        let icon_dir = |base: usize, path: PathBuf| IconDir { path, user: base == USER_ICON_BASE };
+        Self {
+            dirs: dirs.into_iter().map(|(_, _, _, _, b, p)| icon_dir(b, p)).collect(),
+            symbolic: symbolic.into_iter().map(|(_, _, b, p)| icon_dir(b, p)).collect(),
         }
-        // `Icon=foo-symbolic` is legal; don't ask for `-symbolic-symbolic`.
-        let name = match stem.strip_suffix("-symbolic") {
-            Some(_) => stem.to_string(),
-            None => format!("{stem}-symbolic"),
-        };
-        ICON_CONTEXTS
-            .iter()
-            .map(|context| self.root.join("symbolic").join(context).join(format!("{name}.svg")))
-            .find(|p| p.is_file())
-    }
-
-    /// Directories a `<context>` icon of `<size>` could live in, in both
-    /// layouts themes use in the wild: `<size>/<context>` (hicolor,
-    /// Adwaita) and `<context>/<size>` (breeze). Numeric sizes are
-    /// spelled both `48x48` and bare `48` — breeze uses the latter.
-    /// Only directories the theme actually has are returned.
-    fn size_dirs(&self, context: &str, size: &str) -> Vec<PathBuf> {
-        let mut names = vec![size.to_string()];
-        if size.chars().all(|c| c.is_ascii_digit()) {
-            names.insert(0, format!("{size}x{size}"));
-        }
-        let mut out = Vec::new();
-        for name in &names {
-            if self.subdirs.contains(name) {
-                out.push(self.root.join(name).join(context));
-            }
-        }
-        if self.subdirs.contains(context) {
-            out.extend(names.iter().map(|n| self.root.join(context).join(n)));
-        }
-        out
     }
 }
 
-/// Themes to search under [icons_root], in order: [ICON_THEMES] seeds
-/// expanded through their `index.theme` `Inherits=` chains
-/// (breadth-first, de-duplicated, missing themes dropped), with
-/// `hicolor` forced last as the spec's universal fallback.
-fn resolve_theme_order(icons_root: &Path) -> Vec<ThemeDir> {
+/// Sort tier of a context: its [ICON_CONTEXTS] index, or after them.
+fn context_tier(context: &str) -> usize {
+    ICON_CONTEXTS
+        .iter()
+        .position(|c| *c == context)
+        .unwrap_or(ICON_CONTEXTS.len())
+}
+
+/// Sort key of a size dir name, or None if it isn't one. [ICON_SIZES]
+/// entries (spelled `48x48` or bare `48`, `NxN` first) rank in list
+/// order; any other `N`, `NxN` or `@scale` dir ranks after them,
+/// largest effective size first.
+fn size_rank(name: &str) -> Option<(u32, u32)> {
+    if name == "scalable" {
+        let i = ICON_SIZES.iter().position(|s| *s == "scalable")? as u32;
+        return Some((0, i * 2));
+    }
+    let (size, scale) = match name.split_once('@') {
+        Some((size, scale)) => (size, scale.trim_end_matches('x').parse::<u32>().ok()?),
+        None => (name, 1),
+    };
+    let (n, square) = match size.split_once('x') {
+        Some((w, h)) if w == h => (w, true),
+        Some(_) => return None,
+        None => (size, false),
+    };
+    let n: u32 = n.parse().ok()?;
+    if scale == 1 {
+        if let Some(i) = ICON_SIZES.iter().position(|s| *s == n.to_string()) {
+            return Some((0, i as u32 * 2 + u32::from(!square)));
+        }
+    }
+    Some((1, u32::MAX - n.saturating_mul(scale)))
+}
+
+/// The icon name a theme/pixmaps file is listed under, or None for a
+/// file [IconResolver::resolve] would never return: wrong extension,
+/// or a stem that `resolve` would itself rewrite. Symbolic dirs list
+/// `foo-symbolic.svg` as `foo`, the name that finds it.
+fn listed_name(file: &str, symbolic: bool) -> Option<&str> {
+    let (stem, ext) = file.rsplit_once('.')?;
+    let stem = if symbolic {
+        (ext == "svg").then_some(())?;
+        stem.strip_suffix("-symbolic")?
+    } else {
+        ICON_FILE_EXTS.contains(&ext).then_some(())?;
+        stem
+    };
+    let ok = !stem.is_empty() && stem.trim() == stem && strip_known_ext(stem) == stem;
+    ok.then_some(stem)
+}
+
+/// Themes to search under [rootfs]'s [ICON_BASES], in order:
+/// [ICON_THEMES] seeds expanded through their `index.theme` `Inherits=`
+/// chains (breadth-first, de-duplicated, missing themes dropped), with
+/// `hicolor` forced last as the spec's universal fallback. A theme
+/// exists if any base has it; `index.theme` comes from the first base
+/// that does.
+fn resolve_theme_order(rootfs: &Path) -> Vec<ThemeDir> {
+    let bases: Vec<PathBuf> = ICON_BASES
+        .iter()
+        .map(|b| rootfs.join(b))
+        .filter(|b| b.is_dir())
+        .collect();
+    let exists = |name: &str| bases.iter().any(|b| b.join(name).is_dir());
     let mut queue: VecDeque<String> = ICON_THEMES.iter().map(|t| t.to_string()).collect();
     let mut seen: HashSet<String> = HashSet::new();
     let mut names: Vec<String> = Vec::new();
     while let Some(name) = queue.pop_front() {
-        if !seen.insert(name.clone()) {
+        if !seen.insert(name.clone()) || !exists(&name) {
             continue;
         }
-        let root = icons_root.join(&name);
-        if !root.is_dir() {
-            continue;
+        if let Some(base) = bases.iter().find(|b| b.join(&name).join("index.theme").is_file()) {
+            queue.extend(theme_inherits(&base.join(&name)));
         }
-        queue.extend(theme_inherits(&root));
         names.push(name);
     }
     // hicolor is the fallback of last resort, so an inherited parent
     // (Adwaita's `AdwaitaLegacy`, breeze's `breeze-dark`, …) that got
     // appended behind it still gets searched first.
     names.retain(|n| n != "hicolor");
-    if icons_root.join("hicolor").is_dir() {
+    if exists("hicolor") {
         names.push("hicolor".to_string());
     }
-    names
-        .into_iter()
-        .map(|name| {
-            let root = icons_root.join(name);
-            ThemeDir {
-                subdirs: read_subdir_names(&root),
-                root,
-            }
-        })
-        .collect()
+    names.iter().map(|name| ThemeDir::new(&bases, name)).collect()
 }
 
 /// Immediate subdirectory names of [dir]; empty if it can't be read.
 /// Symlinked size dirs count (`default` is often a symlink farm), so
 /// this follows links rather than trusting the dirent type.
-fn read_subdir_names(dir: &Path) -> HashSet<String> {
+fn read_subdir_names(dir: &Path) -> Vec<String> {
     let Ok(rd) = std::fs::read_dir(dir) else {
-        return HashSet::new();
+        return Vec::new();
     };
     rd.flatten()
         .filter(|e| e.path().is_dir())

@@ -988,6 +988,28 @@ pub fn set_entry_hidden(entry_id: &str, hidden: bool) -> io::Result<Output> {
     )
 }
 
+/// Every icon name in the standing install via the debug
+/// `launcher-icons` broker action: the raw `[{name, user}]` JSON.
+pub fn launcher_icons() -> io::Result<String> {
+    let id = crate::install_id();
+    let output = broker_action("launcher-icons", &[("installId", &id)])?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// The PNG path an `Icon=` value resolves to in the standing install
+/// (`launcher-resolve-icon`), empty if none.
+pub fn launcher_resolve_icon(value: &str) -> io::Result<String> {
+    let id = crate::install_id();
+    let output = broker_action("launcher-resolve-icon", &[("installId", &id), ("value", value)])?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "launcher-resolve-icon failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 // Common Android keycodes (used with [ic_send_key_event]).
 pub const KEYCODE_DEL: u32 = 67; // Backspace
 pub const KEYCODE_FORWARD_DEL: u32 = 112; // Delete (forward delete)

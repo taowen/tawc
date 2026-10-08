@@ -955,6 +955,57 @@ pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeLauncherS
     }
 }
 
+/// Resolve one `Icon=` value against a rootfs, as the launcher scan
+/// would: a PNG path, or empty. Pure file I/O; call off the UI thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeResolveIcon(
+    mut env: JNIEnv,
+    _class: JClass,
+    rootfs: JString,
+    value: JString,
+) -> jobject {
+    let (rootfs, value): (String, String) = match (env.get_string(&rootfs), env.get_string(&value)) {
+        (Ok(r), Ok(v)) => (r.into(), v.into()),
+        _ => {
+            log::error!("nativeResolveIcon: bad string argument");
+            return std::ptr::null_mut();
+        }
+    };
+    let path = launcher::resolve_icon(std::path::Path::new(&rootfs), &value);
+    match env.new_string(path) {
+        Ok(s) => s.into_raw(),
+        Err(e) => {
+            log::error!("nativeResolveIcon: new_string failed: {}", e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Every icon name in a rootfs as a JSON array of `{name, user}`
+/// (`launcher::list_icons_json`). Pure file I/O; call off the UI thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeListIcons(
+    mut env: JNIEnv,
+    _class: JClass,
+    rootfs: JString,
+) -> jobject {
+    let rootfs: String = match env.get_string(&rootfs) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            log::error!("nativeListIcons: bad rootfs string: {}", e);
+            return std::ptr::null_mut();
+        }
+    };
+    let json = launcher::list_icons_json(std::path::Path::new(&rootfs));
+    match env.new_string(json) {
+        Ok(s) => s.into_raw(),
+        Err(e) => {
+            log::error!("nativeListIcons: new_string failed: {}", e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Reverse JNI: Compositor → Android
 // ---------------------------------------------------------------------------

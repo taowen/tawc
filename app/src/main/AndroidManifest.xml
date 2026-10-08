@@ -206,6 +206,13 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Icon picker behind the editor's Select button; returns the
+             chosen icon name. -->
+        <activity
+            android:name=".launcher.IconPickerActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- Trampoline behind pinned home-screen shortcuts
              (EntryShortcuts). Pinned-shortcut intents may target
              non-exported components of the publishing app, so no new

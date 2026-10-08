@@ -1,5 +1,6 @@
 package me.phie.tawc.launcher
 
+import me.phie.tawc.compositor.NativeBridge
 import me.phie.tawc.dev.ActionContext
 import me.phie.tawc.dev.ActionRegistry
 import me.phie.tawc.dev.BrokerAction
@@ -18,6 +19,8 @@ import org.json.JSONObject
  * |--------|------|--------|
  * | `launcher-list` | `installId`, optional `showHidden` ∈ true|false | print the launcher entry list as a JSON array on stdout |
  * | `set-entry-hidden` | `installId`, `entryId`, `hidden` ∈ true|false | persist hide/unhide through the same metadata write the UI uses |
+ * | `launcher-icons` | `installId` | print the icon picker's name list (`[{name, user}]`) |
+ * | `launcher-resolve-icon` | `installId`, `value` | print the PNG path an `Icon=` value resolves to (empty line if none) |
  *
  * `launcher-list` mirrors what [me.phie.tawc.launcher.AppsPane] renders: hidden
  * entries are filtered out unless `showHidden=true` (the UI's
@@ -31,6 +34,37 @@ internal object LauncherActions {
     fun registerAll() {
         ActionRegistry.register("launcher-list", LauncherListAction)
         ActionRegistry.register("set-entry-hidden", SetEntryHiddenAction)
+        ActionRegistry.register("launcher-icons", ListIconsAction)
+        ActionRegistry.register("launcher-resolve-icon", ResolveIconAction)
+    }
+
+    private object ListIconsAction : BrokerAction {
+        override fun run(args: Map<String, String>, ctx: ActionContext): Int {
+            val rootfs = ctx.rootfs("launcher-icons", args) ?: return 2
+            ctx.out(NativeBridge.nativeListIcons(rootfs))
+            return 0
+        }
+    }
+
+    private object ResolveIconAction : BrokerAction {
+        override fun run(args: Map<String, String>, ctx: ActionContext): Int {
+            val rootfs = ctx.rootfs("launcher-resolve-icon", args) ?: return 2
+            val value = args["value"]
+                ?: return ctx.fail("launcher-resolve-icon: --arg value=<Icon= value> required")
+            ctx.out(NativeBridge.nativeResolveIcon(rootfs, value))
+            return 0
+        }
+    }
+
+    /** Rootfs of `installId`, or null after reporting why not. */
+    private fun ActionContext.rootfs(action: String, args: Map<String, String>): String? {
+        val id = args["installId"] ?: run { fail("$action: --arg installId=<id> required"); return null }
+        val store = InstallationStore(appContext)
+        if (store.load(id) == null) {
+            fail("$action: no installation '$id'")
+            return null
+        }
+        return store.rootfsDir(id).absolutePath
     }
 
     private object LauncherListAction : BrokerAction {

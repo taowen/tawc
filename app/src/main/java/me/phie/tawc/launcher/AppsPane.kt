@@ -37,8 +37,7 @@ import me.phie.tawc.install.Installation
 import me.phie.tawc.install.InstallationStore
 import me.phie.tawc.install.distro.DistroRegistry
 import me.phie.tawc.ui.plainIconButton
-import me.phie.tawc.ui.tawcButtonSizePx
-import me.phie.tawc.ui.tawcCard
+import me.phie.tawc.ui.searchPill
 import me.phie.tawc.ui.verticalLp
 
 /**
@@ -156,7 +155,7 @@ internal class AppsPane(
             }
         }
         view.addView(
-            buildSearchRow(),
+            activity.searchPill(searchField, clearButton),
             LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).also {
                 it.setMargins(pad, pad * 3 / 4, pad, pad / 2)
             },
@@ -194,28 +193,6 @@ internal class AppsPane(
         view.addView(grid, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
 
         rescan()
-    }
-
-    /** Rounded `[🔍 field ✕]` pill; ✕ shows while there is a query. */
-    private fun buildSearchRow(): View {
-        val card = activity.tawcCard().apply {
-            radius = activity.tawcButtonSizePx() / 2f
-        }
-        val row = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(pad * 3 / 4, 0, 0, 0)
-        }
-        val glyph = (20 * density).toInt()
-        row.addView(ImageView(activity).apply {
-            setImageResource(R.drawable.ic_search)
-            alpha = 0.7f
-        }, LinearLayout.LayoutParams(glyph, glyph).also { it.marginEnd = pad / 2 })
-        row.addView(searchField, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        val button = activity.tawcButtonSizePx()
-        row.addView(clearButton, LinearLayout.LayoutParams(button, button))
-        card.addView(row)
-        return card
     }
 
     fun onResume() {
@@ -526,7 +503,7 @@ internal class AppsPane(
         }
     }
 
-    private companion object {
+    internal companion object {
         /** Square icon edge in dp, about a phone launcher's. */
         const val ICON_SIZE_DP = 52f
 
@@ -535,8 +512,8 @@ internal class AppsPane(
         const val MIN_COLUMNS = 3
 
         /** Grid bottom padding: FAB (56) + its margins (16 + 16). */
-        const val BOTTOM_CLEARANCE_DP = 88
+        private const val BOTTOM_CLEARANCE_DP = 88
 
-        const val LAUNCH_DEBOUNCE_MS = 500L
+        private const val LAUNCH_DEBOUNCE_MS = 500L
     }
 }

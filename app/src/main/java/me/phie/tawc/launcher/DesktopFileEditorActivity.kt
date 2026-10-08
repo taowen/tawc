@@ -1,25 +1,41 @@
 package me.phie.tawc.launcher
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.text.InputType
+import android.view.Gravity
 import android.view.MenuItem
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.widget.doAfterTextChanged
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.phie.tawc.R
+import me.phie.tawc.compositor.NativeBridge
 import me.phie.tawc.install.InstallationStore
 import me.phie.tawc.install.util.atomicWriteText
 import me.phie.tawc.ui.buildChildScreen
 import me.phie.tawc.ui.primaryButton
+import me.phie.tawc.ui.tonalButton
 import me.phie.tawc.ui.verticalLp
 import java.io.File
 import java.io.IOException
@@ -28,8 +44,9 @@ import java.io.IOException
  * Create/edit/delete a personal `.desktop` entry in a rootfs's managed
  * dir ([DesktopEntryFile.MANAGED_SUBDIR]). Makes personal launchers,
  * not production `.desktop` files: Exec (required) + Name (defaults to Exec), Icon
- * (freeform `Icon=` value, resolved by the scanner's normal icon
- * search on next scan), Terminal checkbox — no locale keys, actions,
+ * (freeform `Icon=` value with a live preview, picked from the distro's
+ * icons by [IconPickerActivity] or imported by [IconImport]), Terminal
+ * checkbox — no locale keys, actions,
  * field codes or extra groups. `Comment=` is read and written back but
  * not shown in the form. Saving writes the file wholesale via
  * [DesktopEntryFile.serialize]; a foreign file (keys/groups outside
@@ -50,6 +67,24 @@ class DesktopFileEditorActivity : AppCompatActivity() {
     private lateinit var iconField: EditText
     private lateinit var terminalCheckbox: CheckBox
     private lateinit var saveButton: MaterialButton
+    private lateinit var iconPreview: ImageView
+    private lateinit var rootfs: File
+    private var installId = ""
+
+    private val iconLoader by lazy {
+        IconLoader(lifecycleScope, (PREVIEW_DP * resources.displayMetrics.density).toInt())
+    }
+    private var previewJob: Job? = null
+
+    private val pickIcon = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        result.data?.getStringExtra(IconPickerActivity.EXTRA_NAME)
+            ?.takeIf { result.resultCode == RESULT_OK }
+            ?.let { setIcon(it) }
+    }
+
+    private val loadIcon = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { importIcon(it) }
+    }
 
     /** `Comment=` from the loaded file. Not exposed in the form (a
      *  personal launcher doesn't need a description), but written back
@@ -62,12 +97,12 @@ class DesktopFileEditorActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val installId = intent?.getStringExtra(EXTRA_ID) ?: ""
+        installId = intent?.getStringExtra(EXTRA_ID) ?: ""
         if (store.load(installId) == null) {
             finish()
             return
         }
-        val rootfs = store.rootfsDir(installId)
+        rootfs = store.rootfsDir(installId)
         managedDir = DesktopEntryFile.managedDir(rootfs)
 
         val path = intent?.getStringExtra(EXTRA_PATH)
@@ -127,10 +162,12 @@ class DesktopFileEditorActivity : AppCompatActivity() {
         existingComment = loaded.draft.comment
         execField = addField(form, R.string.editor_field_exec, loaded.draft.exec, pad)
         nameField = addField(form, R.string.editor_field_name, loaded.draft.name, pad)
-        iconField = addField(form, R.string.editor_field_icon, loaded.draft.icon, pad)
+        iconField = addIconRow(form, loaded.draft.icon, pad)
         terminalCheckbox = CheckBox(this).apply {
             text = getString(R.string.editor_field_terminal)
             isChecked = loaded.draft.terminal
+            // The fallback glyph follows Terminal.
+            setOnCheckedChangeListener { _, _ -> refreshPreview(debounce = false) }
         }
         form.addView(terminalCheckbox, verticalLp(WRAP_CONTENT, WRAP_CONTENT, bottomMargin = pad))
 
@@ -157,6 +194,101 @@ class DesktopFileEditorActivity : AppCompatActivity() {
         )
         setContentView(scaffold.root)
         revalidate()
+        refreshPreview(debounce = false)
+    }
+
+    /**
+     * ```
+     * Icon
+     * [preview]  [ field ............ ✕ ]
+     *            [ Select ]  [ Load ]
+     * ```
+     */
+    private fun addIconRow(form: LinearLayout, value: String, pad: Int): EditText {
+        form.addView(
+            TextView(this).apply { text = getString(R.string.editor_field_icon); textSize = 14f },
+            LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT),
+        )
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+        }
+        val previewPx = (PREVIEW_DP * resources.displayMetrics.density).toInt()
+        iconPreview = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
+        row.addView(iconPreview, LinearLayout.LayoutParams(previewPx, previewPx).also {
+            it.marginEnd = pad
+            it.topMargin = pad / 4
+        })
+
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val field = TextInputEditText(this).apply {
+            setText(value)
+            isSingleLine = true
+            // Icon names aren't words; no spellcheck squiggles.
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            // As tall as the ✕, so the row doesn't jump when it shows.
+            minHeight = (48 * resources.displayMetrics.density).toInt()
+            doAfterTextChanged { revalidate(); refreshPreview(debounce = true) }
+        }
+        // Box-less, so it reads like the plain fields above; the layout
+        // is only here for the clear (✕) end icon.
+        val layout = TextInputLayout(this).apply {
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_NONE
+            isHintEnabled = false
+            endIconMode = TextInputLayout.END_ICON_CLEAR_TEXT
+            addView(field)
+        }
+        column.addView(layout, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        buttons.addView(tonalButton(getString(R.string.editor_icon_select)) {
+            pickIcon.launch(Intent(this, IconPickerActivity::class.java).putExtra(IconPickerActivity.EXTRA_ID, installId))
+        }, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).also { it.marginEnd = pad / 2 })
+        buttons.addView(tonalButton(getString(R.string.editor_icon_load)) {
+            loadIcon.launch(arrayOf("image/*"))
+        }, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        column.addView(buttons, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        row.addView(column, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        form.addView(row, verticalLp(MATCH_PARENT, WRAP_CONTENT, bottomMargin = pad / 2))
+        return field
+    }
+
+    /** Show what the launcher grid would draw for the current Icon
+     *  value: the resolved PNG, else the same fallback glyph. */
+    private fun refreshPreview(debounce: Boolean) {
+        if (!::iconPreview.isInitialized || !::terminalCheckbox.isInitialized) return
+        val value = iconField.text.toString()
+        val fallback = if (terminalCheckbox.isChecked) R.drawable.ic_terminal_fallback else R.drawable.ic_app_fallback
+        val rootfsPath = rootfs.absolutePath
+        previewJob?.cancel()
+        previewJob = lifecycleScope.launch {
+            if (debounce) delay(PREVIEW_DEBOUNCE_MS)
+            val path = if (value.isBlank()) "" else withContext(Dispatchers.IO) {
+                runCatching { NativeBridge.nativeResolveIcon(rootfsPath, value) }.getOrDefault("")
+            }
+            iconLoader.load(path, iconPreview, fallback)
+        }
+    }
+
+    private fun setIcon(value: String) {
+        iconField.setText(value)
+        iconField.setSelection(value.length)
+    }
+
+    /** Copy a picked image into the distro ([IconImport]) and put its
+     *  name in the field. Failure leaves the field untouched. */
+    private fun importIcon(uri: Uri) {
+        lifecycleScope.launch {
+            val name = withContext(Dispatchers.IO) {
+                runCatching { IconImport.import(this@DesktopFileEditorActivity, uri, rootfs) }
+            }
+            name.onSuccess { setIcon(it) }.onFailure {
+                Toast.makeText(
+                    this@DesktopFileEditorActivity,
+                    getString(R.string.editor_icon_import_failed, it.message),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
     }
 
     /** Label + single-line EditText, InstallActivity's form idiom. */
@@ -233,5 +365,10 @@ class DesktopFileEditorActivity : AppCompatActivity() {
 
         /** Absolute path of the `.desktop` file to edit; absent = new entry. */
         const val EXTRA_PATH = "path"
+
+        /** Icon preview edge, close to the launcher grid's icon. */
+        private const val PREVIEW_DP = 48f
+
+        private const val PREVIEW_DEBOUNCE_MS = 250L
     }
 }

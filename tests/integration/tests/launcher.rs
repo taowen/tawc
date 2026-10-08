@@ -653,3 +653,144 @@ fn test_absolute_icon_path_cannot_escape_rootfs() {
         "absolute Icon= escaped the rootfs"
     );
 }
+
+// ---- icon picker: listing + one-value resolve -------------------------
+
+const PICK_USER: &str = "tawc-pick-user";
+const PICK_512: &str = "tawc-pick-512";
+const PICK_PLACE: &str = "tawc-pick-place";
+const PICK_CTX: &str = "tawc-pick-ctx";
+const PICK_TWO: &str = "tawc-pick-two";
+
+fn user_icons_dir() -> String {
+    format!("{}/root/.local/share/icons", rootfs())
+}
+
+struct PickCleanup(Option<&'static str>);
+
+impl Drop for PickCleanup {
+    fn drop(&mut self) {
+        let user = user_icons_dir();
+        let seed_dir = match self.0 {
+            Some(seed) => format!("'{}/{seed}'", icons_dir()),
+            None => String::new(),
+        };
+        // Our files only; the user base may hold real imports, so its
+        // dirs are removed only if this left them empty.
+        let _ = adb::rootfs_host_exec(&[
+            "/system/bin/sh",
+            "-c",
+            &format!(
+                "rm -rf {seed_dir}; \
+                 rm -f '{user}/hicolor/48x48/apps/{PICK_USER}.png' \
+                       '{sys}/hicolor/48x48/apps/{PICK_USER}.png' \
+                       '{sys}/hicolor/512x512/apps/{PICK_512}.png' \
+                       '{sys}/hicolor/48x48/places/{PICK_PLACE}.png' \
+                       '{sys}/hicolor/48x48/apps/{PICK_CTX}.png' \
+                       '{sys}/hicolor/256x256/mimetypes/{PICK_CTX}.png' \
+                       '{sys}/hicolor/48x48/apps/{PICK_TWO}.png'; \
+                 rmdir '{user}/hicolor/48x48/apps' '{user}/hicolor/48x48' \
+                       '{user}/hicolor' '{user}' 2>/dev/null; true",
+                sys = icons_dir(),
+            ),
+        ]);
+    }
+}
+
+/// Every `{"name":…}` object for `name` in a `launcher-icons` list.
+fn icon_entries<'a>(list: &'a str, name: &str) -> Vec<&'a str> {
+    let needle = format!("\"name\":\"{name}\"");
+    list.match_indices(&needle)
+        .map(|(i, _)| {
+            let start = list[..i].rfind('{').expect("object start");
+            let end = i + list[i..].find('}').expect("object end");
+            &list[start..=end]
+        })
+        .collect()
+}
+
+fn resolve(value: &str) -> String {
+    adb::launcher_resolve_icon(value).expect("launcher-resolve-icon")
+}
+
+/// The resolver changes behind the editor's icon picker: the user icon
+/// base is searched and wins, 512-only and non-app-context icons
+/// resolve, an app icon beats a same-named generic one, a name in two
+/// themes is listed once, and absolute paths still work.
+#[test]
+fn test_icon_picker_resolver() {
+    tawc_integration::helpers::test_init();
+    let seed = free_seed_theme();
+    let _cleanup = PickCleanup(seed);
+
+    plant_png(&format!("{}/hicolor/48x48/apps/{PICK_USER}.png", user_icons_dir()));
+    plant_png(&format!("{}/hicolor/48x48/apps/{PICK_USER}.png", icons_dir()));
+    plant_png(&format!("{}/hicolor/512x512/apps/{PICK_512}.png", icons_dir()));
+    plant_png(&format!("{}/hicolor/48x48/places/{PICK_PLACE}.png", icons_dir()));
+    plant_png(&format!("{}/hicolor/48x48/apps/{PICK_CTX}.png", icons_dir()));
+    plant_png(&format!("{}/hicolor/256x256/mimetypes/{PICK_CTX}.png", icons_dir()));
+    plant_png(&format!("{}/hicolor/48x48/apps/{PICK_TWO}.png", icons_dir()));
+    if let Some(seed) = seed {
+        plant_png(&format!("{}/{seed}/48x48/apps/{PICK_TWO}.png", icons_dir()));
+    }
+
+    let user = resolve(PICK_USER);
+    assert!(
+        user.ends_with(&format!("root/.local/share/icons/hicolor/48x48/apps/{PICK_USER}.png")),
+        "user icon base not searched first: {user:?}"
+    );
+    let big = resolve(PICK_512);
+    assert!(big.ends_with(&format!("512x512/apps/{PICK_512}.png")), "512-only icon: {big:?}");
+    let place = resolve(PICK_PLACE);
+    assert!(place.ends_with(&format!("places/{PICK_PLACE}.png")), "places icon: {place:?}");
+    let ctx = resolve(PICK_CTX);
+    assert!(
+        ctx.ends_with(&format!("48x48/apps/{PICK_CTX}.png")),
+        "generic context beat apps: {ctx:?}"
+    );
+    if let Some(seed) = seed {
+        let two = resolve(PICK_TWO);
+        assert!(
+            two.ends_with(&format!("{seed}/48x48/apps/{PICK_TWO}.png")),
+            "seed theme did not beat hicolor: {two:?}"
+        );
+    }
+    let abs = resolve(&format!("/usr/share/icons/hicolor/512x512/apps/{PICK_512}.png"));
+    assert!(abs.ends_with(&format!("512x512/apps/{PICK_512}.png")), "absolute path: {abs:?}");
+
+    let list = adb::launcher_icons().expect("launcher-icons");
+    for name in [PICK_USER, PICK_512, PICK_PLACE, PICK_CTX, PICK_TWO] {
+        let entries = icon_entries(&list, name);
+        assert_eq!(entries.len(), 1, "{name} not listed exactly once: {entries:?}");
+    }
+    assert!(
+        icon_entries(&list, PICK_USER)[0].contains("\"user\":true"),
+        "user-base icon not flagged"
+    );
+    assert!(
+        icon_entries(&list, PICK_PLACE)[0].contains("\"user\":false"),
+        "system icon flagged as user"
+    );
+}
+
+/// Everything the picker lists resolves to a PNG through the same
+/// resolver, sampled across the install's real icon set.
+#[test]
+fn test_listed_icons_resolve() {
+    tawc_integration::helpers::test_init();
+    let list = adb::launcher_icons().expect("launcher-icons");
+    let names: Vec<&str> = list
+        .match_indices("\"name\":\"")
+        .map(|(i, m)| {
+            let start = i + m.len();
+            &list[start..start + list[start..].find('"').expect("unterminated name")]
+        })
+        .collect();
+    assert!(!names.is_empty(), "no icons listed: {list}");
+    const SAMPLES: usize = 40;
+    let step = (names.len() / SAMPLES).max(1);
+    for name in names.iter().step_by(step) {
+        let path = resolve(name);
+        assert!(path.ends_with(".png"), "listed icon {name:?} did not resolve: {path:?}");
+    }
+}

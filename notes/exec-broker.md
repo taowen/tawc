@@ -389,6 +389,8 @@ at its definition.
 | `set-ando` (`installId`, `enabled`) | SettingsActions | Set the per-distro ando (notes/ando.md) test override for `installId` and reconcile the broker (`AndoBrokers.refresh`): enable brings the listener up; disable tears it down and SIGKILLs in-flight ando children. In-memory only (never a metadata write); discarded on process death and cleared by `test-init`. Prints `true`/`false`. |
 | `get-ando` (`installId`) | SettingsActions | Print the effective ando state for `installId` (override if set, else metadata). |
 | `launcher-list` (`installId`, optional `showHidden`) | LauncherActions | Print the launcher entry list, built-ins included, as a JSON array (`{id, name, exec, terminal, iconPath, path, hidden, builtin}` per element; `iconPath` is the resolved on-device PNG, empty when nothing resolved). Mirrors what the home apps tab (`AppsPane`) renders: hidden entries are filtered out unless `showHidden=true` (notes/launcher.md). |
+| `launcher-icons` (`installId`) | LauncherActions | Print the editor icon picker's list: `nativeListIcons`, a JSON array of `{name, user}` (notes/launcher.md "Icon field"). |
+| `launcher-resolve-icon` (`installId`, `value`) | LauncherActions | Print the PNG path one `Icon=` value resolves to (`nativeResolveIcon`); empty when nothing resolves. |
 | `set-entry-hidden` (`installId`, `entryId`, `hidden`) | LauncherActions | Persist launcher hide/unhide for a desktop-entry id through the same locked `Installation.hiddenDesktopIds` metadata write the launcher UI uses. Durable — tests must unhide in cleanup. Prints the resulting hidden-id list. |
 
 **Rule for input actions: every driver goes through `TawcInputConnection`.**

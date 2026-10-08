@@ -14,10 +14,13 @@ import java.nio.file.StandardCopyOption
  * rename while the new data blocks are still unwritten — the classic
  * empty-file-after-rename hazard.
  */
-fun atomicWriteText(target: File, text: String) {
+fun atomicWriteText(target: File, text: String) = atomicWriteBytes(target, text.toByteArray())
+
+/** [atomicWriteText] for bytes. */
+fun atomicWriteBytes(target: File, bytes: ByteArray) {
     val tmp = File(target.parentFile, target.name + ".tmp")
     tmp.outputStream().use { out ->
-        out.write(text.toByteArray())
+        out.write(bytes)
         out.fd.sync()
     }
     Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)

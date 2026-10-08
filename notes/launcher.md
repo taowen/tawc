@@ -161,8 +161,7 @@ exactly the complex foreign files the editor shouldn't touch).
   model") — chroot installs get no New/Edit entry points, consistent
   with the terminal gating.
 - Editor scope (`DesktopEntryFile`): Exec (required) + Name (blank = Exec, shown as the hint), Icon
-  (freeform `Icon=` value, resolved by `resolve_icon` on next scan),
-  Terminal checkbox (checked by default for new entries — hand-made
+  (see "Icon field" below), Terminal checkbox (checked by default for new entries — hand-made
   entries are usually CLI scripts). `Comment=` has no form field but is
   read and written back, so editing preserves an existing description.
   Saving
@@ -179,6 +178,39 @@ exactly the complex foreign files the editor shouldn't touch).
   rest — a warning, not silent data loss.
 - After save/delete the launcher rescans (`RESULT_OK` →
   `loadApps()`).
+
+### Icon field
+
+`[preview] [field ✕] / [Select] [Load]`. The field is a freeform
+`Icon=` value (a name, or an in-rootfs absolute path); ✕ is a box-less
+`TextInputLayout` with `END_ICON_CLEAR_TEXT`.
+
+- **Preview**: what the grid would draw. `nativeResolveIcon(rootfs,
+  value)` (the scan's resolver and SVG cache, one value) on IO,
+  debounced 250 ms after typing and immediate on a Terminal toggle;
+  empty/unresolved shows the grid's fallback glyph for the current
+  Terminal state.
+- **Select** → `IconPickerActivity`, a searchable grid (same pill and
+  column math as `AppsPane`) of `nativeListIcons(rootfs)`:
+  `[{name, user}]`, one entry per name. Cells resolve lazily through
+  `nativeResolveIcon` (4 at a time, memoized per name for the
+  activity), since rasterizing a whole theme up front takes seconds.
+  Case-insensitive substring filter; `user` names (imports) first with
+  no query. Picker renders land in the shared `icon-cache/`, so the
+  next launcher scan prunes them; reopening the picker re-renders the
+  visible cells (~8 ms each).
+- **Load** → `OpenDocument(image/*)` → `IconImport`: rasters are
+  decoded with `ImageDecoder`, scaled to fit 256² (never up) and
+  re-encoded as PNG into
+  `/root/.local/share/icons/hicolor/256x256/apps/`; SVGs (MIME or
+  `.svg` name, ≤ 1 MiB like the cache's cap) are copied to
+  `…/hicolor/scalable/apps/`. The name is `tawc-<slug of the document
+  name>`, `-2`/`-3` on collision across both extensions, reusing a
+  candidate whose bytes are identical. Written atomically
+  (`atomicWriteBytes`). The field gets the plain name, so guest
+  desktops reading the `.desktop` file find it too, and imports travel
+  with the rootfs. Nothing deletes imports. Name logic:
+  `IconImportTest`.
 
 Serializer/parse/slug logic is JVM-unit-tested
 (`DesktopEntryFileTest`); scan-dir + precedence + terminal-flag
@@ -256,33 +288,53 @@ cache) searches, all rooted at the canonicalized rootfs:
 1. Absolute `Icon=/foo/bar.png` → used directly. The value is
    guest-controlled and we now *parse* what we find, so the path is
    lexically normalized and rejected if `..` climbs out of the rootfs.
-2. Bare name → the theme walk under `usr/share/icons`, below.
+2. Bare name → the theme walk over the icon bases, below.
 3. `usr/share/pixmaps/<name>.{png,svg,svgz}` (legacy fallback).
 4. `Icon=name.<ext>` strips known image extensions before the search.
 
 The theme walk is spec-*shaped*, not the full fdo size-matching
 algorithm — we want "largest sensible raster, else scalable":
 
+- **Bases** (`ICON_BASES`): `/root/.local/share/icons` (the spec's
+  `$XDG_DATA_HOME/icons`, where editor imports go), then
+  `/usr/local/share/icons`, `/usr/share/icons`, and flatpak's
+  `exports/share/icons`. A theme can span bases; its dirs from all
+  bases are merged, and the user base wins a tie.
 - **Theme order**: seeds `default`, `Adwaita`, `Papirus`, `breeze`,
   `hicolor`, each expanded breadth-first through its `index.theme`
   `Inherits=` (minimal line scan, stops at the second group header; no
-  theme crate). De-duplicated, missing themes dropped, `hicolor` forced
-  last so an inherited parent still gets a look in. `default` leads so a
-  distro/user-selected theme wins.
+  theme crate; read from the first base that has it). De-duplicated,
+  missing themes dropped, `hicolor` forced last so an inherited parent
+  still gets a look in. `default` leads so a distro/user-selected theme
+  wins.
 - **Per theme**: contexts `apps`, then `legacy`, then `categories` —
   generic names like `utilities-terminal` live outside `apps` in several
-  themes. Sizes `128, 96, 256, 64, 48`, then `scalable`, then
-  `32, 24, 22, 16` (a vector icon beats a 16 px PNG blown up to a 56 dp
-  row). Both layouts are tried: `<size>/<context>` (hicolor, Adwaita)
-  and `<context>/<size>` (breeze), with numeric sizes spelled both
-  `48x48` and bare `48`.
+  themes — then every other context the theme has (`places`,
+  `mimetypes`, …, by name), so an app's own icon beats a same-named
+  generic one and the picker's every name resolves. Sizes
+  `128, 96, 256, 64, 48`, then `scalable`, then `32, 24, 22, 16` (a
+  vector icon beats a 16 px PNG blown up to a 56 dp row), then any other
+  size dir (`512x512`, `36`, `48x48@2`, …) largest effective size
+  first — Electron/flatpak apps often ship only 512. Both layouts are
+  read: `<size>/<context>` (hicolor, Adwaita) and `<context>/<size>`
+  (breeze), with numeric sizes spelled both `48x48` and bare `48`.
 - Extensions per directory: `png`, then `svg`, then `svgz`. XPM is not
   searched — we can't decode it and only a couple of `NoDisplay` python
   entries still ship one.
-- Each theme's immediate subdirectory names are read once
-  (`read_subdir_names`), so the walk skips whole size tiers instead of
-  stat'ing the full contexts × sizes × layouts × extensions grid.
-  Adwaita on sid ships three size dirs, not ten.
+- Each theme's two directory levels are read once per resolver
+  (`ThemeDir::new`) into an ordered dir list, so the walk only stats
+  dirs that exist instead of the full contexts × sizes × layouts ×
+  extensions grid.
+- **One walk, two consumers**: `IconResolver::sources` yields every
+  source dir (theme dirs, pixmaps, symbolic dirs) in resolution order.
+  `resolve` takes the first hit; `list` (the picker's
+  `nativeListIcons`) collects every name from the same sources,
+  `-symbolic` stripped for symbolic dirs and stems `resolve` would
+  rewrite skipped, so a listed name resolves to the file the launcher
+  would use (`launcher::test_listed_icons_resolve`). Dangling symlinks
+  aren't listed.
+- Why this exists: a user typing `folder` got nothing because it lives
+  only in `Adwaita/scalable/places`, a context the walk used to skip.
 
 ### SVG cache
 
@@ -298,8 +350,9 @@ before.
 - Rendered 192 px square, aspect-preserved, centred, transparent. That
   covers the ~56 dp row at 3×, the recents icon and the 2/3-safe-zone
   pin bitmap.
-- Written to `<hex>.<pid>.tmp` then renamed — the launcher and the
-  shortcut trampoline can scan concurrently.
+- Written to `<hex>.<pid>-<seq>.tmp` then renamed — the launcher and the
+  shortcut trampoline can scan concurrently, and picker cells render
+  on several threads.
 - Guard rails, since the input is guest-controlled: sources over 1 MiB
   are skipped, parse+render runs under `catch_unwind`, and any failure
   leaves a zero-length `<hex>.fail` marker so a bad SVG isn't re-parsed
@@ -326,7 +379,8 @@ not misleading.
 ### Symbolic last resort
 
 After every theme, context and size has come up empty, the walk tries
-`<theme>/symbolic/{apps,legacy,categories}/<name>-symbolic.svg`. It is
+`<theme>/symbolic/<context>/<name>-symbolic.svg`, preferred contexts
+first. It is
 last because it loses the app's colours: Konsole on sid asks for
 `utilities-terminal` and the rootfs ships only
 `Adwaita/symbolic/legacy/utilities-terminal-symbolic.svg`.
