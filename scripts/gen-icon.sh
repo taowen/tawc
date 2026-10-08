@@ -8,9 +8,10 @@
 #   app/src/main/res/drawable/ic_launcher_foreground.xml  + safe-zone scale
 #   app/src/main/res/values/icon_colors.xml             background colour
 #   fastlane/metadata/android/en-US/images/icon.png     F-Droid store icon
-#   app/src/debug/res/drawable/{ic_tawc_logo,ic_launcher_foreground}.xml
-#                                     the same, recoloured purple for the
-#                                     me.phie.tawc.dev debug app
+#   app/src/debug/res/drawable/ic_launcher_foreground.xml
+#                                     the launcher foreground, recoloured
+#                                     purple for the me.phie.tawc.dev debug
+#                                     app (in-app logo stays orange)
 #
 # Run this after every edit to app/icon.svg and commit the results
 # together. Nothing runs it automatically: the app build must not depend on
@@ -310,9 +311,9 @@ def dev_fill(fill):
 
 
 paths = [(stack, dict(p, fill=dev_fill(p["fill"]))) for stack, p in paths]
-dev_note = "Debug-build (me.phie.tawc.dev) variant, recoloured purple.\n     "
+dev_note = ("Debug-build (me.phie.tawc.dev) launcher icon, recoloured "
+            "purple.\n     The in-app logo stays orange.\n     ")
 outputs += [
-    ("dev_ic_tawc_logo.xml", android_vector(note=dev_note + logo_note)),
     ("dev_ic_launcher_foreground.xml",
      android_vector(safe_scale, note=dev_note + fg_note)),
 ]
@@ -347,7 +348,6 @@ vector_outputs=(
     "$RES_DIR/drawable/ic_tawc_logo.xml:ic_tawc_logo.xml"
     "$RES_DIR/drawable/ic_launcher_foreground.xml:ic_launcher_foreground.xml"
     "$RES_DIR/values/icon_colors.xml:icon_colors.xml"
-    "$DEV_RES_DIR/drawable/ic_tawc_logo.xml:dev_ic_tawc_logo.xml"
     "$DEV_RES_DIR/drawable/ic_launcher_foreground.xml:dev_ic_launcher_foreground.xml"
 )
 
