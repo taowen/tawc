@@ -11,7 +11,6 @@ import androidx.core.net.toUri
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import me.phie.tawc.AndoBrokers
-import me.phie.tawc.HomePane
 import me.phie.tawc.Settings
 import me.phie.tawc.compositor.ClipboardBridge
 import me.phie.tawc.compositor.CompositorActivity
@@ -23,6 +22,7 @@ import me.phie.tawc.install.InstallationStore
 import me.phie.tawc.install.Sh
 import me.phie.tawc.ops.LogScreenActivity
 import me.phie.tawc.tasks.ProcessScanner
+import me.phie.tawc.terminal.TerminalTabBar
 
 /**
  * Broker actions that drive compositor input from host tests, registered
@@ -705,8 +705,7 @@ internal object InputActions {
                     .filterIsInstance<LogScreenActivity>()
                     .forEach { it.finish() }
                 Settings.enterTestMode()
-                // Apps pane: no pending shell left in a test's rootfs.
-                HomeActions.showPane(HomePane.APPS, null)
+                HomeActions.showTab(TerminalTabBar.APPS, null)
                 NativeBridge.nativeSetTintBuffersByType(Settings.tintBuffersByType)
                 NativeBridge.nativeSetOutputScale(Settings.outputScale)
                 NativeBridge.nativeSetXwaylandEnabled(Settings.xwayland)

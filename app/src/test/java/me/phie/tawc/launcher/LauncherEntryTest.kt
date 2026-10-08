@@ -61,6 +61,28 @@ class LauncherEntryTest {
     }
 
     @Test
+    fun searchFallsBackToHiddenWhenNothingElseMatches() {
+        val entries = LauncherEntry.withBuiltins(
+            listOf(entry("firefox", "Firefox"), entry("fireworks", "Fireworks")), builtins,
+        )
+        val hidden = setOf("firefox")
+        assertEquals(
+            listOf("fireworks"),
+            LauncherEntry.filter(entries, hidden, showHidden = false, query = "fire").map { it.id },
+        )
+        assertEquals(
+            listOf("firefox"),
+            LauncherEntry.filter(entries, hidden, showHidden = false, query = "firefox").map { it.id },
+        )
+        // Add entry matching doesn't count as a visible match.
+        val adder = LauncherEntry.withBuiltins(listOf(entry("adder", "Adder")), builtins)
+        assertEquals(
+            listOf("adder", "tawc:add-entry"),
+            LauncherEntry.filter(adder, setOf("adder"), showHidden = false, query = "add").map { it.id },
+        )
+    }
+
+    @Test
     fun filterRanksNamePrefixMatchesFirst() {
         // Pre-sorted by name like scanner output; the substring match
         // sorts first alphabetically but must rank below the prefix match.
@@ -92,5 +114,56 @@ class LauncherEntryTest {
     fun filterTrimsQueryWhitespace() {
         val entries = listOf(entry("a", "Alpha"))
         assertEquals(entries, LauncherEntry.filter(entries, emptySet(), showHidden = false, query = "  "))
+    }
+
+    private fun builtin(kind: LauncherEntry.Builtin, name: String) =
+        LauncherEntry(kind.id, name, "", "", terminal = kind.opensTerminal, iconPath = "", builtin = kind)
+
+    private val builtins = listOf(
+        builtin(LauncherEntry.Builtin.TERM, "TAWC Term"),
+        builtin(LauncherEntry.Builtin.UPDATE, "Update packages"),
+        builtin(LauncherEntry.Builtin.ADD_ENTRY, "Add entry"),
+    )
+
+    @Test
+    fun builtinsSortByNameAndDropReservedScannedIds() {
+        val scanned = listOf(entry("firefox", "Firefox"), entry("tawc:term", "Impostor"), entry("xterm", "XTerm"))
+        assertEquals(
+            listOf("tawc:add-entry", "firefox", "tawc:term", "tawc:update", "xterm"),
+            LauncherEntry.withBuiltins(scanned, builtins).map { it.id },
+        )
+    }
+
+    @Test
+    fun addEntryStaysLastWhateverTheQuery() {
+        val all = LauncherEntry.withBuiltins(listOf(entry("firefox", "Firefox"), entry("adder", "Adder")), builtins)
+        assertEquals(
+            listOf("adder", "firefox", "tawc:term", "tawc:update", "tawc:add-entry"),
+            LauncherEntry.filter(all, emptySet(), showHidden = false, query = "").map { it.id },
+        )
+        // "add" prefixes both Adder and Add entry: Add entry still last.
+        assertEquals(
+            listOf("adder", "tawc:add-entry"),
+            LauncherEntry.filter(all, emptySet(), showHidden = false, query = "add").map { it.id },
+        )
+        assertEquals(
+            listOf("tawc:term"),
+            LauncherEntry.filter(all, emptySet(), showHidden = false, query = "tawc t").map { it.id },
+        )
+    }
+
+    @Test
+    fun builtinsHideLikeAnyEntry() {
+        val all = LauncherEntry.withBuiltins(listOf(entry("firefox", "Firefox")), builtins)
+        assertEquals(
+            listOf("firefox", "tawc:update", "tawc:add-entry"),
+            LauncherEntry.filter(all, setOf("tawc:term"), showHidden = false, query = "").map { it.id },
+        )
+    }
+
+    @Test
+    fun builtinIdsRoundTrip() {
+        for (b in LauncherEntry.Builtin.entries) assertEquals(b, LauncherEntry.Builtin.fromId(b.id))
+        assertEquals(null, LauncherEntry.Builtin.fromId("firefox"))
     }
 }

@@ -40,7 +40,14 @@ is discovered ONLY at top-level prod entry (`<rootfs>/../tawcroot`) and
 ferried to `--exec-child` via exec_state (v5 `store_host_off`), because
 a guest chroot changes the rootfs view but never the store.
 
-**Backup/export invariant: `distros/<id>/` is the unit.** `rootfs/`
+**Backup/export invariant: `distros/<id>/` is the unit.** Distro
+export/import (notes/installation.md "Export / import") carries
+`rootfs/` plus this store; it drops `lock`, `intent.new`, `tmp/*` and
+`work/*` (parked leaks: counts stay high, never low), refuses to export
+with a pending `intent` (host-real paths) after a recovery spawn, and
+rejects `intent`/`work/*` entries on import. Tokens no longer equal
+object inodes after an import; NEW's `-<k>` collision suffix handles
+that (`linkstore_new_token_collision_after_copy`). `rootfs/`
 alone is no longer self-contained — hardlinked data lives in
 `tawcroot/link/`. Install management already treats the distro dir as
 the unit; anything new (export, migration, host-side copying) must too.

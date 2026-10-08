@@ -6,15 +6,19 @@
  * swapped for a tawcroot-owned TAWC_SIGALT_SLOT-byte slot from a fixed
  * BSS slab; the guest still reads back its own ss_sp/ss_size.
  *
- * sigaltstack can't be forwarded from the handler: the kernel EPERMs
- * while we run on the altstack, and sigreturn reinstalls uc_stack
- * anyway. So `cur` below is &uc->uc_stack — the kernel applies whatever
- * we leave there when the handler returns (restore_altstack), with the
- * guest's own SP deciding on-stack-ness. That restore ignores errors,
- * so _check replicates do_sigaltstack's validation exactly.
+ * sigaltstack can't be forwarded as-is from the handler: the kernel
+ * EPERMs while we run on the altstack. Nor can we leave the change in
+ * uc->uc_stack for sigreturn's restore_altstack: x86_64 drops that edit
+ * when the handler ran on the altstack (arm64 applies it). So `apply`
+ * issues the real call with SP moved off the altstack
+ * (tawcroot_raw_syscall_off_stack), and `cur` (&uc->uc_stack) is kept
+ * equal to it so the restore is a no-op. _check replicates
+ * do_sigaltstack's validation, with the guest's SP deciding
+ * on-stack-ness.
  *
- * Async-signal-safe: lock-free atomics only, no syscalls, no libc.
- * See notes/tawcroot/sigsys-handler.md "Handler stack budget". */
+ * Async-signal-safe: lock-free atomics only, no syscalls but `apply`,
+ * no libc. See notes/tawcroot/sigsys-handler.md "Handler stack
+ * budget". */
 
 #pragma once
 
@@ -40,13 +44,21 @@
 long tawc_sigalt_check(const stack_t *cur, uintptr_t guest_sp,
 		       const stack_t *new_ss, stack_t *old);
 
-/* Apply an already-checked `new_ss` to `cur`, substituting a slab slot
- * for an undersized stack. If the slab is exhausted the guest's stack
- * is installed as-is (no worse than having no floor). */
-void tawc_sigalt_commit(stack_t *cur, const stack_t *new_ss);
+/* Installs `ss` as the kernel's altstack for the calling thread. */
+typedef long (*tawc_sigalt_apply_fn)(const stack_t *ss);
 
-/* Free a slot in tests. Production cannot trap exit(2) safely. */
-void tawc_sigalt_thread_exit(const stack_t *cur);
+/* Apply an already-checked `new_ss` via `apply` and mirror it into
+ * `cur`, substituting a slab slot for an undersized stack. If the slab
+ * is exhausted the guest's stack is installed as-is (no worse than
+ * having no floor). A slot given up here is still under the handler's
+ * frame, so it is retired under `tid` rather than freed; the thread's
+ * next commit or exit frees it. Returns 0 or apply's -errno, in which
+ * case nothing changed. */
+long tawc_sigalt_commit(stack_t *cur, const stack_t *new_ss, int tid,
+			tawc_sigalt_apply_fn apply);
+
+/* Test cleanup. Production cannot trap exit(2) after musl unmaps its stack. */
+void tawc_sigalt_thread_exit(const stack_t *cur, int tid);
 
 /* For tests; not called from production. */
 int  tawc_sigalt_is_slab(const void *p);

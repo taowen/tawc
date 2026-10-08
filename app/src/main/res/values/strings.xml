@@ -21,11 +21,10 @@
     <string name="action_install">Install</string>
     <string name="action_install_new_distro">Install new distro</string>
     <string name="action_manage">Manage</string>
-    <string name="action_terminal">Terminal</string>
+    <string name="action_new_terminal">New terminal</string>
     <string name="action_apps">Apps</string>
     <string name="action_close_all_terminals">Close all</string>
-    <string name="action_search">Search</string>
-    <string name="action_close_search">Close search</string>
+    <string name="action_clear_search">Clear search</string>
     <string name="action_run">Run</string>
     <string name="action_run_command">Run&#8230;</string>
     <string name="action_open_drawer">Open distro list</string>
@@ -35,11 +34,11 @@
     <string name="action_collapse">Collapse</string>
     <string name="action_expand">Expand</string>
 
-    <string name="hint_search_apps">Search apps</string>
+    <string name="hint_search_distro">Search %1$s</string>
     <string name="hint_run_command">e.g. firefox</string>
 
     <string name="home_drawer_item_state">%1$s · %2$s</string>
-    <string name="home_intro_blurb">Run desktop Linux programs on Android. Install a distro to get started.</string>
+    <string name="home_intro_blurb">Install a Linux distro to get started</string>
     <string name="home_menu_description">More options</string>
     <string name="home_state_view_log">%1$s (view log)</string>
     <string name="install_state_installing">installing&#8230;</string>
@@ -140,6 +139,7 @@
     <string name="distro_info_run_command_title">Run command in %1$s</string>
     <string name="action_copy_rootfs_path">Copy rootfs path</string>
     <string name="copied_to_clipboard">Copied to clipboard</string>
+    <string name="distro_info_row_imported">Imported:</string>
     <string name="distro_info_delete_title">Delete %1$s?</string>
     <string name="distro_info_delete_message">This permanently deletes the rootfs at\n%1$s,\nincluding all files in your Linux home directory.</string>
 
@@ -158,13 +158,17 @@
     <string name="shortcut_install_not_ready">Installation is %1$s.</string>
     <string name="shortcut_entry_gone">This app is no longer installed in the distro.</string>
     <string name="shortcut_distro_uninstalled">The distro was uninstalled.</string>
+    <string name="launcher_builtin_unavailable">Not available for this install.</string>
     <string name="launcher_method_unavailable">Install method \'%1$s\' is not included in this build.</string>
     <string name="launcher_menu_add_entry">Add entry&#8230;</string>
+    <string name="builtin_term">TAWC Term</string>
+    <string name="builtin_update">Update packages</string>
+    <string name="builtin_add_entry">Add entry</string>
     <string name="editor_title_new">Add entry</string>
     <string name="editor_title_edit">Edit program</string>
     <string name="editor_field_name">Name</string>
     <string name="editor_field_exec">Command</string>
-    <string name="editor_field_icon">Icon (name or path)</string>
+    <string name="editor_field_icon">Icon</string>
     <string name="editor_field_terminal">Run in terminal</string>
     <string name="editor_save">Save</string>
     <string name="editor_delete">Delete</string>
@@ -173,6 +177,13 @@
     <string name="editor_save_failed">Saving failed: %1$s</string>
     <string name="editor_load_failed">Couldn\'t read the file: %1$s</string>
     <string name="editor_delete_failed">Delete failed.</string>
+    <string name="editor_icon_select">Select</string>
+    <string name="editor_icon_load">Load</string>
+    <string name="editor_icon_import_failed">Couldn\'t import image: %1$s</string>
+    <string name="icon_picker_title">Select icon</string>
+    <string name="icon_picker_search_hint">Search icons</string>
+    <string name="icon_picker_loading">Loading icons&#8230;</string>
+    <string name="icon_picker_none">No icons found.</string>
     <string name="launcher_launch_failed_title">Launching %1$s failed</string>
 
     <string name="operation_not_in_flight">No operation in flight for \'%1$s\'.</string>
@@ -234,6 +245,67 @@
     <string name="install_progress_unmounting_chroot">Unmounting chroot&#8230;</string>
     <string name="install_progress_deleting_rootfs">Deleting rootfs&#8230;</string>
     <string name="install_progress_deleted">Deleted</string>
+
+    <string name="operation_title_export">Export %1$s</string>
+    <string name="operation_title_import">Import %1$s</string>
+    <string name="operation_what_export">export \'%1$s\'</string>
+    <string name="operation_what_import">import \'%1$s\'</string>
+    <string name="operation_status_export_cancelled">Export cancelled</string>
+    <string name="operation_status_export_timed_out">Export stopped: Android\'s time limit for background work was reached. Keep the app open and try again.</string>
+    <string name="operation_status_export_failed">Export failed: %1$s</string>
+    <string name="operation_status_import_cancelled_by_user">Import cancelled by user</string>
+    <string name="operation_status_import_failed">Import failed: %1$s</string>
+    <string name="export_reject_no_target">no export target</string>
+    <string name="export_reject_missing">no such distro</string>
+    <string name="export_reject_state">distro is %1$s; only ready distros can be exported</string>
+    <string name="export_reject_method">only tawcroot distros can be exported (got \'%1$s\')</string>
+    <string name="import_reject_no_source">no archive to import</string>
+    <string name="import_reject_dir_exists">a directory for this id already exists</string>
+    <string name="export_progress_stopping">Stopping programs&#8230;</string>
+    <string name="export_progress_writing">Exporting: %1$s / %2$s</string>
+    <string name="export_progress_done">Exported</string>
+    <string name="export_progress_done_deleting">Exported; deleting the distro&#8230;</string>
+    <string name="import_progress_reading">Reading archive&#8230;</string>
+    <string name="import_progress_extracting">Importing: %1$s / %2$s</string>
+    <string name="import_progress_extracting_unknown">Importing: %1$s</string>
+    <string name="import_progress_done">Imported</string>
+    <string name="import_cancel_title">Cancel import of \'%1$s\'?</string>
+    <string name="import_cancel_message">Cancelling will stop the import and remove the partly imported files at\n%1$s.\nThe archive itself is not touched.</string>
+    <string name="import_cancel_confirm">Cancel import</string>
+    <string name="import_cancel_keep">Keep importing</string>
+
+    <string name="action_export">Export</string>
+    <string name="action_import">Import</string>
+    <string name="action_import_tarball">Import from tarball</string>
+    <string name="export_dialog_title">Export %1$s?</string>
+    <string name="export_dialog_message">Compresses and saves distro files and settings to shared device storage. The exported tarball can be shared or modified, and later imported into TAWC as a working distro.</string>
+    <string name="export_dialog_delete_after">Delete after export</string>
+    <string name="export_dialog_continue">Continue</string>
+    <string name="export_dialog_export_delete">Export &amp; delete</string>
+    <string name="title_import_distro">Import distro</string>
+    <string name="import_reading">Reading archive&#8230;</string>
+    <string name="import_scanning">Scanning archive&#8230; %1$s read</string>
+    <string name="import_unknown_distro">unknown distro</string>
+    <string name="import_default_label">Custom</string>
+    <string name="import_banner_damaged">Damaged TAWC export: %1$s. It will be imported as-is.</string>
+    <string name="import_value_distro">%1$s (%2$s)</string>
+    <string name="import_value_unsupported">%1$s (%2$s, unsupported)</string>
+    <string name="distro_info_unsupported">%1$s (unsupported)</string>
+    <string name="import_row_libc">libc</string>
+    <string name="import_warn_musl">musl libc: GPU acceleration is unavailable; use the CPU graphics backend.</string>
+    <string name="import_warn_no_bash">No bash: terminals and commands use /bin/sh.</string>
+    <string name="import_warn_no_arch">Couldn\'t tell the CPU architecture (no programs in /bin or /usr/bin).</string>
+    <string name="import_warn_no_end_marker">This archive has no end marker, so a cut-off copy is only caught if the archive stream itself breaks.</string>
+    <string name="import_unreadable">Can\'t import this file: %1$s</string>
+    <string name="import_row_distro">Distro</string>
+    <string name="import_row_original_label">Exported as</string>
+    <string name="import_row_exported">Exported</string>
+    <string name="import_row_from_app">From app</string>
+    <string name="import_row_size">Size</string>
+    <string name="import_binds_dropped">This build can\'t access shared storage, so %1$d shared-storage bind(s) will be dropped.</string>
+    <string name="import_binds_grant">Some binds need all-files access, which isn\'t granted. The distro will refuse to start until you grant it or remove those binds.</string>
+    <string name="import_binds_missing">Bound folder %1$s doesn\'t exist on this phone. The distro will refuse to start until you create it or remove the bind under Manage binds.</string>
+    <string name="import_space_warning">Only %1$s free; this distro needs about %2$s.</string>
 
     <string name="terminal_tab_home">Term %1$d</string>
     <string name="terminal_new_tab">New tab</string>

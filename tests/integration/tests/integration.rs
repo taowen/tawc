@@ -2,6 +2,7 @@ mod android_integration;
 mod ando;
 mod apps;
 mod cpu_graphics;
+mod distro_export;
 mod gfxstream;
 mod home_terminal;
 mod launcher;

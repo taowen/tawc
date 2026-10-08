@@ -9,6 +9,8 @@ import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.widget.CheckBox
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -24,9 +26,11 @@ import me.phie.tawc.R
 import me.phie.tawc.install.distro.Distro
 import me.phie.tawc.install.distro.DistroRegistry
 import me.phie.tawc.ops.LogScreenActivity
+import me.phie.tawc.ops.OperationsRegistry
 import me.phie.tawc.ui.destructiveButton
 import me.phie.tawc.ui.plainIconButton
 import me.phie.tawc.ui.tawcButtonSizePx
+import me.phie.tawc.ui.tonalButton
 import me.phie.tawc.ui.verticalLp
 import java.text.DateFormat
 import java.util.Date
@@ -77,12 +81,26 @@ class DistroInfoView(private val activity: AppCompatActivity) {
             infoRow(getString(R.string.distro_info_row_label), DistroRegistry.displayLabel(installation)),
             rowLp(pad),
         )
+        // Anything this build doesn't know (custom imports, a newer
+        // app's distro) is flagged; a CORRUPT marker's "?" isn't a distro.
+        val distroName = resolvedDistro?.displayName ?: if (installation.state == Installation.State.CORRUPT) {
+            installation.distro
+        } else {
+            getString(R.string.distro_info_unsupported, installation.osName ?: installation.distro)
+        }
+        content.addView(infoRow(getString(R.string.distro_info_row_distro), distroName), rowLp(pad))
+        if (installation.libc == RootfsFacts.LIBC_MUSL) {
+            content.addView(TextView(activity).apply {
+                text = getString(R.string.import_warn_musl)
+                textSize = 13f
+                setTextColor(androidx.core.content.ContextCompat.getColor(activity, R.color.tawc_warning))
+            }, rowLp(pad))
+        }
         content.addView(
-            infoRow(getString(R.string.distro_info_row_distro), resolvedDistro?.displayName ?: installation.distro),
-            rowLp(pad),
-        )
-        content.addView(
-            infoRow(getString(R.string.distro_info_row_architecture), resolvedDistro?.linuxArch ?: installation.arch),
+            infoRow(
+                getString(R.string.distro_info_row_architecture),
+                resolvedDistro?.linuxArch ?: RootfsFacts.linuxArch(installation.arch),
+            ),
             rowLp(pad),
         )
         content.addView(infoRow(getString(R.string.distro_info_row_method), installation.method), rowLp(pad))
@@ -115,6 +133,16 @@ class DistroInfoView(private val activity: AppCompatActivity) {
             ),
             rowLp(pad),
         )
+        installation.importedAtMillis?.let {
+            content.addView(
+                infoRow(
+                    getString(R.string.distro_info_row_imported),
+                    DateFormat.getDateTimeInstance().format(Date(it)) +
+                        (installation.importedFromPackage?.let { p -> " ($p)" } ?: ""),
+                ),
+                rowLp(pad),
+            )
+        }
         val rootfsPath = store.rootfsDir(installation.id).absolutePath
         val rootfsRow = infoRow(getString(R.string.distro_info_row_rootfs_path), rootfsPath)
         rootfsRow.gravity = android.view.Gravity.CENTER_VERTICAL
@@ -149,10 +177,51 @@ class DistroInfoView(private val activity: AppCompatActivity) {
             View(activity),
             LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f),
         )
+        if (installation.state == Installation.State.READY && installation.method == TawcrootMethod.KEY) {
+            content.addView(
+                activity.tonalButton(getString(R.string.action_export)) { confirmExport(installation) },
+                verticalLp(MATCH_PARENT, WRAP_CONTENT, bottomMargin = pad / 2),
+            )
+        }
         content.addView(
             activity.destructiveButton(getString(R.string.action_delete)) { confirmUninstall(installation) },
             verticalLp(MATCH_PARENT, WRAP_CONTENT),
         )
+    }
+
+    /** Export confirm with the optional delete-after (turns the action
+     *  red). Continue → file picker. */
+    private fun confirmExport(installation: Installation) {
+        val pad = (24 * activity.resources.displayMetrics.density).toInt()
+        val deleteAfter = CheckBox(activity).apply { text = getString(R.string.export_dialog_delete_after) }
+        val box = FrameLayout(activity).apply {
+            setPadding(pad, pad / 3, pad, 0)
+            addView(deleteAfter)
+        }
+        val dialog = MaterialAlertDialogBuilder(activity)
+            .setTitle(getString(R.string.export_dialog_title, renderDistroLabel(installation)))
+            .setMessage(getString(R.string.export_dialog_message))
+            .setView(box)
+            .setNegativeButton(getString(R.string.action_cancel), null)
+            .setPositiveButton(getString(R.string.export_dialog_continue)) { _, _ ->
+                activity.startActivity(ExportActivity.intentFor(activity, installation.id, deleteAfter.isChecked))
+            }
+            .show()
+        // Neutral Cancel, as on the Delete dialog.
+        dialog.getButton(DialogInterface.BUTTON_NEGATIVE)?.let { btn ->
+            btn.setTextColor(
+                MaterialColors.getColor(btn, com.google.android.material.R.attr.colorOnSurfaceVariant)
+            )
+        }
+        val positive = dialog.getButton(DialogInterface.BUTTON_POSITIVE)
+        val normalColor = positive?.textColors
+        deleteAfter.setOnCheckedChangeListener { _, checked ->
+            positive?.text = getString(
+                if (checked) R.string.export_dialog_export_delete else R.string.export_dialog_continue,
+            )
+            if (checked) positive?.setTextColor(activity.getColor(R.color.tawc_danger))
+            else normalColor?.let { positive?.setTextColor(it) }
+        }
     }
 
     private fun confirmUninstall(installation: Installation) {
@@ -226,7 +295,9 @@ class DistroInfoView(private val activity: AppCompatActivity) {
      */
     private fun stateRow(installation: Installation): LinearLayout {
         val op = when (installation.state) {
-            Installation.State.INSTALLING -> "install"
+            // An import is an install variant with its own op.
+            Installation.State.INSTALLING ->
+                if (OperationsRegistry.get("import:${installation.id}") != null) "import" else "install"
             Installation.State.UNINSTALLING -> "uninstall"
             else -> null
         }

@@ -36,6 +36,9 @@ if [ "$DO_BUILD" -eq 1 ]; then
 fi
 
 APK="$ROOT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+# shellcheck source=lib/tawc-package.sh
+source "$ROOT_DIR/scripts/lib/tawc-package.sh"
+PKG="$TAWC_PACKAGE"
 [ -f "$APK" ] || { echo "ERROR: missing $APK (drop --no-build?)" >&2; exit 1; }
 
 apk_sha() {
@@ -44,7 +47,7 @@ apk_sha() {
 
 installed_apk_sha() {
     local path
-    path=$(adb shell pm path me.phie.tawc 2>/dev/null \
+    path=$(adb shell pm path "$PKG" 2>/dev/null \
         | tr -d '\r' \
         | sed -n 's/^package://p' \
         | head -n1)
@@ -65,6 +68,6 @@ fi
 
 if [ "$DO_LAUNCH" -eq 1 ]; then
     echo "=== Launching MainActivity ==="
-    adb shell am force-stop me.phie.tawc
-    adb shell am start -n me.phie.tawc/.MainActivity >/dev/null
+    adb shell am force-stop "$PKG"
+    adb shell am start -n "$PKG/me.phie.tawc.MainActivity" >/dev/null
 fi

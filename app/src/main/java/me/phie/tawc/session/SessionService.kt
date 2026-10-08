@@ -160,11 +160,8 @@ class SessionService : Service() {
         }
     }
 
-    // A pending terminal shell (nobody typed into it yet) holds nothing
-    // on purpose and has no children, so skipping its pid is enough.
     private fun countGuests(): Int = try {
-        ProcessScanner.scan(this, InstallationStore(this).list(), TerminalSessions.pendingPids())
-            .processes.size
+        ProcessScanner.scan(this, InstallationStore(this).list()).processes.size
     } catch (t: Throwable) {
         Log.w(TAG, "stray scan failed", t)
         0

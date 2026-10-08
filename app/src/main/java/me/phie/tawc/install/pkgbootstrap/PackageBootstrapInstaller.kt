@@ -323,9 +323,10 @@ internal class PackageBootstrapInstaller(
         // POSIX sh and runs under ash.
         writeScript(File(usrBin, "bash"), "#!/bin/sh\nexec /bin/busybox sh \"\$@\"\n")
 
-        // /usr/bin/env shim: the spawn prefix is `/usr/bin/env -i -C
-        // /root KEY=VAL… prog…` and busybox env lacks GNU's -C. Handle
-        // exactly the flags the prefix uses, then delegate.
+        // /usr/bin/env shim: the spawn prefix is `/usr/bin/env -i
+        // KEY=VAL… prog…` (tawcroot no longer passes GNU's -C, which
+        // busybox env lacks; the shim still takes it). Handle exactly
+        // those flags, then delegate.
         writeScript(File(usrBin, "env"), """
             #!/bin/sh
             # GNU-env shim over busybox env for the bootstrap workspace:

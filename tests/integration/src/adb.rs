@@ -775,14 +775,15 @@ pub fn session_exit() -> io::Result<Output> {
     broker_action("session-exit", &[])
 }
 
-/// Put the home screen on `pane` (`terminal` / `apps`) for the test
-/// install, without the IME (notes/exec-broker.md `home-pane`).
-pub fn home_pane(pane: &str) -> io::Result<Output> {
+/// Put the test install's home on `tab`: `apps`, `new` (a new terminal
+/// tab) or a terminal tab index (notes/exec-broker.md `home-tab`).
+pub fn home_tab(tab: &str) -> io::Result<Output> {
     let install_id = crate::install_id();
-    broker_action("home-pane", &[("pane", pane), ("installId", &install_id)])
+    broker_action("home-tab", &[("tab", tab), ("installId", &install_id)])
 }
 
-/// The test install's terminal: `pending`, `inUse:<n>` or `none`.
+/// The test install's terminal tabs and home selection:
+/// `tabs:<n> selected:<apps|i|none>` (`none`: its home isn't showing).
 pub fn terminal_state() -> io::Result<String> {
     let install_id = crate::install_id();
     let output = broker_action("terminal-state", &[("installId", &install_id)])?;
@@ -828,7 +829,10 @@ pub fn json_str(json: &str, key: &str) -> Option<String> {
 
 /// Whether the session foreground service is up.
 pub fn session_service_running() -> io::Result<bool> {
-    let output = shell("dumpsys activity services me.phie.tawc/.session.SessionService")?;
+    let output = shell(&format!(
+        "dumpsys activity services {}/me.phie.tawc.session.SessionService",
+        crate::app_package()
+    ))?;
     Ok(String::from_utf8_lossy(&output.stdout).contains("ServiceRecord"))
 }
 
@@ -982,6 +986,28 @@ pub fn set_entry_hidden(entry_id: &str, hidden: bool) -> io::Result<Output> {
         "set-entry-hidden",
         &[("installId", &id), ("entryId", entry_id), ("hidden", hidden)],
     )
+}
+
+/// Every icon name in the standing install via the debug
+/// `launcher-icons` broker action: the raw `[{name, user}]` JSON.
+pub fn launcher_icons() -> io::Result<String> {
+    let id = crate::install_id();
+    let output = broker_action("launcher-icons", &[("installId", &id)])?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// The PNG path an `Icon=` value resolves to in the standing install
+/// (`launcher-resolve-icon`), empty if none.
+pub fn launcher_resolve_icon(value: &str) -> io::Result<String> {
+    let id = crate::install_id();
+    let output = broker_action("launcher-resolve-icon", &[("installId", &id), ("value", value)])?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "launcher-resolve-icon failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 // Common Android keycodes (used with [ic_send_key_event]).

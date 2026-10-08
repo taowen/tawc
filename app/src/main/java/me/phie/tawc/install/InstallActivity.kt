@@ -5,9 +5,7 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
-import me.phie.tawc.HomePane
 import me.phie.tawc.OpenDistro
-import me.phie.tawc.Settings
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -19,6 +17,10 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.color.MaterialColors
 import me.phie.tawc.R
@@ -100,9 +102,9 @@ class InstallActivity : AppCompatActivity() {
     private var useCacheProxy: Boolean? = null
     private lateinit var cacheProxyCheckbox: CheckBox
 
-    /** ando (notes/ando.md) toggle. Off by default, shown for all
+    /** ando (notes/ando.md) toggle. On by default, shown for all
      *  methods; persisted across rotations. */
-    private var andoEnabled: Boolean = false
+    private var andoEnabled: Boolean = true
 
     private lateinit var formScroll: ScrollView
     private lateinit var formSection: LinearLayout
@@ -120,6 +122,11 @@ class InstallActivity : AppCompatActivity() {
      */
     private var resolvedId: String? = null
 
+    /** A started import replaces this form, like a started install. */
+    private val importLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) { if (it.resultCode == RESULT_OK) finish() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         selectedMethod = savedInstanceState?.getString(KEY_METHOD)
@@ -135,7 +142,7 @@ class InstallActivity : AppCompatActivity() {
             me.phie.tawc.BuildConfig.DEBUG -> true
             else -> false
         }
-        andoEnabled = savedInstanceState?.getBoolean(KEY_ANDO) == true
+        andoEnabled = savedInstanceState?.getBoolean(KEY_ANDO) ?: true
         pendingBinds.clear()
         savedInstanceState?.getString(KEY_BINDS)?.let { savedBinds ->
             pendingBinds.addAll(
@@ -189,6 +196,14 @@ class InstallActivity : AppCompatActivity() {
         // the service-level gate refuse the install if the user taps
         // anyway.
         val available = DistroRegistry.availableForHost()
+
+        // Import sits on top: the other way to get a new distro.
+        s.addView(
+            tonalButton(getString(R.string.action_import_tarball)) {
+                importLauncher.launch(Intent(this, ImportActivity::class.java))
+            },
+            verticalLp(MATCH_PARENT, WRAP_CONTENT, bottomMargin = pad),
+        )
 
         s.addView(buildDistroPicker(available), verticalLp(MATCH_PARENT, WRAP_CONTENT, bottomMargin = pad))
 
@@ -503,18 +518,11 @@ class InstallActivity : AppCompatActivity() {
      */
     private fun revalidate() {
         if (!::labelField.isInitialized) return
-        val rawLabel = labelField.text.toString().trim()
-        val slug = if (rawLabel.isEmpty()) null else Installation.slugifyLabel(rawLabel)
-        val collides = slug != null && store.installationDir(slug).exists()
-        resolvedId = slug?.takeUnless { collides }
+        val check = LabelValidation.check(this, store, labelField.text.toString())
+        resolvedId = check.id
 
         if (::locationLabel.isInitialized) {
-            locationLabel.text = when {
-                rawLabel.isEmpty() -> getString(R.string.install_label_empty)
-                slug == null -> getString(R.string.install_label_invalid)
-                collides -> getString(R.string.install_already_installed_at, store.installationDir(slug).absolutePath)
-                else -> store.installationDir(slug).absolutePath
-            }
+            locationLabel.text = check.message
             val colorAttr = if (resolvedId == null) {
                 com.google.android.material.R.attr.colorError
             } else {
@@ -565,7 +573,7 @@ class InstallActivity : AppCompatActivity() {
     }
 
     /**
-     * ando toggle ([buildAndoToggleRow], notes/ando.md). Off by
+     * ando toggle ([buildAndoToggleRow], notes/ando.md). On by
      * default; drives [andoEnabled], passed to the service by
      * [beginInstall]. Shown for every method and build type — unlike
      * binds, ando applies to all install methods.
@@ -600,7 +608,6 @@ class InstallActivity : AppCompatActivity() {
         container.addView(title, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
 
         methodGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
-        val rootAvailable = Su.rootAvailable()
 
         // Use generateViewId() rather than hand-picked constants —
         // any literal we'd reach for in the AAPT range collides with
@@ -619,9 +626,6 @@ class InstallActivity : AppCompatActivity() {
                     ChrootMethod.KEY -> getString(R.string.install_method_chroot_requires_root)
                     else -> key
                 }
-                // Chroot greys out on un-rooted devices so the
-                // limitation is visible at the form level.
-                if (key == ChrootMethod.KEY) isEnabled = rootAvailable
             }
             methodGroup.addView(rb, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         }
@@ -642,22 +646,31 @@ class InstallActivity : AppCompatActivity() {
     }
 
     private fun beginInstall() {
-        // Only the chroot path needs `su`. Proot/tawcroot are rootless
-        // by definition, so a missing-root device fails this check only
-        // if the user picked chroot anyway.
+        // Only chroot needs `su`, so only probe it (and trigger the
+        // Magisk prompt) once chroot is actually picked. The probe
+        // blocks until the user answers, so keep it off the UI thread.
         val methodKey = selectedMethod ?: EnabledMethods.keys.firstOrNull() ?: TawcrootMethod.KEY
-        if (methodKey == ChrootMethod.KEY && !Su.rootAvailable()) {
-            // We don't have a panel anymore; surface as a quick
-            // toast-style status on the form. Service-level gate would
-            // also refuse, but a fail-fast at the form level avoids the
-            // service start.
-            android.widget.Toast.makeText(
-                this,
-                getString(R.string.install_root_unavailable),
-                android.widget.Toast.LENGTH_LONG,
-            ).show()
+        if (methodKey != ChrootMethod.KEY) {
+            startInstall(methodKey)
             return
         }
+        installButton.isEnabled = false
+        lifecycleScope.launch {
+            val root = withContext(Dispatchers.IO) { Su.rootAvailable() }
+            installButton.isEnabled = resolvedId != null
+            if (root) {
+                startInstall(methodKey)
+            } else {
+                android.widget.Toast.makeText(
+                    this@InstallActivity,
+                    getString(R.string.install_root_unavailable),
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
+    private fun startInstall(methodKey: String) {
         val targetId = resolvedId ?: return  // button disabled when null
 
         val distroKey = selectedDistro
@@ -682,9 +695,8 @@ class InstallActivity : AppCompatActivity() {
                 selectedBootstrap,
             )
             // The new slot becomes the open distro so home shows its
-            // progress rather than the previous one, then its prompt.
+            // progress rather than the previous one, then its apps.
             OpenDistro.set(targetId)
-            Settings.homePane = HomePane.TERMINAL
             startActivity(LogScreenActivity.intentFor(this, "install:$targetId"))
             finish()
         }

@@ -46,10 +46,9 @@ object ProcessScanner {
     /**
      * Scan `/proc` and classify every guest process found against the
      * given [installs]. The [context] is used to derive the
-     * `<distros>` parent dir for orphan detection. Pids in [exclude]
-     * are left out (the session service's pending terminal shells).
+     * `<distros>` parent dir for orphan detection.
      */
-    fun scan(context: Context, installs: List<Installation>, exclude: Set<Int> = emptySet()): ScanResult {
+    fun scan(context: Context, installs: List<Installation>): ScanResult {
         val store = InstallationStore(context)
         val pairs: List<Pair<String, String>> = installs.map { inst ->
             canonicalize(store.rootfsDir(inst.id).absolutePath) to inst.id
@@ -79,7 +78,6 @@ object ProcessScanner {
         // Defensive dedupe; prefer app-uid records (killable without su).
         val seen = HashSet<Int>(appProcs.size + suProcs.size)
         val merged = ArrayList<ProcessInfo>(appProcs.size + suProcs.size)
-        seen.addAll(exclude)
         for (p in appProcs) if (seen.add(p.pid)) merged += p
         for (p in suProcs) if (seen.add(p.pid)) merged += p
         merged.sortBy { it.pid }

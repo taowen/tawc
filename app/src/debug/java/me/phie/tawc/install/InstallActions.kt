@@ -18,6 +18,8 @@ import me.phie.tawc.ops.LogScreenActivity
 import me.phie.tawc.ops.Operation
 import me.phie.tawc.ops.OperationStage
 import me.phie.tawc.ops.OperationsRegistry
+import java.io.IOException
+import java.io.OutputStream
 
 /**
  * Broker actions for install / uninstall, registered from
@@ -45,6 +47,8 @@ internal object InstallActions {
     fun registerAll() {
         ActionRegistry.register("install", InstallAction)
         ActionRegistry.register("uninstall", UninstallAction)
+        ActionRegistry.register("export", ExportAction)
+        ActionRegistry.register("import", ImportAction)
     }
 
     private object InstallAction : BrokerAction {
@@ -106,6 +110,61 @@ internal object InstallActions {
     }
 
     /**
+     * `export --arg id=<id> [--arg deleteAfter=true]`: the archive goes
+     * to stdout (so redirect it: `> out.tawc.tar.zst`), the op log to
+     * stderr. `failAfterBytes=<n>` makes the output throw after n bytes
+     * (test hook for the failed-export paths).
+     */
+    private object ExportAction : BrokerAction {
+        override fun run(args: Map<String, String>, ctx: ActionContext): Int {
+            val id = args["id"] ?: return ctx.fail("export: --arg id=<id> is required")
+            if (!Installation.isValidId(id)) return ctx.fail("export: invalid id '$id'")
+            val deleteAfter = args["deleteAfter"]?.let {
+                it.toBooleanStrictOrNull() ?: return ctx.fail("export: invalid boolean for deleteAfter '$it'")
+            } ?: false
+            val failAfter = args["failAfterBytes"]?.let {
+                it.toLongOrNull() ?: return ctx.fail("export: invalid failAfterBytes '$it'")
+            }
+            val out = if (failAfter != null) FailingOutputStream(ctx.stdout, failAfter) else ctx.stdout
+            val opId = "export:$id"
+            tryOpenLogScreen(ctx.appContext, opId)
+            ctx.err("[action] export id=$id deleteAfter=$deleteAfter" + (failAfter?.let { " failAfterBytes=$it" } ?: ""))
+            InstallationService.startExport(ctx.appContext, id, null, JobStreams.put(out), deleteAfter)
+            return mirrorOperation(opId, ctx, ctx.err)
+        }
+    }
+
+    /** `import --arg id=<new id> [--arg label=<label>] < archive`. */
+    private object ImportAction : BrokerAction {
+        override val readsStdin: Boolean get() = true
+
+        override fun run(args: Map<String, String>, ctx: ActionContext): Int {
+            val id = args["id"] ?: return ctx.fail("import: --arg id=<id> is required")
+            if (!Installation.isValidId(id)) return ctx.fail("import: invalid id '$id'")
+            val label = args["label"]
+            val opId = "import:$id"
+            tryOpenLogScreen(ctx.appContext, opId)
+            ctx.out("[action] import id=$id label=${label ?: "(from archive)"}")
+            InstallationService.startImport(ctx.appContext, id, label, null, JobStreams.put(ctx.stdin!!))
+            return mirrorOperation(opId, ctx)
+        }
+    }
+
+    private class FailingOutputStream(private val inner: OutputStream, private var left: Long) : OutputStream() {
+        override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            if (len > left) throw IOException("test hook: injected write failure")
+            left -= len
+            inner.write(b, off, len)
+        }
+
+        override fun flush() = inner.flush()
+
+        override fun close() = inner.close()
+    }
+
+    /**
      * Wait for [opId] to appear in [OperationsRegistry] (with a short
      * timeout to catch validation rejects that never produce an op),
      * then collect [Operation.progress] + [Operation.log] until either
@@ -117,7 +176,11 @@ internal object InstallActions {
      * cleanup flow run; we keep mirroring until terminal so the host
      * sees the failure status and the cleanup log lines.
      */
-    private fun mirrorOperation(opId: String, ctx: ActionContext): Int = runBlocking {
+    private fun mirrorOperation(
+        opId: String,
+        ctx: ActionContext,
+        logSink: (String) -> Unit = ctx.out,
+    ): Int = runBlocking {
         // The service's startInstall/startUninstall is dispatched via
         // startForegroundService -> onStartCommand on the main looper,
         // so the registry entry appears asynchronously. Wait briefly.
@@ -139,7 +202,7 @@ internal object InstallActions {
 
         coroutineScope {
             val logJob = launch {
-                op.log.collect { line -> ctx.out(line) }
+                op.log.collect { line -> logSink(line) }
             }
             val cancelJob = launch {
                 while (true) {

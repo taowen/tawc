@@ -1,6 +1,6 @@
 //! Calloop-based event loop for the compositor.
 //!
-//! Integrates the Wayland display, client listener, frame timer and
+//! Integrates the Wayland display, client listener, vsync frame clock and
 //! per-Activity surface lifecycle into a single calloop event loop.
 //! All `OutputHost` mutation happens here on the compositor thread —
 //! JNI threads send events through channels.
@@ -23,7 +23,7 @@ use smithay::input::touch::{DownEvent, MotionEvent, UpEvent};
 use smithay::reexports::calloop::channel::{Channel, Event as ChannelEvent};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction};
+use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 use smithay::wayland::compositor::{
@@ -36,6 +36,7 @@ use crate::host::{ActivityId, OutputHost, SurfaceEvent};
 use crate::input::{PointerAxisSource, PointerEvent, TouchEvent};
 use crate::scale::OutputScale;
 use crate::text_input::TextInputEvent;
+use crate::vsync::VsyncEvent;
 use crate::clipboard::ClipboardEvent;
 
 use crate::compositor::{ClientState, TawcState};
@@ -498,7 +499,7 @@ pub fn run(
             }
         }
 
-        // Flush immediately so clients see events without waiting for frame timer
+        // Flush immediately so clients see events without waiting for a frame
         if let Err(e) = data.display_handle.flush_clients() {
             error!("flush_clients error after touch: {}", e);
         }
@@ -678,7 +679,7 @@ pub fn run(
                         ) {
                             Ok(()) => {
                                 // Flush so the owner sees the send request
-                                // without waiting for the frame timer.
+                                // without waiting for a frame tick.
                                 if let Err(e) = data.display_handle.flush_clients() {
                                     error!("flush_clients error after clipboard request: {}", e);
                                 }
@@ -762,7 +763,7 @@ pub fn run(
                 .collect::<Vec<_>>()
                 .join(",");
             let payload = format!(
-                "clients={} toplevels={} surfaces_wlegl={} surfaces_shm={} frames={} rendered_toplevels={} hosts={} bound_hosts={} xwayland_running={} xwayland_pids={} x11_surfaces={} x11_surfaces_with_host={} wlegl_create_buffer_total={} wlegl_import_texture_total={} wlegl_buffer_destroy_total={} last_wlegl_width={} last_wlegl_height={} last_wlegl_format={} output_scale={:.2} output_physical_w={} output_physical_h={} output_logical_w={} output_logical_h={} pointer_present={} pointer_x={:.2} pointer_y={:.2} pointer_focus={} cursor_shape={}",
+                "clients={} toplevels={} surfaces_wlegl={} surfaces_shm={} frames={} rendered_toplevels={} hosts={} bound_hosts={} xwayland_running={} xwayland_pids={} x11_surfaces={} x11_surfaces_with_host={} wlegl_create_buffer_total={} wlegl_import_texture_total={} wlegl_buffer_destroy_total={} last_wlegl_width={} last_wlegl_height={} last_wlegl_format={} output_scale={:.2} output_physical_w={} output_physical_h={} output_logical_w={} output_logical_h={} pointer_present={} pointer_x={:.2} pointer_y={:.2} pointer_focus={} cursor_shape={} vsync_ticks={} last_vsync_ns={} vsync_period_ns={} tick_latency_max_ns={} output_refresh_mhz={}",
                 clients,
                 toplevel_count(data),
                 surfaces_wlegl,
@@ -795,6 +796,11 @@ pub fn run(
                     "no"
                 },
                 crate::cursor::debug_shape(data),
+                data.frame_clock.ticks,
+                data.frame_clock.last_vsync_ns,
+                data.frame_clock.measured_period_ns,
+                data.frame_clock.tick_latency_max_ns,
+                data.output_refresh_mhz,
             );
             let _ = response.send(payload);
         }
@@ -812,123 +818,27 @@ pub fn run(
         }
     })?;
 
-    // --- Source 9: Frame timer (~60 fps) ---
-    // This drives the render loop. Each tick:
-    //   1. Update pending XWayland host associations
-    //   2. Render one frame for the visible bound host
-    //   3. Send frame-done callbacks
-    //   4. Flush outgoing events to clients
-    //   5. Clean up dead toplevels
-    //
-    // Note: incoming client requests are handled by the wayland fd source
-    // (Source 1) — no separate dispatch_clients here. We do still flush at
-    // the end of each tick so frame callbacks reach clients on idle ticks
-    // (the fd-source dispatcher only flushes on incoming requests).
-    let frame_timer = Timer::from_duration(Duration::from_millis(16));
-    loop_handle.insert_source(frame_timer, move |_, _, data: &mut TawcState| {
-        crate::xwayland::service_pending(&data.loop_handle(), data);
-
-        // New toplevels or dead toplevels need a repaint and focus update.
-        // Consume the flag here so cleanup (step 4) can set it again for the
-        // next frame. Both render and focus update use the local variable.
-        let toplevels_changed = data.toplevels_changed;
-        if toplevels_changed {
-            data.toplevels_changed = false;
-            data.needs_render = true;
+    // --- Source 9: Vsync ticks ---
+    // Armed on demand by `after_dispatch`; see vsync.rs. Each tick renders
+    // the visible host and sends frame callbacks. Housekeeping lives in
+    // `after_dispatch` and the slow timer below.
+    let (vsync, vsync_channel) = crate::vsync::Vsync::spawn()?;
+    loop_handle.insert_source(vsync_channel, |event, _, data: &mut TawcState| {
+        if let ChannelEvent::Msg(VsyncEvent { time_ns }) = event {
+            frame_tick(data, time_ns);
         }
-
-        // 1. Catch up on XWayland surface ↔ host associations that can land
-        // after the first wl_surface commit.
-        if crate::xwayland::associate_pending_x11_surfaces(data) {
-            data.needs_render = true;
-        }
-        // Surface commits use Smithay's renderer state now. The actual texture
-        // import happens when Smithay creates render elements; this flag only
-        // wakes the render loop for new buffers, damage, viewport changes, or
-        // re-attaches of an already-imported wl_buffer.
-        if data.buffer_commit_pending {
-            data.buffer_commit_pending = false;
-            data.needs_render = true;
-        }
-
-        // 2. Render only the foreground bound host. Background hosts neither
-        // render nor get frame callbacks; hidden commits can mark the
-        // compositor dirty without triggering hidden texture imports.
-        if data.needs_render {
-            if render_visible_host(data) {
-                data.needs_render = false;
-            }
-        }
-
-        // 3. Frame callbacks for the visible host only. They are still sent
-        // on idle ticks so visible clients can submit new buffers even when
-        // we skipped rendering.
-        let time = data.start_time.elapsed().as_millis() as u32;
-        render::send_frame_callbacks(data, time);
-
-        // Flush so frame callbacks reach the client even on idle ticks. The
-        // fd-source dispatcher only flushes on incoming requests; without an
-        // explicit flush here clients wait forever for a callback that's
-        // already been written to their socket-side queue but not posted.
-        // Smithay's merge_into-driven wl_buffer.release events also flow out
-        // here (they're queued during dispatch_clients in the fd source).
-        if let Err(e) = data.display_handle.flush_clients() {
-            error!("flush_clients error in frame timer: {}", e);
-        }
-
-        // 4. Cleanup. Smithay owns xdg toplevel lifetime and calls our
-        // `toplevel_destroyed` handler; this timer only prunes stale desktop
-        // windows/assignments for surfaces that disappeared outside that path.
-        data.desktop.retain_live_windows();
-        data.sync_desktop_hosts();
-
-        // Cap the rendered-toplevels counter at the live count: once a host
-        // has been torn down, no further frames render here, and otherwise
-        // last_rendered_toplevels would stay frozen at its peak value (so
-        // waiters for "compositor went idle" — assert_compositor_clean,
-        // wait_for_rendered_toplevels(0) — never see it return to 0).
-        let live_toplevels = toplevel_count(data);
-        if data.last_rendered_toplevels > live_toplevels {
-            data.last_rendered_toplevels = live_toplevels;
-        }
-
-        data.desktop.retain_live_assignments();
-
-        data.popup_manager.cleanup();
-        if data
-            .active_popup_grab
-            .as_ref()
-            .is_some_and(|grab| grab.has_ended())
-        {
-            data.active_popup_grab = None;
-        }
-        let focused_text_surface = data.text_input_state.focused_surface.clone();
-        let focused_activity_id = focused_text_surface
-            .as_ref()
-            .and_then(|surface| data.desktop.host_for_surface(surface));
-        data.text_input_state.cleanup(focused_activity_id.as_ref());
-
-        // Update keyboard and text input focus only when toplevels changed.
-        // Both focuses move together: a dead focused surface would otherwise
-        // leave the keyboard pointed at it (events go nowhere) until the
-        // next FocusChanged event arrives.
-        if toplevels_changed {
-            crate::update_toplevel_count_from_native(client_toplevel_count(data));
-            let new_focus = data
-                .desktop_visible_host_id()
-                .and_then(|host| data.first_toplevel_for_host(&host));
-            data.set_input_focus(new_focus.as_ref());
-        }
-
-        check_idle(data);
-
-        // 5. Flush (after focus updates so enter/leave events are sent immediately)
-        if let Err(e) = data.display_handle.flush_clients() {
-            error!("flush_clients error: {}", e);
-        }
-
-        TimeoutAction::ToDuration(Duration::from_millis(16))
     })?;
+
+    // --- Source 10: Slow housekeeping timer ---
+    // Idle auto-stop and Xwayland start retries are time-based, so they
+    // can't wait for an event.
+    loop_handle.insert_source(
+        Timer::from_duration(HOUSEKEEPING_PERIOD),
+        |_, _, data: &mut TawcState| {
+            check_idle(data);
+            TimeoutAction::ToDuration(HOUSEKEEPING_PERIOD)
+        },
+    )?;
 
     // Spawn Xwayland (best-effort: failure logs and continues — the
     // Wayland-only subset of the compositor still works without it).
@@ -962,15 +872,19 @@ pub fn run(
         Ok(PostAction::Continue)
     })?;
 
+    *LOOP_SIGNAL.lock().unwrap() = Some(event_loop.get_signal());
     info!("Entering calloop event loop");
 
     let mut loop_result: Result<(), Box<dyn std::error::Error>> = Ok(());
     while running.load(std::sync::atomic::Ordering::SeqCst) {
-        if let Err(e) = event_loop.dispatch(Some(Duration::from_millis(16)), &mut state) {
+        if let Err(e) = event_loop.dispatch(None, &mut state) {
             loop_result = Err(e.into());
             break;
         }
+        after_dispatch(&mut state, &vsync);
     }
+    *LOOP_SIGNAL.lock().unwrap() = None;
+    drop(vsync);
 
     // Dropping `event_loop` does not reliably drop its sources: any
     // callback still holding a LoopHandle keeps the source list alive in
@@ -986,6 +900,131 @@ pub fn run(
     drop(state);
     drop(event_loop);
     loop_result
+}
+
+/// Wakes the running loop so it re-checks `running`. Set while
+/// `run` is inside its dispatch loop.
+static LOOP_SIGNAL: std::sync::Mutex<Option<LoopSignal>> = std::sync::Mutex::new(None);
+
+/// Wake the event loop from another thread (compositor stop).
+pub fn wake() {
+    if let Some(signal) = LOOP_SIGNAL.lock().unwrap().as_ref() {
+        signal.wakeup();
+    }
+}
+
+/// Period of the slow timer for time-based housekeeping.
+const HOUSEKEEPING_PERIOD: Duration = Duration::from_millis(250);
+
+/// Event-driven housekeeping, run after every dispatch so code that sets
+/// `needs_render` or `toplevels_changed` doesn't have to arm anything.
+/// Ends by arming a vsync tick when there's a frame to draw.
+fn after_dispatch(data: &mut TawcState, vsync: &crate::vsync::Vsync) {
+    crate::xwayland::service_pending(&data.loop_handle(), data);
+
+    // Catch up on XWayland surface ↔ host associations that can land
+    // after the first wl_surface commit.
+    if crate::xwayland::associate_pending_x11_surfaces(data) {
+        data.needs_render = true;
+    }
+
+    // Smithay owns xdg toplevel lifetime and calls our `toplevel_destroyed`
+    // handler; this only prunes stale desktop windows/assignments for
+    // surfaces that disappeared outside that path.
+    data.desktop.retain_live_windows();
+    data.sync_desktop_hosts();
+
+    // Cap the rendered-toplevels counter at the live count: once a host
+    // has been torn down, no further frames render, and otherwise
+    // last_rendered_toplevels would stay frozen at its peak value (so
+    // waiters for "compositor went idle" — assert_compositor_clean,
+    // wait_for_rendered_toplevels(0) — never see it return to 0).
+    let live_toplevels = toplevel_count(data);
+    if data.last_rendered_toplevels > live_toplevels {
+        data.last_rendered_toplevels = live_toplevels;
+    }
+
+    data.desktop.retain_live_assignments();
+
+    data.popup_manager.cleanup();
+    if data
+        .active_popup_grab
+        .as_ref()
+        .is_some_and(|grab| grab.has_ended())
+    {
+        data.active_popup_grab = None;
+    }
+    let focused_text_surface = data.text_input_state.focused_surface.clone();
+    let focused_activity_id = focused_text_surface
+        .as_ref()
+        .and_then(|surface| data.desktop.host_for_surface(surface));
+    data.text_input_state.cleanup(focused_activity_id.as_ref());
+
+    // New or dead toplevels need a repaint and a focus update. Both
+    // focuses move together: a dead focused surface would otherwise leave
+    // the keyboard pointed at it until the next FocusChanged event.
+    if std::mem::take(&mut data.toplevels_changed) {
+        data.needs_render = true;
+        crate::update_toplevel_count_from_native(client_toplevel_count(data));
+        let new_focus = data
+            .desktop_visible_host_id()
+            .and_then(|host| data.first_toplevel_for_host(&host));
+        data.set_input_focus(new_focus.as_ref());
+    }
+
+    // Focus changes above queue enter/leave events.
+    if let Err(e) = data.display_handle.flush_clients() {
+        error!("flush_clients error: {}", e);
+    }
+
+    if (data.needs_render || data.frame_callbacks_pending) && visible_host_renderable(data) {
+        vsync.request();
+    }
+}
+
+/// One vsync tick: send frame callbacks, then render the visible host if
+/// dirty (which answers presentation feedback), all stamped with the vsync
+/// time.
+fn frame_tick(data: &mut TawcState, time_ns: i64) {
+    data.frame_clock.tick(time_ns, data.output_refresh_period());
+    let time = Duration::from_nanos(time_ns.max(0) as u64);
+
+    // Frame callbacks first, flushed before rendering, so clients get the
+    // whole period to draw the next frame instead of losing render+swap
+    // time. Commits they send in reply are only dispatched after this
+    // tick, so this frame's content can't change under the render. Sent
+    // even when nothing renders, so visible clients that committed without
+    // new content keep animating.
+    data.frame_callbacks_pending = false;
+    render::send_frame_callbacks(data, time);
+    if let Err(e) = data.display_handle.flush_clients() {
+        error!("flush_clients error in frame tick: {}", e);
+    }
+
+    // Only the foreground bound host renders. Background hosts neither
+    // render nor get frame callbacks; hidden commits can mark the
+    // compositor dirty without triggering hidden texture imports.
+    if data.needs_render && render_visible_host(data) {
+        data.needs_render = false;
+        // Presentation feedback and wl_buffer.release from the render.
+        if let Err(e) = data.display_handle.flush_clients() {
+            error!("flush_clients error in frame tick: {}", e);
+        }
+    }
+    data.frame_clock.tick_done(monotonic_now().as_nanos() as i64);
+}
+
+fn monotonic_now() -> Duration {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: clock_gettime only writes the timespec.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+}
+
+fn visible_host_renderable(data: &TawcState) -> bool {
+    data.desktop_visible_host_id()
+        .and_then(|id| data.hosts.get(&id))
+        .is_some_and(|host| host.egl_surface.is_some())
 }
 
 /// How long nothing may be connected before the compositor stops. Not
@@ -1051,6 +1090,14 @@ fn render_visible_host(data: &mut TawcState) -> bool {
     if rendered {
         data.frame_count += 1;
         data.last_rendered_toplevels = toplevel_count(data);
+        // Stamped with the last vsync: direct renders (host register and
+        // resize) happen between ticks, and their feedback must not wait
+        // for the next render.
+        let time = match data.frame_clock.last_vsync_ns {
+            0 => monotonic_now(),
+            ns => Duration::from_nanos(ns as u64),
+        };
+        render::report_presentation_feedback(data, time);
     }
     rendered
 }
@@ -1180,6 +1227,9 @@ fn handle_surface_event(
         }
         SurfaceEvent::OutputScaleChanged { scale } => {
             apply_output_scale(data, OutputScale::new(scale));
+        }
+        SurfaceEvent::OutputRefreshChanged { mhz } => {
+            data.set_output_refresh_mhz(mhz);
         }
         SurfaceEvent::XwaylandChanged { enabled } => {
             crate::xwayland::set_enabled(loop_handle, data, enabled);

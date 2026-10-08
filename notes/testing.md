@@ -56,6 +56,7 @@ prerequisites are. As of writing the modules are:
 | `settings`      | `cpu`       | Runtime settings coverage: output scale, configure-state policy, and GTK3 broken menus workaround. |
 | `tawcroot`      | n/a         | tawcroot device-side smokes (wraps the cleat-driven suite). |
 | `remote`        | n/a         | Remote access ([remote-access.md](remote-access.md)): inert before any start; the live-relay test (`ssh -J sshyeet.com` from the host, Stop hangs up) runs only with `TAWC_LIVE_RELAY=1` (`--cfg tawc_live_relay`, needs network on target and host). |
+| `distro_export` | n/a         | Distro export/import ([installation.md](installation.md) "Export / import"): link-store round trip, carried settings, quiesce, truncated archive, delete-after-export; custom distros (Alpine minirootfs + Debian LXC rootfs fetched through the proxy, re-export, re-packed export); a cross-package half imports into a side-by-side peer app id. Real proxy installs, so opt-in only: `TAWC_EXPORT_TESTS=1` (`--cfg tawc_export_tests`), plus `TAWC_EXPORT_PEER_PACKAGE=<id>` for the peer half (`--cfg tawc_export_peer`). |
 | `uninstall_wipe` | n/a        | Wipe-engine edge cases against a *fabricated* KB-scale slot (mount gate, su-retry ladder). Rooted target only. |
 
 **Persistent-state policy.** Integration tests must not mutate state
@@ -65,7 +66,9 @@ run script), no `appops` / permission flips, no writes to the standing
 install's metadata, no persisted-Settings changes (`test-init` resets
 in-memory state only). Fabricated throwaway slots (mkdir +
 metadata.json, KBs) that a test creates and removes itself are fine —
-`uninstall_wipe` is the pattern. The old `external_binds` lifecycle
+`uninstall_wipe` is the pattern. The one exception is the opt-in `distro_export`
+module (never in a default run), which installs and removes its own
+slots. The old `external_binds` lifecycle
 test violated all of this (multi-GB proxy install + persistent appop
 flips that broke the app for later tests when it died mid-run) and was
 deleted; accepted coverage gap, see

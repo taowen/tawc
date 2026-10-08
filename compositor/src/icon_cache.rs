@@ -14,7 +14,7 @@
 //! Symbolic icons (`<name>-symbolic.svg`) are a special case: they are
 //! a single near-black colour and would vanish on a dark background, and
 //! a cached PNG can't follow the app theme. They are rendered as a light
-//! glyph on a dark rounded tile, matching `ic_terminal_fallback`.
+//! glyph on a dark rounded tile, matching `ic_app_fallback`.
 //!
 //! The input is guest-controlled, so rendering is fenced: oversized
 //! sources are skipped, parse+render runs under `catch_unwind`, and a
@@ -38,13 +38,13 @@ const RENDER_PX: u32 = 192;
 /// stop being referenced and get pruned.
 const CACHE_FORMAT_VERSION: u32 = 1;
 
-/// Symbolic glyph size as a fraction of the tile, matching the margin
-/// `ic_terminal_fallback` draws its prompt at.
+/// Symbolic glyph size as a fraction of the tile, about the margin the
+/// fallback icons draw their glyphs at.
 const SYMBOLIC_GLYPH_SCALE: f32 = 0.6;
 
 /// Inset and corner radius of the symbolic backing tile, as fractions
-/// of [RENDER_PX]. Same proportions as `ic_terminal_fallback`'s rounded
-/// black square, so a themed symbolic icon and the fallback glyph read
+/// of [RENDER_PX]. Same proportions as `ic_app_fallback`'s rounded
+/// black square, so a themed symbolic icon and the fallback glyphs read
 /// as the same family.
 const SYMBOLIC_TILE_INSET: f32 = 1.0 / 24.0;
 const SYMBOLIC_TILE_RADIUS: f32 = 3.5 / 24.0;
@@ -190,8 +190,9 @@ fn cache_key(rel: &Path, meta: &std::fs::Metadata, symbolic: bool) -> String {
 
 /// Render [src] to a [RENDER_PX]² transparent PNG at [dst]: aspect
 /// preserved, centred, never upscaled past the square. Written to a
-/// per-process temp file and renamed, so a concurrent scan never sees a
-/// half-written PNG. None on any failure.
+/// per-call temp file and renamed, so a concurrent render of the same
+/// key (another scan, or picker cells on several threads) never sees or
+/// clobbers a half-written PNG. None on any failure.
 fn render_to(src: &Path, dst: &Path, symbolic: bool) -> Option<()> {
     let data = std::fs::read(src).ok()?;
     // usvg parses guest-supplied XML; a panic there would take the
@@ -206,7 +207,9 @@ fn render_to(src: &Path, dst: &Path, symbolic: bool) -> Option<()> {
     .ok()
     .flatten()?;
 
-    let tmp = dst.with_extension(format!("{}.tmp", std::process::id()));
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dst.with_extension(format!("{}-{seq}.tmp", std::process::id()));
     if pixmap.save_png(&tmp).is_err() {
         let _ = std::fs::remove_file(&tmp);
         return None;

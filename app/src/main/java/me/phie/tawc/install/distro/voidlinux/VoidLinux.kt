@@ -70,6 +70,8 @@ internal sealed class VoidLinux(
 
     final override fun installBasePackages(method: InstallationMethod, rootfs: String, log: (String) -> Unit) =
         VoidCommon.installBasePackages(method, rootfs, basePackages, log)
+
+    final override val upgradeCommand: String = VoidCommon.UPGRADE_COMMAND
 }
 
 internal object VoidLinuxX86_64 : VoidLinux(

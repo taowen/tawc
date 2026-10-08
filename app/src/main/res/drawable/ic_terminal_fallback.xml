@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Launcher-row fallback icon for Terminal=true entries with no usable
-     icon: rounded black rectangle around the same ">_" prompt glyph as
-     ic_terminal (the home-screen terminal button). Fixed colors on
+     icon: a black circle (the size of the built-ins' builtin_icon_bg)
+     around the same ">_" prompt glyph as ic_terminal. Fixed colors on
      purpose — it stands in for an app icon, not a themed control. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
@@ -10,7 +10,7 @@
     android:viewportHeight="24">
     <path
         android:fillColor="#FF000000"
-        android:pathData="M4.5,1 h15 a3.5,3.5 0 0 1 3.5,3.5 v15 a3.5,3.5 0 0 1 -3.5,3.5 h-15 a3.5,3.5 0 0 1 -3.5,-3.5 v-15 a3.5,3.5 0 0 1 3.5,-3.5 z"/>
+        android:pathData="M12,2 a10,10 0 1,0 0.001,0 z"/>
     <group
         android:pivotX="12"
         android:pivotY="12"

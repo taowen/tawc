@@ -23,11 +23,11 @@ object Settings {
     private const val KEY_GRAPHICS_BACKEND = "graphics_backend"
     private const val KEY_TINT_BUFFERS_BY_TYPE = "tint_buffers_by_type"
     private const val KEY_OUTPUT_SCALE = "output_scale"
+    private const val KEY_OUTPUT_REFRESH_MHZ = "output_refresh_mhz"
     private const val KEY_TERMINAL_SCALE = "terminal_scale"
     private const val KEY_XWAYLAND = "xwayland"
     private const val KEY_GTK3_BROKEN_MENUS_WORKAROUND = "gtk3_broken_menus_workaround"
     private const val KEY_OPEN_DISTRO = "open_distro"
-    private const val KEY_HOME_PANE = "home_pane"
     private const val KEY_REMOTE_RELAY = "remote_relay"
     private const val KEY_REMOTE_IDLE_CLOSE = "remote_idle_close"
     private const val KEY_REMOTE_MODE = "remote_mode"
@@ -56,11 +56,11 @@ object Settings {
         var graphicsBackend: GraphicsBackend
         var tintBuffersByType: Boolean
         var outputScale: Float
+        var outputRefreshMhz: Int
         var terminalScale: Float
         var xwayland: Boolean
         var gtk3BrokenMenusWorkaround: Boolean
         var openDistroId: String?
-        var homePane: HomePane
         var remoteRelay: String
         var remoteIdleClose: Boolean
         var remoteMode: String
@@ -91,6 +91,11 @@ object Settings {
             set(value) {
                 prefs.edit { putFloat(KEY_OUTPUT_SCALE, snapOutputScale(value)) }
             }
+        override var outputRefreshMhz: Int
+            get() = prefs.getInt(KEY_OUTPUT_REFRESH_MHZ, 0)
+            set(value) {
+                prefs.edit { putInt(KEY_OUTPUT_REFRESH_MHZ, value) }
+            }
         override var terminalScale: Float
             get() = snapTerminalScale(prefs.getFloat(KEY_TERMINAL_SCALE, DEFAULT_TERMINAL_SCALE))
             set(value) {
@@ -113,12 +118,6 @@ object Settings {
             get() = prefs.getString(KEY_OPEN_DISTRO, null)
             set(value) {
                 prefs.edit { if (value == null) remove(KEY_OPEN_DISTRO) else putString(KEY_OPEN_DISTRO, value) }
-            }
-
-        override var homePane: HomePane
-            get() = HomePane.fromKey(prefs.getString(KEY_HOME_PANE, null))
-            set(value) {
-                prefs.edit { putString(KEY_HOME_PANE, value.key) }
             }
 
         override var remoteRelay: String
@@ -169,12 +168,12 @@ object Settings {
         @Volatile override var tintBuffersByType: Boolean = DEFAULT_TINT_BUFFERS_BY_TYPE
         @Volatile override var outputScale: Float = DEFAULT_OUTPUT_SCALE
             set(value) { field = snapOutputScale(value) }
+        @Volatile override var outputRefreshMhz: Int = 0
         @Volatile override var terminalScale: Float = DEFAULT_TERMINAL_SCALE
             set(value) { field = snapTerminalScale(value) }
         @Volatile override var xwayland: Boolean = true
         @Volatile override var gtk3BrokenMenusWorkaround: Boolean = true
         @Volatile override var openDistroId: String? = null
-        @Volatile override var homePane: HomePane = HomePane.DEFAULT
         @Volatile override var remoteRelay: String = DEFAULT_REMOTE_RELAY
         @Volatile override var remoteIdleClose: Boolean = true
         @Volatile override var remoteMode: String = REMOTE_MODE_LOCAL
@@ -231,6 +230,15 @@ object Settings {
         get() = requireStore().outputScale
         set(value) { requireStore().outputScale = snapOutputScale(value) }
 
+    /**
+     * Display refresh rate (mHz) a `CompositorActivity` last resolved; 0
+     * until one has. Persisted so the compositor's first `wl_output.mode`
+     * is right: only an Activity can read the display's modes.
+     */
+    var outputRefreshMhz: Int
+        get() = requireStore().outputRefreshMhz
+        set(value) { requireStore().outputRefreshMhz = value }
+
     /** Multiplier on the terminal's sp text size (so it also follows system font size). */
     var terminalScale: Float
         get() = requireStore().terminalScale
@@ -262,14 +270,6 @@ object Settings {
     var openDistroId: String?
         get() = requireStore().openDistroId
         set(value) { requireStore().openDistroId = value }
-
-    /**
-     * Which pane a READY tawcroot distro opens on. One global value,
-     * written only by the home screen's FAB and ⋮ Apps/Terminal.
-     */
-    var homePane: HomePane
-        get() = requireStore().homePane
-        set(value) { requireStore().homePane = value }
 
     /** Remote access relay base URL (the start screen's field). */
     var remoteRelay: String
@@ -331,18 +331,6 @@ object Settings {
 
     private fun Float.toIntWithRound(): Int =
         kotlin.math.floor(this + 0.5f).toInt()
-}
-
-/** Home screen pane for a usable distro (notes/android.md "Home screen"). */
-enum class HomePane(val key: String) {
-    TERMINAL("terminal"),
-    APPS("apps");
-
-    companion object {
-        val DEFAULT = TERMINAL
-
-        fun fromKey(key: String?): HomePane = entries.firstOrNull { it.key == key } ?: DEFAULT
-    }
 }
 
 /**

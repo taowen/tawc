@@ -6,6 +6,9 @@ import me.phie.tawc.install.ShellDefaults
 import java.io.IOException
 
 internal object AptCommon {
+    /** [me.phie.tawc.install.distro.Distro.upgradeCommand]. */
+    const val UPGRADE_COMMAND = "apt update && apt full-upgrade"
+
     private val PATH_EXCLUDES: List<String> = listOf(
         "/usr/share/doc/*",
         "/usr/share/gtk-doc/*",

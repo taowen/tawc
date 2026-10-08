@@ -327,6 +327,32 @@ fun Context.tawcCard(): MaterialCardView =
     }
 
 /**
+ * Rounded `[🔍 field ✕]` search pill (the launcher's, the icon
+ * picker's). The caller owns [field] and [clearButton], and shows the
+ * button while there is a query.
+ */
+fun Context.searchPill(field: View, clearButton: View): View {
+    val density = resources.displayMetrics.density
+    val pad = (16 * density).toInt()
+    val card = tawcCard().apply { radius = tawcButtonSizePx() / 2f }
+    val row = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(pad * 3 / 4, 0, 0, 0)
+    }
+    val glyph = (20 * density).toInt()
+    row.addView(android.widget.ImageView(this).apply {
+        setImageResource(R.drawable.ic_search)
+        alpha = 0.7f
+    }, LinearLayout.LayoutParams(glyph, glyph).also { it.marginEnd = pad / 2 })
+    row.addView(field, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+    val button = tawcButtonSizePx()
+    row.addView(clearButton, LinearLayout.LayoutParams(button, button))
+    card.addView(row)
+    return card
+}
+
+/**
  * Round accent floating action button for a screen's one headline
  * action (the home screen's Terminal). Same accent/on-tonal pairing as
  * the primary-styled install button. Add it to a [DrawerScreen.body]

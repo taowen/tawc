@@ -536,6 +536,7 @@ fn envelope_launcher_and_sftp() {
         launcher: Arc::new(tawc_remote::spawn::Envelope {
             argv: vec!["/usr/bin/env".into(), "-i".into(), format!("HOME={}", dir.display()), "PATH=/usr/bin:/bin".into()],
             shell: "/bin/sh".into(),
+            command_shell: "/bin/sh".into(),
             host_env: vec![],
             cwd: dir.to_string_lossy().into(),
             rootfs: String::new(),

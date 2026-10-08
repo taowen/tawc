@@ -28,7 +28,11 @@ use smithay::backend::renderer::utils::{
     draw_render_elements, CommitCounter, DamageSet, OpaqueRegions,
 };
 use smithay::reexports::wayland_server::protocol::{wl_buffer::WlBuffer, wl_surface::WlSurface};
+use smithay::desktop::utils::OutputPresentationFeedback;
 use smithay::utils::user_data::UserDataMap;
+use smithay::utils::Monotonic;
+use smithay::wayland::presentation::Refresh;
+use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use smithay::utils::{Buffer as BufferCoord, Physical, Rectangle, Scale, Size, Transform};
 
 use crate::compositor::TawcState;
@@ -621,9 +625,9 @@ pub fn render_frame(
 /// Send frame-done callbacks for windows Smithay currently considers mapped
 /// on TAWC's desktop output. Android host foreground/background transitions
 /// update the visible desktop projection; Smithay owns the popup/subsurface traversal.
-pub fn send_frame_callbacks(state: &TawcState, time: u32) {
+/// `time` is the vsync timestamp (`CLOCK_MONOTONIC`).
+pub fn send_frame_callbacks(state: &TawcState, time: Duration) {
     let output = &state.output;
-    let time = Duration::from_millis(time as u64);
 
     let Some(visible_space) = state.desktop.visible_space(&state.hosts) else {
         return;
@@ -639,4 +643,28 @@ pub fn send_frame_callbacks(state: &TawcState, time: u32) {
             },
         );
     }
+}
+
+/// Answer `wp_presentation` feedback for the frame just swapped on the
+/// visible host. `time` is the vsync the frame was rendered on, an
+/// approximation of when it reaches the panel.
+pub fn report_presentation_feedback(state: &TawcState, time: Duration) {
+    let output = &state.output;
+    let Some(visible_space) = state.desktop.visible_space(&state.hosts) else {
+        return;
+    };
+    let mut feedback = OutputPresentationFeedback::new(output);
+    for window in visible_space.elements() {
+        window.take_presentation_feedback(
+            &mut feedback,
+            |_, _| Some(output.clone()),
+            |_, _| wp_presentation_feedback::Kind::empty(),
+        );
+    }
+    feedback.presented::<_, Monotonic>(
+        time,
+        Refresh::fixed(state.output_refresh_period()),
+        state.frame_clock.msc,
+        wp_presentation_feedback::Kind::Vsync,
+    );
 }

@@ -8,6 +8,10 @@
 #   app/src/main/res/drawable/ic_launcher_foreground.xml  + safe-zone scale
 #   app/src/main/res/values/icon_colors.xml             background colour
 #   fastlane/metadata/android/en-US/images/icon.png     F-Droid store icon
+#   app/src/debug/res/drawable/ic_launcher_foreground.xml
+#                                     the launcher foreground, recoloured
+#                                     purple for the me.phie.tawc.dev debug
+#                                     app (in-app logo stays orange)
 #
 # Run this after every edit to app/icon.svg and commit the results
 # together. Nothing runs it automatically: the app build must not depend on
@@ -42,6 +46,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SOURCE="$ROOT_DIR/app/icon.svg"
 RES_DIR="$ROOT_DIR/app/src/main/res"
+DEV_RES_DIR="$ROOT_DIR/app/src/debug/res"
 PNG_OUT="$ROOT_DIR/fastlane/metadata/android/en-US/images/icon.png"
 SIZE=512
 CHECK=0
@@ -52,11 +57,15 @@ CHECK=0
 # store icon uses the same scale so it matches what launchers draw.
 SAFE_ZONE_SCALE=0.60
 
+# Hue (degrees) the debug build's mark is recoloured to, keeping each
+# fill's saturation and lightness: 275 turns the orange mark purple.
+DEV_HUE=275
+
 for arg in "$@"; do
     case "$arg" in
         --size=*) SIZE="${arg#--size=}" ;;
         --check) CHECK=1 ;;
-        -h|--help) sed -n '2,36p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help) sed -n '2,39p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
@@ -67,10 +76,11 @@ command -v python3 >/dev/null || { echo "ERROR: python3 not found" >&2; exit 1; 
 work="$(mktemp -d -t tawc-icon-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
-python3 - "$SOURCE" "$work" "$SAFE_ZONE_SCALE" <<'PY'
-import re, sys, xml.etree.ElementTree as ET
+python3 - "$SOURCE" "$work" "$SAFE_ZONE_SCALE" "$DEV_HUE" <<'PY'
+import colorsys, re, sys, xml.etree.ElementTree as ET
 
 source, outdir, safe_scale = sys.argv[1], sys.argv[2], float(sys.argv[3])
+dev_hue = float(sys.argv[4]) / 360
 SVG = "{http://www.w3.org/2000/svg}"
 INK = "{http://www.inkscape.org/namespaces/inkscape}"
 SODI = "{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}"
@@ -280,12 +290,35 @@ logo_note = ("The TAWC mark at full size (ic_launcher_foreground without\n"
              "icon.\n\n     ")
 fg_note = ("The adaptive launcher icon's foreground layer.\n\n     ")
 
-for name, text in (
+outputs = [
     ("ic_tawc_logo.xml", android_vector(note=logo_note)),
     ("ic_launcher_foreground.xml", android_vector(safe_scale, note=fg_note)),
     ("icon_colors.xml", colors),
     ("store.svg", store_svg()),
-):
+]
+
+
+def dev_fill(fill):
+    """`fill` with its hue set to dev_hue; greys and non-hex fills kept."""
+    if not re.fullmatch(r"#[0-9A-F]{6}", fill):
+        return fill
+    rgb = [int(fill[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    h, l, s = colorsys.rgb_to_hls(*rgb)
+    if s == 0:
+        return fill
+    return "#%02X%02X%02X" % tuple(
+        round(c * 255) for c in colorsys.hls_to_rgb(dev_hue, l, s))
+
+
+paths = [(stack, dict(p, fill=dev_fill(p["fill"]))) for stack, p in paths]
+dev_note = ("Debug-build (me.phie.tawc.dev) launcher icon, recoloured "
+            "purple.\n     The in-app logo stays orange.\n     ")
+outputs += [
+    ("dev_ic_launcher_foreground.xml",
+     android_vector(safe_scale, note=dev_note + fg_note)),
+]
+
+for name, text in outputs:
     with open("%s/%s" % (outdir, name), "w") as fh:
         fh.write(text)
 
@@ -315,6 +348,7 @@ vector_outputs=(
     "$RES_DIR/drawable/ic_tawc_logo.xml:ic_tawc_logo.xml"
     "$RES_DIR/drawable/ic_launcher_foreground.xml:ic_launcher_foreground.xml"
     "$RES_DIR/values/icon_colors.xml:icon_colors.xml"
+    "$DEV_RES_DIR/drawable/ic_launcher_foreground.xml:dev_ic_launcher_foreground.xml"
 )
 
 if [ "$CHECK" = 1 ]; then
@@ -346,6 +380,7 @@ fi
 
 for pair in "${vector_outputs[@]}"; do
     dest="${pair%%:*}"; src="$work/${pair##*:}"
+    mkdir -p "$(dirname "$dest")"
     cp "$src" "$dest"
     echo "==> wrote $dest"
 done

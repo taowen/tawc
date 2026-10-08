@@ -13,3 +13,4 @@ extern bool (*tawcroot_test_raw_hook)(long nr, const long args[6], long *ret);
 
 extern long tawcroot_raw_syscall(long nr, long a, long b, long c,
 				 long d, long e, long f);
+extern long tawcroot_raw_syscall_off_stack(long nr, long a, long b);

@@ -62,7 +62,7 @@ Everything lives under the app's private data dir:
       cache/install/bootstrap-<cacheKey>.tar.{zst,gz}.part        # transient Downloader in-flight file (sweep evicts unconditionally)
       distros/
         <id>/
-          metadata.json              # JSON: schemaVersion, id, label?, distro, arch, method, installedAtMillis, installedAtAppVersionCode, sourceUrl, state, failure?, tawcStamp?, tawcInstalls?, externalBinds? (notes/external-binds.md)
+          metadata.json              # JSON: schemaVersion, id, label?, distro, arch, method, installedAtMillis, installedAtAppVersionCode, sourceUrl, state, failure?, tawcStamp?, tawcInstalls?, externalBinds? (notes/external-binds.md), importedAtMillis?/importedFromPackage? (imports)
           rootfs/                    # the chroot itself (what `arch-chroot` would chroot into)
 
 The on-disk layout, the [Installation] data class, and
@@ -94,6 +94,11 @@ the whole machine.
        └──────────────────────┘
                   success
 ```
+
+Import (see *Export / import*) is an install variant: it takes the
+same `(no dir) → INSTALLING` edge and the same exits. Export is not a
+transition — it only reads a READY slot (and with "Delete after
+export" then requests a normal uninstall).
 
 Transition table — rows are current state, cells say what each request does:
 
@@ -256,7 +261,13 @@ The package is split into three layers:
 | `InstallProgress.kt`           | Stage enum + progress event used by the service. The pkg-manager-bootstrap stages are `PKG_KEYRING` and `PKG_INSTALL` (distro-agnostic names). |
 | `InstallationService.kt`       | The state-machine gate. Foreground service that consults [InstallationStore], resolves the right [Distro] from [DistroRegistry], and exposes `progress` (StateFlow) + `log` (SharedFlow). |
 | `InstallProgress.kt`'s `toOperationProgress` | Maps the install-specific `InstallStage` enum onto the generic `OperationStage`. Used by [InstallationService.publishProgress] when calling `op.publish(...)` on the per-job [me.phie.tawc.ops.MutableOperation]. |
-| `InstallActions.kt`            | Broker action handlers (`install` / `uninstall`) registered from [TawcApplication.onCreate] (debug builds only). Validate args, call [InstallationService] companion-object helpers, open [LogScreenActivity] best-effort, and mirror the registered Operation's flows back to the broker socket until terminal. Host disconnect → `Operation.cancel()`. See `notes/exec-broker.md` for protocol. |
+| `DistroArchive.kt` / `DistroExporter.kt` / `DistroImporter.kt` | Distro export/import: format + path rules, quiesce + walk + tar writer, header/allowlist/trailer reader + import job (incl. custom distros). See *Export / import*. |
+| `ArchiveFormat.kt` / `ArchiveLayout.kt` / `RootfsFacts.kt` | Custom-distro import: compression by magic, guest-root detection + name mapping, os-release/arch/libc probe. See *Custom distros*. |
+| `DistroBusy.kt`                | In-memory set of ids whose spawns are refused (export in progress); checked in `TawcrootMethod.prepareSpawn`. |
+| `ExportActivity.kt` / `ImportActivity.kt` | SAF save-picker trampoline for an export; import form. |
+| `LabelValidation.kt`           | Label → slug → free id check shared by the install and import forms. |
+| `util/FsOps.kt`                | lstat/readlink/symlink/link/chmod seam (Android `Os` in prod, NIO in JVM tests) for the archive code. |
+| `InstallActions.kt`            | Broker action handlers (`install` / `uninstall` / `export` / `import`) registered from [TawcApplication.onCreate] (debug builds only). Validate args, call [InstallationService] companion-object helpers, open [LogScreenActivity] best-effort, and mirror the registered Operation's flows back to the broker socket until terminal. Host disconnect → `Operation.cancel()`. See `notes/exec-broker.md` for protocol. |
 | `InstallActivity.kt`           | Install form (distro radio, free-form Label EditText with live slug-derived id hint, vertical method radio in `tawcroot (recommended) / proot / chroot (requires root)` order, "What's the difference?" link to [InstallMethodInfoActivity]) → Install button → calls [InstallationService.startInstall], opens [LogScreenActivity], and finishes itself. The Install button is disabled while the label is empty / unslugifiable / collides with an existing installation. The activity is `exported="false"` — there is no CLI launch path. |
 | `InstallMethodInfoActivity.kt` | Read-only reference page describing the three install methods (tawcroot / proot / chroot). Linked from the install form's "What's the difference?" affordance so users can compare tradeoffs without leaving the app. |
 | `DistroInfoView.kt` / `DistroInfoActivity.kt` | Per-distro detail column (label, registry-resolved distro/arch, method, bootstrap, state/failure, source URL, installed-at, full rootfs path) + an async `du -sk` size readout (READY/FAILED/CORRUPT) + a red Delete button (Are-You-Sure dialog → [InstallationService.startUninstall] + opens [LogScreenActivity]). The state row links to the live op log while installing/uninstalling. `DistroInfoView` is shared: the home screen shows it inline as the info pane for a non-READY open distro, and `DistroInfoActivity` wraps it under a toolbar (home ⋮ or drawer row ⋮ → Distro info, any install). Both re-render in `onResume`, so a return from a cancelled uninstall (FAILED) shows the fresh state. Run lives in the home ⋮ menu (`RunCommandDialog.kt`). |
@@ -504,6 +515,178 @@ On success the directory (including `metadata.json`) is gone and the id
 is back to `(no dir)`. On any failure, the directory is left as-is and
 `setState(FAILED)` records the reason; the only recovery is to call
 uninstall again.
+
+## Export / import
+
+Move a working distro to another phone (e.g. across a factory reset)
+or into another build (a different application id). Tawcroot only —
+the one release method; chroot rootfses are root-owned and proot isn't
+worth the matrix. UI: **Export** on distro info (READY tawcroot only),
+**Import from tarball** at the top of the install form. Broker: `export` / `import` actions (notes/exec-broker.md).
+The same import also takes any plain Linux rootfs tarball (*Custom
+distros* below).
+
+**Format** (`DistroArchive.kt`): a zstd-compressed POSIX/PAX tar,
+inspectable with `tar --zstd -tf`. Suggested name
+`<id>-<yyyymmdd>.tawc.tar.zst`, MIME `application/zstd`.
+
+```
+tawc-export.json        # manifest, always first: format, source app/package,
+                        # id/label/distro/arch/method, advisory size + entry count
+metadata.json           # the source Installation record, verbatim
+rootfs/...              # guest tree, uid/gid 0, modes + mtimes
+tawcroot/...            # link store (version, link/<token>, .cnt sidecars)
+tawc-export-end.json    # trailer, always last: { entries, sha256 }
+```
+
+`sha256` is `DistroArchive.EntryDigest` over every entry before the
+trailer: a canonical header line (type, mode, mtime s, size, name,
+link target) plus content. (Deliberately not raw tar bytes: that
+would tie the check to how commons-compress blocks and pads.) An
+import completes only with a matching trailer, so a truncated copy
+ending on a clean zstd frame or tar boundary still fails. `format`
+newer than supported is refused, like `schemaVersion`.
+
+**What travels.** `ExportRule`: `rootfs/` and `tawcroot/`, walked on
+the host with `lstat`, never following symlinks, so bind sources are
+never included (only their empty guest mountpoints). Dropped:
+`rootfs/tmp/*` (runtime sockets; the dir itself is kept), sockets /
+FIFOs / devices (counted), `tawcroot/lock`, `intent.new`, `tmp/*`,
+`work/*`, and everything else at the top (`ando/`, `bootstrap-work/`,
+`metadata.json.tmp`). Real hardlinks (shouldn't exist under tawcroot)
+become tar hardlinks. `user.*` xattrs on files and dirs (guests can set
+them on app data; browsers tag downloads with `user.xdg.origin.url`)
+travel as PAX `SCHILY.xattr.*` — UTF-8 values only, since
+commons-compress keeps PAX values as strings — are covered by the
+digest, and are restored best-effort. Files/dirs lacking owner r/rx are briefly
+chmod'd to read them, then restored.
+
+**Quiesce** (`DistroExporter`): mark the id in `DistroBusy` (in-memory;
+every tawcroot spawn checks it in `TawcrootMethod.prepareSpawn` and
+fails with "is being exported"), stop remote access and the distro's
+terminals, kill guests with `ProcessScanner.killAllInRootfs`, then one
+`/bin/true` spawn (`TawcrootMethod.runNoop`, no shell profile, no user
+binds) so the link store replays any crash journal. A remaining
+`tawcroot/intent` fails the export: it records this app's host-real
+paths. Busy is cleared in `finally`.
+
+**Export job** (`JobKind.EXPORT`, FGS `dataSync`, cancellable): gate
+READY + tawcroot + no other job; writes through `ZstdOutputStream`
+(level 3, workers = cores/2 when the zstd-jni build supports it). The
+slot is never modified. Failure, cancel or the Android 15+ `dataSync`
+FGS timeout deletes a partial SAF document. **Delete after export**
+chains into the normal uninstall only after the stream closed without
+error (FGS bridged like the cancel-install tail); there is no read-back
+pass.
+
+**Import job** (`JobKind.IMPORT`) is an install variant: same empty-slot
+gate, INSTALLING → READY | FAILED, cancel → FAILED → auto-uninstall.
+For a well-framed export `DistroImporter` reads the manifest + metadata
+(refusing a non-tawcroot method or an arch other than this phone's; an
+unknown distro key — a newer app's distro, or `custom` — just logs),
+writes the rewritten record (`rewrite`: new
+id/label, `tawcStamp` null to force a `TawcInstaller` refresh against
+the old `tawcInstalls` dests, binds/ando/hidden entries/
+`installedAtAppVersionCode` kept, `importedAtMillis` /
+`importedFromPackage` added), then extracts through
+`ProotArchiveExtractor.extractEntries` with the import allowlist
+(`DistroArchive.importRejection`: only canonical `rootfs/…` /
+`tawcroot/…` names, no symlinked store dirs, no `intent`/`work/*`) and
+`roots` containment (a symlink can't steer a write onto the slot's
+`metadata.json`), restoring modes and mtimes. Then the trailer check,
+`rootfs/tmp` (01777) / `tawcroot/tmp` recreated, `TawcInstaller`
+refresh, READY, `AndoBrokers.refresh`. A newer link-store `version`
+just logs (tawcroot degrades to read-only hardlinks). Pinned launcher
+shortcuts don't travel.
+
+### Custom distros
+
+"Import from tarball" also turns an arbitrary rootfs tarball
+(`docker export`, `mmdebstrap`, an LXC or minirootfs image) into an
+**unsupported** tawcroot distro, best effort. Format by magic bytes
+(`ArchiveFormat`: zstd, gzip, xz, bzip2, plain tar). `DistroImporter`
+sorts every archive into one of:
+
+| kind | detected by | import |
+|---|---|---|
+| export | `tawc-export.json` first and `metadata.json` second, both valid | as above, trailer required |
+| damaged export | TAWC layout (`<base>rootfs/` as the guest root) with framing entries at `<base>` but not the above (re-tarred, bad manifest, …) | amber warning listing the problems; `rootfs/` + `tawcroot/` mapped, settings from `metadata.json` if it parses (as its distro if this build knows it, else custom), no trailer |
+| plain rootfs | a guest root found, no framing | custom distro, no trailer |
+| unrecognized | no guest root, or a `docker save`/OCI layout | refused ("export a container instead" for OCI) |
+
+Without a trailer a truncated copy is caught only when the tar/xz/zstd
+stream itself breaks; the form says so.
+
+**Guest root** (`ArchiveLayout.Detector`): the shallowest prefix (≤ 2
+dirs deep) holding `etc` plus `usr` or `bin`, after stripping leading
+`/` and `./` — covers top-level, `./`-prefixed and single-wrapper-dir
+trees. A root ending in `rootfs/` is mapped as the TAWC layout (a
+plain tarball wrapped in a `rootfs/` dir maps the same). Entries
+outside are skipped and counted; mapped names (and hardlink targets)
+still pass `importRejection` + `roots` containment.
+
+**Form scan** (`DistroImporter.scan`): an export is classified from its
+first two entries; anything else gets one cancellable headers-only
+pass (decompressed, not written) collecting kind, root, size and
+`RootfsFacts`: os-release name/id (default label), architecture
+(`e_machine` of the first ELF in `bin/` / `usr/bin/`; a mismatch is
+refused, no emulation), libc (`ld-linux-*` glibc / `ld-musl-*`),
+bash, `/bin/sh`, `/usr/bin/env` (no env or no shell at all is
+refused). The decompression dominates; a 90 MB xz Debian rootfs takes
+about as long to scan as to extract.
+
+**Import job, loose path**: the broker can't rescan stdin, so the job
+re-classifies from a lookahead (≤ 4096 entries / 16 MiB held in memory,
+replayed into the extractor). Lacking a qualifying prefix there, it
+guesses from the top-level dirs (one non-FHS dir = a wrapper). The
+extracted tree is authoritative: `etc` plus `usr`/`bin` must exist, and
+`RootfsFacts.probe` re-checks arch / env / shell. Metadata met later in
+the stream still applies.
+
+**Record**: `distro = "custom"` (frozen key), `arch` = this phone's
+ABI, `method = tawcroot`, `sourceUrl` = the picked file's name
+(`stdin` from the broker), `bootstrapFlavor = "imported"`, this app's
+`installedAtAppVersionCode`, `importedAtMillis`, plus optional `osName`
+/ `osId` / `libc` for display (additive, no schema bump). Re-exporting
+gives a normal export that re-imports as custom.
+`DistroRegistry.forInstallation` stays null; display falls back to the
+label / `osName`, and distro info shows "(unsupported)" and the musl
+GPU warning.
+
+**Setup** (`DistroImporter.setupCustom`, custom only, idempotent; a
+stand-in for `Distro.configure`): `/etc/resolv.conf` if missing or a
+dangling symlink (`docker export` of a systemd image), `/tmp` (01777),
+`/root` (0700), the `ShellDefaults` stubs only if bash exists and they
+don't, a log line if `/etc/passwd` has no root. Nothing
+package-manager specific.
+
+**Runtime fallbacks** (all distros): tawcroot spawns no longer use GNU
+`env -C /root`; the tawcroot process starts with host cwd
+`<rootfs>/root` (`TawcrootMethod.homeCwd`; `<rootfs>/tmp` if that's
+missing or a symlink), which tawcroot maps to guest `/root`, so BusyBox
+env works. Command spawns run `RootShell.command`: `/bin/bash`, or
+`/bin/sh` in a rootfs without bash (also the passwd-shell fallback and
+the remote agent's `command_shell`). musl can't use libhybris
+(distro-options.md): warned, not refused; pick the CPU backend.
+
+**Trust model:** the archive is untrusted filesystem input even when
+the user made it — containment, allowlist and the trailer apply to
+every import. It is not a security boundary for what the guest then
+runs.
+
+**Storage:** SAF `CREATE_DOCUMENT` / `OPEN_DOCUMENT` (no all-files
+access, works in every build). Both directions stream; export uses no
+temp copy. The activity takes a persistable grant and also passes the
+URI as the service intent's data; the job releases it at the end.
+`ExportActivity` is a UI-less picker trampoline; `ImportActivity` is the
+form (summary, label with the install form's `LabelValidation`, bind
+and free-space warnings — the size is the advisory pre-walk figure;
+carried settings aren't listed). A started import closes the install
+form too, like a started install.
+
+**No host-absolute paths** live in a distro dir: `TawcInstall` dests are
+guest paths, binds and the ando socket are per-spawn, and the link
+store's only host-path record (`intent`) is resolved before export.
 
 ## Rootfs /tmp sweep
 
@@ -1371,7 +1554,8 @@ migration can fully repair it:
 - **Distro keys** `"arch"` / `"manjaro"` / `"void"` / `"debian-sid"`
   (`metadata.distro`, matched exactly in
   [DistroRegistry.forInstallation] together with the ABI in
-  `metadata.arch`).
+  `metadata.arch`), plus `"custom"` for imported rootfses (never in
+  the registry) and the `"imported"` `bootstrapFlavor`.
 - **Pinned-shortcut format**: shortcut id `"<installId>/<desktopId>"`
   and the intent extras keys `"installId"` / `"desktopId"` /
   `"label"` ([EntryShortcuts], [ShortcutLaunchActivity]). Persisted

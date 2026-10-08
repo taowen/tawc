@@ -1,6 +1,7 @@
 package me.phie.tawc.dev
 
 import android.net.LocalSocket
+import android.os.ParcelFileDescriptor
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
@@ -135,40 +136,79 @@ internal class ExecBrokerSession(private val socket: LocalSocket) {
         }
 
         val cancelFlag = AtomicBoolean(false)
-        // Watch the socket for host EOF — any read returning EOF (or any
-        // frame at all, which would be a protocol violation since the
-        // action protocol doesn't accept client → server frames) means
+        // Stdin-reading actions get the host's stdin through a kernel
+        // pipe the watcher below feeds; others have it drained.
+        val stdinPipe = if (handler.readsStdin) ParcelFileDescriptor.createPipe() else null
+        val stdinRead = stdinPipe?.let { ParcelFileDescriptor.AutoCloseInputStream(it[0]) }
+        val stdinWrite = stdinPipe?.let { ParcelFileDescriptor.AutoCloseOutputStream(it[1]) }
+        // Watch the socket for host EOF — any read returning EOF means
         // the host disconnected. We set cancelFlag so the handler can
         // bail at its next poll point. The thread itself exits when the
         // outer accept-loop in [ExecBroker] closes the per-session
         // socket in its `finally`.
         thread(name = "tawc-exec-action-watch", isDaemon = true) {
+            var stdinOpen = stdinWrite != null
+            fun closeStdin() {
+                if (stdinOpen) {
+                    stdinOpen = false
+                    try { stdinWrite?.close() } catch (_: IOException) {}
+                }
+            }
             try {
                 while (true) {
                     val b = sin.read()
                     if (b == -1) break          // socket EOF — host gone
-                    // Drain any framing the host sends; protocol says
-                    // there should be none for actions, but reading
-                    // keeps the buffer from filling and lets us notice
-                    // EOF promptly.
                     val len = try { sin.readInt() } catch (_: Throwable) { break }
                     if (len < 0 || len > MAX_FRAME) break
                     // `readFully` is API 1+; `readNBytes` would be API 33.
+                    val buf = ByteArray(len)
                     if (len > 0) {
-                        val drain = ByteArray(len)
-                        try { sin.readFully(drain) } catch (_: Throwable) { break }
+                        try { sin.readFully(buf) } catch (_: Throwable) { break }
+                    }
+                    when (b) {
+                        STREAM_STDIN -> if (stdinOpen) {
+                            // EPIPE once the action stopped reading:
+                            // keep draining so EOF stays observable.
+                            try { stdinWrite!!.write(buf) } catch (_: IOException) { closeStdin() }
+                        }
+                        STREAM_STDIN_EOF -> closeStdin()
                     }
                 }
             } catch (_: Throwable) { /* fall through */ }
+            closeStdin()
             cancelFlag.set(true)
         }
 
         val app = ExecBroker.appContext
+        val binaryOut = object : OutputStream() {
+            override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+
+            override fun write(b: ByteArray, off: Int, len: Int) {
+                var o = off
+                var left = len
+                while (left > 0) {
+                    val n = minOf(MAX_FRAME, left)
+                    synchronized(sout) {
+                        sout.write(STREAM_STDOUT)
+                        sout.writeInt(n)
+                        sout.write(b, o, n)
+                    }
+                    o += n
+                    left -= n
+                }
+            }
+
+            override fun flush() = synchronized(sout) { sout.flush() }
+
+            override fun close() = flush()
+        }
         val ctx = ActionContext(
             appContext = app,
             out = { line -> writeStreamFrame(sout, STREAM_STDOUT, "$line\n".toByteArray(Charsets.UTF_8)) },
             err = { line -> writeStreamFrame(sout, STREAM_STDERR, "$line\n".toByteArray(Charsets.UTF_8)) },
             cancelFlag = cancelFlag,
+            stdout = binaryOut,
+            stdin = stdinRead,
         )
 
         val exit = try {
@@ -180,6 +220,9 @@ internal class ExecBrokerSession(private val socket: LocalSocket) {
                     "action threw: ${t.javaClass.simpleName}: ${t.message ?: ""}".toByteArray(Charsets.UTF_8))
             } catch (_: Throwable) {}
             -1
+        } finally {
+            // Unblocks a watcher stuck writing into a full pipe.
+            try { stdinRead?.close() } catch (_: IOException) {}
         }
 
         try {

@@ -112,6 +112,19 @@
             android:label="@string/title_install_distro" />
 
         <activity
+            android:name=".install.ImportActivity"
+            android:exported="false"
+            android:label="@string/title_import_distro"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- UI-less: just the SAF save picker for an export. -->
+        <activity
+            android:name=".install.ExportActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Tawc.DialogHost"
+            android:excludeFromRecents="true" />
+
+        <activity
             android:name=".install.DistroInfoActivity"
             android:exported="false"
             android:label="@string/title_distro_info" />
@@ -190,6 +203,13 @@
              the home screen's apps pane; RESULT_OK triggers a rescan. -->
         <activity
             android:name=".launcher.DesktopFileEditorActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Icon picker behind the editor's Select button; returns the
+             chosen icon name. -->
+        <activity
+            android:name=".launcher.IconPickerActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 

@@ -40,6 +40,12 @@ command -v cargo >/dev/null || { echo "ERROR: cargo not found" >&2; exit 1; }
     echo "ERROR: deps/ not populated; run scripts/ensure-deps.sh first" >&2
     exit 1
 }
+# libmd is a tarball dep, only extracted by build-xwayland.sh; without it
+# its notice would silently drop out.
+[ -d "$ROOT_DIR/deps/xwayland-src/libmd" ] || {
+    echo "ERROR: deps/xwayland-src/libmd missing; run scripts/build-xwayland.sh first" >&2
+    exit 1
+}
 
 echo "=== Resolving Maven artifacts (releaseRuntimeClasspath) ==="
 GRADLE_LIST="$ROOT_DIR/app/build/third-party-licenses/gradle-deps.txt"

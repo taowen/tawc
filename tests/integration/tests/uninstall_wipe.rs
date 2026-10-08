@@ -20,7 +20,6 @@ use std::process::Output;
 use tawc_integration::adb;
 use tawc_integration::exec_broker::{self, Invocation, Request};
 
-const PKG: &str = "me.phie.tawc";
 const TEST_ID: &str = "wipetest";
 /// Bind source under the sanctioned scratch dir — same `/data`
 /// filesystem as the rootfs, so `-xdev` alone would not stop the
@@ -28,7 +27,7 @@ const TEST_ID: &str = "wipetest";
 const BIND_SRC: &str = "/data/local/tmp/tawc-dev/wipe-bind-src";
 
 fn slot_dir() -> String {
-    format!("/data/data/{PKG}/distros/{TEST_ID}")
+    format!("{}/distros/{TEST_ID}", tawc_integration::app_data_dir())
 }
 
 fn combined(out: &Output) -> String {

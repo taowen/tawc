@@ -41,6 +41,10 @@ if [ "$FRESH_CACHE" = 1 ]; then
     for c in "${CACHES[@]}"; do podman unshare rm -rf "$STATE/cache/$c"; done
 fi
 for c in "${CACHES[@]}"; do mkdir -p "$STATE/cache/$c"; done
+# fdroid build skips a version whose output already exists, and the copy
+# below would then hand back the previous run's APK. Clear it first.
+podman unshare rm -f "$STATE/fdroiddata/unsigned/me.phie.tawc_$VERSION.apk" \
+    "$STATE/fdroiddata/tmp/me.phie.tawc_$VERSION.apk"
 mkdir -p "$STATE/logs"
 # Only reproduce mode puts anything here, but the mount has to exist.
 mkdir -p "$STATE/reference"

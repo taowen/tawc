@@ -14,18 +14,20 @@ import me.phie.tawc.install.InstallationMethod
 import me.phie.tawc.install.InstallationStore
 import me.phie.tawc.install.TawcrootMethod
 import me.phie.tawc.install.UserRootfsSession
+import me.phie.tawc.install.distro.DistroRegistry
 
 /**
  * Shared fire-and-forget dispatch of a launcher entry into its rootfs —
  * the single point every launch surface goes through (the home
  * screen's [AppsPane] and pinned shortcuts via [ShortcutLaunchActivity]).
  *
- * `Terminal=true` entries on tawcroot installs open the home screen's
- * terminal pane ([MainActivity.commandIntent]) with the entry's Exec as
- * a command tab instead of a headless spawn — a CLI program run to
- * /dev/null would be invisible. The terminal is tawcroot-only, so
+ * `Terminal=true` entries on tawcroot installs open a new terminal tab
+ * on the home screen ([MainActivity.commandIntent]) with the entry's
+ * Exec as its command instead of a headless spawn — a CLI program run
+ * to /dev/null would be invisible. The terminal is tawcroot-only, so
  * proot/chroot keep the headless launch with a logcat warn; those
- * methods are debug-only.
+ * methods are debug-only. The terminal built-ins (TAWC Term, Update
+ * packages) open a tab the same way.
  *
  * For GUI entries, stdio is redirected to /dev/null so a chatty program
  * can't fill the pipe back to the JVM (which we never read).
@@ -73,6 +75,11 @@ object EntryLauncher {
             )
             return
         }
+        val builtin = entry.builtin
+        if (builtin != null) {
+            launchBuiltin(appContext, inst, entry, builtin, method)
+            return
+        }
         if (entry.terminal) {
             if (method is TawcrootMethod) {
                 appContext.startActivity(
@@ -96,5 +103,33 @@ object EntryLauncher {
                     LaunchErrorActivity.start(appContext, title, e.message ?: e.javaClass.simpleName)
                 }
         }
+    }
+
+    /** A terminal built-in: a new tab (a plain shell for TAWC Term). Add
+     *  entry is the apps pane's own (it wants the editor's result). */
+    private fun launchBuiltin(
+        appContext: Context,
+        inst: Installation,
+        entry: LauncherEntry,
+        builtin: LauncherEntry.Builtin,
+        method: InstallationMethod,
+    ) {
+        val exec = when (builtin) {
+            LauncherEntry.Builtin.TERM -> null
+            LauncherEntry.Builtin.UPDATE -> DistroRegistry.forInstallation(inst)?.upgradeCommand
+            LauncherEntry.Builtin.ADD_ENTRY -> return
+        }
+        if (method !is TawcrootMethod || (builtin == LauncherEntry.Builtin.UPDATE && exec == null)) {
+            LaunchErrorActivity.start(
+                appContext,
+                appContext.getString(R.string.launcher_launch_failed_title, entry.name),
+                appContext.getString(R.string.launcher_builtin_unavailable),
+            )
+            return
+        }
+        val label = if (builtin == LauncherEntry.Builtin.TERM) null else entry.name
+        appContext.startActivity(
+            MainActivity.commandIntent(appContext, inst.id, exec, label).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 }

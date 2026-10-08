@@ -730,6 +730,68 @@ test(linkstore_store_survives_reconfigure)
 	th_teardown(&v);
 }
 
+/* A store restored onto fresh inodes (distro export/import, any host
+ * copy) holds objects whose tokens no longer equal their inodes, so a
+ * new file's inode can name an existing object. NEW must pick a
+ * suffixed token instead of clobbering it, and must not trust the
+ * stale sidecar. */
+test(linkstore_new_token_collision_after_copy)
+{
+	th_view v;
+	th_setup(&v, "ls-collide");
+	store_setup(&v);
+
+	write_file(test_ctx, "/run/old", "old\n");
+	make_pair(test_ctx, "/run/old", "/run/old2");
+
+	/* Plant a "baked" object at the token the next file will get. */
+	write_file(test_ctx, "/run/f", "fresh\n");
+	char host[4400];
+	snprintf(host, sizeof host, "%s/run/f", v.root);
+	struct stat hst;
+	test_int_eq(stat(host, &hst), 0);
+	char obj[4600];
+	snprintf(obj, sizeof obj, "%s/link/%lu", g_store,
+		 (unsigned long)hst.st_ino);
+	test_true(rh_write_text(obj, "baked\n"));
+	char cnt[4700];
+	snprintf(cnt, sizeof cnt, "%s.cnt", obj);
+	test_true(rh_write_text(cnt, "0000000007\n"));
+
+	make_pair(test_ctx, "/run/f", "/run/l1");
+
+	/* Guest readlink says "regular file"; check the on-disk token. */
+	char lnk[64];
+	char want[64];
+	snprintf(want, sizeof want, "tawcroot:link:%lu-1",
+		 (unsigned long)hst.st_ino);
+	char hl1[4400];
+	snprintf(hl1, sizeof hl1, "%s/run/l1", v.root);
+	long n = readlink(hl1, lnk, sizeof lnk - 1);
+	test_true(n > 0);
+	lnk[n > 0 ? n : 0] = 0;
+	test_str_eq(lnk, want);
+
+	check_content(test_ctx, "/run/f", "fresh\n");
+	check_content(test_ctx, "/run/l1", "fresh\n");
+	check_content(test_ctx, "/run/old2", "old\n");
+	struct stat st;
+	test_int_eq(lstat_guest("/run/l1", &st), 0);
+	test_int_eq((long)st.st_nlink, 2);
+	/* The baked object is untouched. */
+	char buf[16] = {0};
+	FILE *fp = fopen(obj, "r");
+	test_true(fp != NULL);
+	if (fp) {
+		test_true(fgets(buf, sizeof buf, fp) != NULL);
+		fclose(fp);
+	}
+	test_str_eq(buf, "baked\n");
+
+	store_teardown();
+	th_teardown(&v);
+}
+
 test(linkstore_missing_sidecar_reports_two_never_deletes)
 {
 	th_view v;

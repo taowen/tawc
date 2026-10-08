@@ -1,16 +1,17 @@
 # In-app launcher
 
 Per-distro app picker that reads `.desktop` files inside a rootfs and
-lets the user search + launch: the home screen's apps pane
+lets the user search + launch: the home screen's apps tab
 (`launcher/AppsPane`, for the open distro, notes/android.md "Home
 screen"), plus pinned shortcuts.
 
 ## Pipeline
 
-1. **MainActivity** shows `AppsPane` for a READY open distro when the
-   chosen pane is apps (or the install can't host the terminal).
+1. **MainActivity** shows a READY open distro's `DistroHome`, whose
+   first tab is `AppsPane`.
 2. **AppsPane.rescan()** — on every show, distro switch and resume, so
    packages installed from the terminal appear — →
+   `LauncherEntry.list` (scan + built-ins, below) →
    `LauncherEntry.scan(rootfs)` on
    `Dispatchers.IO` — the shared wrapper around
    `NativeBridge.nativeLauncherScan` + JSON parse that every scan
@@ -35,12 +36,14 @@ screen"), plus pinned shortcuts.
 5. **AppsPane** filters hidden entries + the search query, then
    renders rows (icon ImageView + name + comment). `IconLoader`
    async-decodes PNGs with `BitmapFactory.inSampleSize` keeping memory
-   bounded, and holds them in a byte-bounded `LruCache`. An entry with
+   bounded, and holds them in a byte-bounded `LruCache` keyed by path; each rescan
+   evicts bitmaps whose file mtime/size changed (`dropStale`), so an
+   icon replaced in place updates. An entry with
    no resolvable icon gets `ic_terminal_fallback` or `ic_app_fallback`.
 6. Tap or Enter → `EntryLauncher.launch(appContext, inst, entry)`, the
    shared dispatch point for every launch surface. `Terminal=true`
-   entries on tawcroot installs open the home terminal pane with a
-   command tab instead (see notes/terminal.md "Command sessions"); proot/chroot
+   entries on tawcroot installs open a new home terminal tab running
+   the command instead (see notes/terminal.md "Command sessions"); proot/chroot
    terminal entries fall through to the headless path with a logcat
    warn. Everything else runs
    `UserRootfsSession.runInside(rootfs, "<exec> </dev/null >/dev/null
@@ -86,21 +89,24 @@ in `launcher.rs::scan_entries`:
 - `resolve_metadata_for_app_id` shares `scan_entries` for window
   icons/titles — a hidden app that is *running* must still resolve.
 
-The pane is an Android-launcher-style grid: header `≡ <distro> 🔍 ⋮`
-(64dp, buttons background-less `plainIconButton`), then icons in name
+The pane is an Android-launcher-style grid under the home tab bar: an
+always-visible search pill ("Search <distro>"), then icons in name
 order with one-line, end-ellipsized names; descriptions are not shown.
 Columns = width / 88dp (min 3). Bottom padding lets the last row scroll
-clear of the FAB, which also hides while scrolling down. 🔍 (or a
-printable hardware key with nothing focused) opens a search field under
-the header; Enter launches the top match; ✕, Back or a launch closes
-and clears it. ≡ opens the home drawer. The ⋮ is the home screen's one
-menu; this pane adds a
+clear of the FAB, which also hides while scrolling down. The search
+field never takes focus on its own (the pane's column soaks up the
+window's initial focus): only a tap or a printable hardware key with
+nothing focused puts it there. Enter launches the top match; ✕ (shown
+with a query), Back or a launch clears it and drops the IME. The ⋮ is
+the home screen's one menu; on the apps tab it adds a
 checkable **"Show hidden (N)"** item (N counts hidden ids that match
 actual entries; omitted when N is 0) and, on editable methods, **"Add
 entry…"** (the editor). Show-hidden is transient
 per-pane state, not persisted.
 With it on, hidden entries render dimmed (alpha 0.5) in their normal
-sort position and launch normally on tap. If every entry is hidden,
+sort position and launch normally on tap. With it off, a search whose
+only app matches are hidden shows those (dimmed) instead of nothing.
+If every entry is hidden,
 the empty-list message appends a "(N hidden)" hint.
 
 Debug broker actions (notes/exec-broker.md): `launcher-list` returns
@@ -109,6 +115,31 @@ the post-filter list as JSON (optionally including hidden entries with
 see what the scanner picked; `set-entry-hidden` performs the same
 metadata write as the UI. Integration coverage: `launcher::` tests in
 `tests/integration/tests/launcher.rs`.
+
+## Built-in entries
+
+`LauncherEntry.Builtin` entries are synthesized Kotlin-side
+(`builtinsFor` + `withBuiltins`, unit-tested) after the scan, not
+`.desktop` files. Ids carry a reserved `tawc:` prefix (scanned ids with
+it are dropped), so hide state (`hiddenDesktopIds`) and pin ids work
+unchanged and the query matches them like any entry. Edit is never
+offered.
+
+| Entry | Id | Action | Offered | Pin |
+|---|---|---|---|---|
+| TAWC Term | `tawc:term` | new shell tab | tawcroot | yes |
+| Update packages | `tawc:update` | new command tab running `Distro.upgradeCommand` | tawcroot | yes |
+| Add entry | `tawc:add-entry` | `DesktopFileEditorActivity` (new), for result | not chroot | no |
+
+TAWC Term and Update packages sort by name with everything else; Add
+entry sorts last whatever the query (`LauncherEntry.filter`). The
+terminal ones draw their glyph (`ic_terminal`, `ic_update`) white on a
+round black `builtin_icon_bg` tile — the same circle as
+`ic_terminal_fallback` — in grid and pins alike, so TAWC Term looks
+like any icon-less terminal entry; Add entry is a bare themed
+`ic_add_entry` plus.
+`launcher-list` includes them with `builtin: true`
+(`launcher::test_builtin_entries_listed_and_hideable`).
 
 ## Managed dir + .desktop editor
 
@@ -129,9 +160,8 @@ exactly the complex foreign files the editor shouldn't touch).
   tawcroot/proot but not chroot's root-owned rootfs (see "Access
   model") — chroot installs get no New/Edit entry points, consistent
   with the terminal gating.
-- Editor scope (`DesktopEntryFile`): Name + Exec (required), Icon
-  (freeform `Icon=` value, resolved by `resolve_icon` on next scan),
-  Terminal checkbox (checked by default for new entries — hand-made
+- Editor scope (`DesktopEntryFile`): Exec (required) + Name (blank = Exec, shown as the hint), Icon
+  (see "Icon field" below), Terminal checkbox (checked by default for new entries — hand-made
   entries are usually CLI scripts). `Comment=` has no form field but is
   read and written back, so editing preserves an existing description.
   Saving
@@ -148,6 +178,39 @@ exactly the complex foreign files the editor shouldn't touch).
   rest — a warning, not silent data loss.
 - After save/delete the launcher rescans (`RESULT_OK` →
   `loadApps()`).
+
+### Icon field
+
+`[preview] [field ✕] / [Select] [Load]`. The field is a freeform
+`Icon=` value (a name, or an in-rootfs absolute path); ✕ is a box-less
+`TextInputLayout` with `END_ICON_CLEAR_TEXT`.
+
+- **Preview**: what the grid would draw. `nativeResolveIcon(rootfs,
+  value)` (the scan's resolver and SVG cache, one value) on IO,
+  debounced 250 ms after typing and immediate on a Terminal toggle;
+  empty/unresolved shows the grid's fallback glyph for the current
+  Terminal state.
+- **Select** → `IconPickerActivity`, a searchable grid (same pill and
+  column math as `AppsPane`) of `nativeListIcons(rootfs)`:
+  `[{name, user}]`, one entry per name. Cells resolve lazily through
+  `nativeResolveIcon` (4 at a time, memoized per name for the
+  activity), since rasterizing a whole theme up front takes seconds.
+  Case-insensitive substring filter; `user` names (imports) first with
+  no query. Picker renders land in the shared `icon-cache/`, so the
+  next launcher scan prunes them; reopening the picker re-renders the
+  visible cells (~8 ms each).
+- **Load** → `OpenDocument(image/*)` → `IconImport`: rasters are
+  decoded with `ImageDecoder`, scaled to fit 256² (never up) and
+  re-encoded as PNG into
+  `/root/.local/share/icons/hicolor/256x256/apps/`; SVGs (MIME or
+  `.svg` name, ≤ 1 MiB like the cache's cap) are copied to
+  `…/hicolor/scalable/apps/`. The name is `tawc-<slug of the document
+  name>`, `-2`/`-3` on collision across both extensions, reusing a
+  candidate whose bytes are identical. Written atomically
+  (`atomicWriteBytes`). The field gets the plain name, so guest
+  desktops reading the `.desktop` file find it too, and imports travel
+  with the rootfs. Nothing deletes imports. Name logic:
+  `IconImportTest`.
 
 Serializer/parse/slug logic is JVM-unit-tested
 (`DesktopEntryFileTest`); scan-dir + precedence + terminal-flag
@@ -189,6 +252,8 @@ trampoline).
   stale-pin story: uninstalling a distro leaves pins behind, and a
   stale tap gets a clear error. (Optional follow-up if that annoys:
   uninstall could `disableShortcuts` ids prefixed `"<installId>/"`.)
+  A built-in id resolves before the scan, straight to
+  `EntryLauncher`, which sends it through the `.CommandLaunch` path.
 - A hidden entry still launches from its pin — hiding declutters the
   list; an existing pin is explicit user intent. Terminal entries get
   no special casing: dispatch goes through `EntryLauncher`, same as
@@ -223,33 +288,53 @@ cache) searches, all rooted at the canonicalized rootfs:
 1. Absolute `Icon=/foo/bar.png` → used directly. The value is
    guest-controlled and we now *parse* what we find, so the path is
    lexically normalized and rejected if `..` climbs out of the rootfs.
-2. Bare name → the theme walk under `usr/share/icons`, below.
+2. Bare name → the theme walk over the icon bases, below.
 3. `usr/share/pixmaps/<name>.{png,svg,svgz}` (legacy fallback).
 4. `Icon=name.<ext>` strips known image extensions before the search.
 
 The theme walk is spec-*shaped*, not the full fdo size-matching
 algorithm — we want "largest sensible raster, else scalable":
 
+- **Bases** (`ICON_BASES`): `/root/.local/share/icons` (the spec's
+  `$XDG_DATA_HOME/icons`, where editor imports go), then
+  `/usr/local/share/icons`, `/usr/share/icons`, and flatpak's
+  `exports/share/icons`. A theme can span bases; its dirs from all
+  bases are merged, and the user base wins a tie.
 - **Theme order**: seeds `default`, `Adwaita`, `Papirus`, `breeze`,
   `hicolor`, each expanded breadth-first through its `index.theme`
   `Inherits=` (minimal line scan, stops at the second group header; no
-  theme crate). De-duplicated, missing themes dropped, `hicolor` forced
-  last so an inherited parent still gets a look in. `default` leads so a
-  distro/user-selected theme wins.
+  theme crate; read from the first base that has it). De-duplicated,
+  missing themes dropped, `hicolor` forced last so an inherited parent
+  still gets a look in. `default` leads so a distro/user-selected theme
+  wins.
 - **Per theme**: contexts `apps`, then `legacy`, then `categories` —
   generic names like `utilities-terminal` live outside `apps` in several
-  themes. Sizes `128, 96, 256, 64, 48`, then `scalable`, then
-  `32, 24, 22, 16` (a vector icon beats a 16 px PNG blown up to a 56 dp
-  row). Both layouts are tried: `<size>/<context>` (hicolor, Adwaita)
-  and `<context>/<size>` (breeze), with numeric sizes spelled both
-  `48x48` and bare `48`.
+  themes — then every other context the theme has (`places`,
+  `mimetypes`, …, by name), so an app's own icon beats a same-named
+  generic one and the picker's every name resolves. Sizes
+  `128, 96, 256, 64, 48`, then `scalable`, then `32, 24, 22, 16` (a
+  vector icon beats a 16 px PNG blown up to a 56 dp row), then any other
+  size dir (`512x512`, `36`, `48x48@2`, …) largest effective size
+  first — Electron/flatpak apps often ship only 512. Both layouts are
+  read: `<size>/<context>` (hicolor, Adwaita) and `<context>/<size>`
+  (breeze), with numeric sizes spelled both `48x48` and bare `48`.
 - Extensions per directory: `png`, then `svg`, then `svgz`. XPM is not
   searched — we can't decode it and only a couple of `NoDisplay` python
   entries still ship one.
-- Each theme's immediate subdirectory names are read once
-  (`read_subdir_names`), so the walk skips whole size tiers instead of
-  stat'ing the full contexts × sizes × layouts × extensions grid.
-  Adwaita on sid ships three size dirs, not ten.
+- Each theme's two directory levels are read once per resolver
+  (`ThemeDir::new`) into an ordered dir list, so the walk only stats
+  dirs that exist instead of the full contexts × sizes × layouts ×
+  extensions grid.
+- **One walk, two consumers**: `IconResolver::sources` yields every
+  source dir (theme dirs, pixmaps, symbolic dirs) in resolution order.
+  `resolve` takes the first hit; `list` (the picker's
+  `nativeListIcons`) collects every name from the same sources,
+  `-symbolic` stripped for symbolic dirs and stems `resolve` would
+  rewrite skipped, so a listed name resolves to the file the launcher
+  would use (`launcher::test_listed_icons_resolve`). Dangling symlinks
+  aren't listed.
+- Why this exists: a user typing `folder` got nothing because it lives
+  only in `Adwaita/scalable/places`, a context the walk used to skip.
 
 ### SVG cache
 
@@ -265,8 +350,9 @@ before.
 - Rendered 192 px square, aspect-preserved, centred, transparent. That
   covers the ~56 dp row at 3×, the recents icon and the 2/3-safe-zone
   pin bitmap.
-- Written to `<hex>.<pid>.tmp` then renamed — the launcher and the
-  shortcut trampoline can scan concurrently.
+- Written to `<hex>.<pid>-<seq>.tmp` then renamed — the launcher and the
+  shortcut trampoline can scan concurrently, and picker cells render
+  on several threads.
 - Guard rails, since the input is guest-controlled: sources over 1 MiB
   are skipped, parse+render runs under `catch_unwind`, and any failure
   leaves a zero-length `<hex>.fail` marker so a bad SVG isn't re-parsed
@@ -293,7 +379,8 @@ not misleading.
 ### Symbolic last resort
 
 After every theme, context and size has come up empty, the walk tries
-`<theme>/symbolic/{apps,legacy,categories}/<name>-symbolic.svg`. It is
+`<theme>/symbolic/<context>/<name>-symbolic.svg`, preferred contexts
+first. It is
 last because it loses the app's colours: Konsole on sid asks for
 `utilities-terminal` and the rootfs ships only
 `Adwaita/symbolic/legacy/utilities-terminal-symbolic.svg`.
@@ -302,7 +389,7 @@ Symbolic SVGs are a single near-black colour, so they vanish on a dark
 background, and a cached PNG can't follow the app theme. They are baked
 light-on-dark instead: the SVG is rendered at 60 % scale, its **alpha is
 kept as a mask** and repainted white over a black rounded tile with the
-same proportions as `ic_terminal_fallback`. Masking rather than
+same proportions as `ic_app_fallback`. Masking rather than
 string-replacing the fill is deliberate — a symbolic icon's colour can
 come from `fill`, `style`, a class or a `use` reference, so rewriting the
 source is fragile. The cache key carries a `symbolic` bit.
@@ -333,7 +420,7 @@ or copy icons into an app-uid-readable cache at install time.
 - Window-list integration: show running Wayland windows alongside apps
   to switch.
 - Recently-launched section.
-- Launching from the terminal pane's search (one field for commands
-  and apps).
+- Launching from the apps tab's search (one field for commands and
+  apps).
 
 None of these block today's "type-and-go" flow; revisit after dogfooding.

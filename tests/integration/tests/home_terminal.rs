@@ -1,86 +1,71 @@
-//! The home screen's terminal (notes/terminal.md "Pending vs in use"): a
-//! pending shell goes in use on input, back to pending if that input is
-//! erased, and the last shell exiting closes the app (the recents swipe
-//! is in lazy_compositor.rs). Typed into through the real IME path
-//! (`input`), so MainActivity must be visible.
+//! The home screen's terminal tabs (notes/terminal.md "Lifecycle"): what
+//! happens when a terminal goes away, per the selection at the time
+//! (the recents swipe is in lazy_compositor.rs). Typed into through the
+//! real IME path (`input`), so MainActivity must be visible.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tawc_integration::adb;
+use tawc_integration::helpers::{
+    show_home_apps, show_home_tab, show_home_terminal, terminal_run, test_init, wait_terminal_state,
+};
 
-fn wait_state(want: &str) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let state = adb::terminal_state().expect("terminal-state");
-        if state == want {
-            return;
-        }
-        assert!(Instant::now() < deadline, "terminal-state {state:?}, want {want:?}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-/// `want` for all of `window` (no flip-flop to pending).
-fn hold_state(want: &str, window: Duration) {
-    let end = Instant::now() + window;
-    while Instant::now() < end {
-        assert_eq!(adb::terminal_state().expect("terminal-state"), want);
-        std::thread::sleep(Duration::from_millis(200));
-    }
-}
-
-/// Type `line` (no spaces: `input text` splits on them; use `%s`).
-fn type_text(text: &str) {
-    adb::shell(&format!("input text '{text}'")).expect("input text");
-}
-
-fn key(code: u32) {
-    adb::shell(&format!("input keyevent {code}")).expect("input keyevent");
-}
-
-const ENTER: u32 = 66;
-const DEL: u32 = 67;
-
-fn run(line: &str) {
-    type_text(line);
-    key(ENTER);
-}
-
-#[test]
-fn test_terminal_returns_to_pending_when_idle() {
-    tawc_integration::helpers::test_init();
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
-    adb::home_pane("terminal").expect("home-pane terminal");
-    wait_state("pending");
-    // Let bash print its first prompt before typing.
+/// New terminal tab, then wait for the prompt.
+fn open_tab(want: &str) {
+    adb::home_tab("new").expect("home-tab new");
+    wait_terminal_state(want);
     std::thread::sleep(Duration::from_secs(1));
+}
 
-    // Typed, then erased: back to pending, hold released.
-    type_text("ab");
-    wait_state("inUse:1");
-    assert!(
-        adb::session_state().expect("session-state").iter().any(|r| r.starts_with("terminal ")),
-        "in-use shell holds no session reason"
-    );
-    key(DEL);
-    key(DEL);
-    wait_state("pending");
+/// The last terminal exiting while selected closes the app; with others
+/// left the right neighbour is selected, else the left one.
+#[test]
+fn test_terminal_exit_selects_neighbour_then_closes_app() {
+    test_init();
+    show_home_terminal();
     let reasons = adb::session_state().expect("session-state");
-    assert!(!reasons.iter().any(|r| r.starts_with("terminal ")), "demoted shell still holds: {reasons:?}");
+    assert!(reasons.iter().any(|r| r.starts_with("terminal ")), "terminal holds no session reason: {reasons:?}");
+    open_tab("tabs:2 selected:1");
+    open_tab("tabs:3 selected:2");
 
-    // Once something ran, erasing or `clear` keeps it in use.
-    run("true");
-    type_text("x");
-    key(DEL);
-    hold_state("inUse:1", Duration::from_secs(2));
-    run("clear");
-    hold_state("inUse:1", Duration::from_secs(2));
+    // Middle tab exits: its right neighbour (now at its index) is selected.
+    show_home_tab("1");
+    wait_terminal_state("tabs:3 selected:1");
+    terminal_run("exit");
+    wait_terminal_state("tabs:2 selected:1");
 
-    // The last shell exiting closes the app, pending shell included.
-    run("exit");
-    wait_state("none");
+    // Rightmost exits: the left neighbour.
+    terminal_run("exit");
+    wait_terminal_state("tabs:1 selected:0");
+
+    // Last one: the app closes.
+    terminal_run("exit");
+    wait_terminal_state("tabs:0 selected:none");
+    let reasons = adb::session_state().expect("session-state");
+    assert!(!reasons.iter().any(|r| r.starts_with("terminal ")), "closed shell still holds: {reasons:?}");
 
     // Later tests expect a TAWC activity in front.
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
-    adb::home_pane("apps").expect("home-pane apps");
+    show_home_apps();
+}
+
+/// A terminal exiting while the apps tab or another terminal is
+/// selected only drops its tab; the selection stays and the app stays
+/// open.
+#[test]
+fn test_unselected_terminal_exit_keeps_selection() {
+    test_init();
+    show_home_terminal();
+    terminal_run("sleep%s4;exit");
+    adb::home_tab("apps").expect("home-tab apps");
+    wait_terminal_state("tabs:1 selected:apps");
+    wait_terminal_state("tabs:0 selected:apps");
+
+    // Tab 0 exits behind tab 1, which keeps the selection at its new index.
+    show_home_terminal();
+    terminal_run("sleep%s4;exit");
+    open_tab("tabs:2 selected:1");
+    wait_terminal_state("tabs:1 selected:0");
+    terminal_run("exit");
+    wait_terminal_state("tabs:0 selected:none");
+    show_home_apps();
 }

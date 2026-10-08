@@ -12,6 +12,8 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(tawc_skip_libhybris_on_target)',
     'cfg(tawc_skip_root_on_target)',
     'cfg(tawc_live_relay)',
+    'cfg(tawc_export_tests)',
+    'cfg(tawc_export_peer)',
 ] }
 
 [lib]

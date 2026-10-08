@@ -756,6 +756,13 @@ static long store_ensure(void)
 	return rv;
 }
 
+long tawcroot_linkstore_tmp_dirfd(void)
+{
+	long rv = store_ensure();
+	if (rv < 0) return rv;
+	return g_tmp_fd >= 0 ? g_tmp_fd : TAWC_ENOENT;
+}
+
 int tawcroot_linkstore_state(void)
 {
 	return g_state;

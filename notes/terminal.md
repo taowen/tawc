@@ -1,9 +1,10 @@
 # In-App Terminal
 
-The home screen's terminal pane (`terminal/TerminalPane`, hosted by
-`MainActivity`; see android.md "Home screen"): an interactive shell into
-the open distro's rootfs, without the compositor/graphics stack.
-Opening the app lands in it, termux-style.
+The home screen's terminal tabs (`terminal/TerminalPane` inside
+`DistroHome`, hosted by `MainActivity`; see android.md "Home screen"):
+interactive shells into the open distro's rootfs, without the
+compositor/graphics stack. They share the tab bar with the apps tab,
+which the app opens on.
 
 ## Termux terminal modules
 
@@ -79,8 +80,8 @@ line of `<rootfs>/etc/passwd`, so `chsh -s /usr/bin/zsh` inside the
 rootfs is honoured (wmww/tawc#7). The rootfs is app-uid-owned under
 tawcroot, so that's a plain host-side read; symlinks are followed
 *within* the rootfs (an absolute `/usr/bin/zsh -> /usr/bin/zsh-5.9`
-must not be read against the host's `/`). It falls back to `/bin/bash`
-whenever the answer isn't usable — no passwd file or `root` line,
+must not be read against the host's `/`). It falls back to the command
+shell (below) whenever the answer isn't usable — no passwd file or `root` line,
 empty field, or a shell that isn't an existing executable in the
 rootfs (`chsh` to a since-uninstalled shell). `-l` is accepted by
 bash, zsh, fish, dash and ksh alike. There is deliberately no app-side
@@ -90,7 +91,9 @@ Only interactive tabs switch shells. Every command spawn — command
 sessions below, launcher Exec lines, install steps, `RunCommandOp`,
 the exec broker, `rootfs-run.sh` — stays on `/bin/bash -lc`, because
 Exec lines, the hold-open trailer and the install scripts all assume
-POSIX-or-better syntax that fish doesn't speak. `SHELL` in the
+POSIX-or-better syntax that fish doesn't speak. `RootShell.command`
+picks `/bin/sh` instead in a rootfs without bash (custom imports such
+as Alpine; installation.md "Custom distros"). `SHELL` in the
 `RootfsEnv` map *is* the resolved shell on every tawcroot spawn, so
 scripts and GUI terminals launched from the desktop open the same one.
 
@@ -98,27 +101,28 @@ scripts and GUI terminals launched from the desktop open the same one.
 `/root/.bashrc` + `/usr/lib/tawc/bashrc`), so a zsh/fish tab gets that
 distro's own prompt and — with no OSC title arriving — a `Term <n>`
 label. Configuring a non-bash prompt is the user's job. A shell that
-exists but dies on startup kills the pending shell before anyone
-types; the pane keeps its transcript (termux's exit line) instead of
-closing the app, and a tap or Enter respawns. Every new shell dies the
+exists but dies on startup closes its tab at once (the apps tab stays
+usable, so the app never becomes unopenable). Every new shell dies the
 same way, so the fix is outside the terminal: `scripts/rootfs-run.sh
 'usermod -s /bin/bash root'` from a dev box, or reinstalling the
 distro (`chsh` itself PAM-prompts once root's current shell isn't in
 `/etc/shells`, so it can't undo a `chsh` to a bogus path).
 
 tawcroot-only: chroot spawns via `su` (no pty fd to hand over) and
-proot is dev-only, so the pane (and its FAB / ⋮ entry) is gated on
-`Installation.method == tawcroot` + state READY; other installs get the
-apps pane.
+proot is dev-only, so terminals (FAB, `+`, the TAWC Term and Update
+packages entries) are gated on `Installation.method == tawcroot` +
+state READY; other installs get just the apps tab.
 
 ## Command sessions (launcher `Terminal=true` entries)
 
 `EntryLauncher` routes `Terminal=true` launcher entries on tawcroot
-installs here: `MainActivity` with `EXTRA_DISTRO`, `EXTRA_COMMAND`
-(the entry's Exec line) and `EXTRA_LABEL` (the entry name). The home
-screen opens that distro and shows the terminal pane (without writing
-`Settings.homePane`); the command tab is in use from birth and replaces
-a pending shell.
+installs here: the `.CommandLaunch` alias of `MainActivity` with
+`EXTRA_DISTRO`, `EXTRA_COMMAND` (the entry's Exec line) and
+`EXTRA_LABEL` (the entry name). The home screen opens that distro and
+a new, selected tab. The built-ins use the same intent: TAWC Term
+without `EXTRA_COMMAND` (a plain shell), Update packages with
+`Distro.upgradeCommand` (interactive `pacman -Syu`, `apt update && apt
+full-upgrade`, `xbps-install -Su`).
 `ptyShellExec(command=…)` swaps `-l` for `-lc <command>` — still a
 login shell so profile env fires, matching `startInside`. The command
 gets a hold-open trailer (`; __c=$?; printf '\n[exited %d — press any
@@ -137,63 +141,47 @@ plus a logcat warn (debug-only methods). Verified on-device
 ## Session model
 
 `TerminalSessions` is a process-wide registry of installation id → an
-ordered list of in-use `TerminalSession`s plus the selected index, and
-at most one *pending* session. Multiple shells per distro show as
-tabs, reattached (sessions, labels, selection) after recreation or a
-distro switch. The registry is dumb bookkeeping (`@Synchronized`,
-JVM-unit-tested); tab policy lives in `TerminalPane`. One
-`TerminalView` shows the selected session via `attachSession()`
+ordered list of `TerminalSession`s, each holding a `Reason.Terminal`
+(so a live shell keeps the session service and its notification up).
+Multiple shells per distro show as tabs, reattached (sessions, labels)
+after recreation or a distro switch. The registry is dumb bookkeeping
+(`@Synchronized`, JVM-unit-tested). `DistroHome` owns the tab policy
+and which tab is selected: plain activity state, carried across
+recreation in `onSaveInstanceState` and reset to the apps tab on a cold
+start, a distro switch or a finished install. One `TerminalView`
+(`TerminalPane`) shows the selected session via `attachSession()`
 (termux-app's multi-session pattern: it resets emulator state and
 `updateSize()`s, so background tabs keep a stale pty size until
 selected).
 
-**Pending vs in use.** With no in-use tabs, showing the pane spawns a
-pending shell. It becomes in use (`promote`, appended as the last tab)
-on the first input that reaches it: a non-system, non-modifier
-`onKeyDown` or an `onCodePoint` client callback (together these gate
-every `TerminalView` write path except autofill; the extra keys route
-through them) or a paste. Output alone (bashrc, the prompt) doesn't
-count. `+` and command tabs are in use from birth.
+A terminal exists only once something opened it — the FAB or `+` (a
+shell), TAWC Term, Update packages, a `Terminal=true` entry or a pinned
+shortcut — and stays a tab until it exits or is closed. Opening a tab selects it; selecting a terminal
+tab (including the neighbour picked below) pops the IME via
+`TerminalPane.show`, deferring to window focus on a cold start or
+`onNewIntent`. Selecting the apps tab drops the IME unless the search
+field has focus.
 
-**Back to pending.** The promoted shell is demoted
-(`TerminalSessions.demote`, hold released) when its first input is
-erased with nothing entered and nothing else runs in its session —
-checked on each output chunk and bell (`ShellIdle`, unit-tested
-against a real emulator):
+## Lifecycle
 
-- *Screen:* not the alternate screen, the cursor back where the
-  pending shell got its first input (same size), nothing at or after
-  it. Enter, a paste or a tab switch forfeits it.
-- *Session:* the shell is the only process whose session id is its pid
-  (`/proc/*/stat`), in case a key binding started something.
+When a terminal goes away — its shell exits or its × is tapped:
 
-Once anything was entered the tab stays in use until it closes.
-⋮ **Close all** (above Apps, in-use only) hangs up every tab
-(`TerminalSessions.hangUp`, as the swipe below) and leaves one fresh
-pending shell; closing the last tab by `exit`/× closes the app
-instead.
-`home_terminal::test_terminal_returns_to_pending_when_idle` drives the
-real shell.
-
-| | Pending | In use |
+| What was selected | Other terminals left? | Result |
 |---|---|---|
-| `SessionHolds` | none — no service, no notification | `Reason.Terminal` |
-| Tab strip | hidden, distro label instead, no `+` | tabs, `+` after the last |
-| FAB | Apps | none (⋮ → Apps) |
-| `keepScreenOn` | off | on |
-| Pane / distro switch | killed | keep running, pane detaches |
-| `MainActivity.onDestroy` | killed (recreation reattaches) | untouched |
-| Recents swipe of the home task | killed | SIGHUP (below) |
-| Notification Exit | killed | killed |
-| Uninstall started | killed (`InstallationService.startUninstall`) | swept by the uninstall |
-| First input erased (above) | — | back to pending |
-| Shell exits / × on last tab | transcript stays, tap/Enter respawns | tab closes; last one → `finishAndRemoveTask` |
-| ⋮ Close all | — | hung up; one new pending shell |
+| This terminal | none | close the app (`finishAndRemoveTask`) |
+| This terminal | some | select the right neighbour, else the left |
+| Apps tab or another terminal | any | drop the tab; the selection stays |
+
+Command tabs keep the hold-open trailer, so they "exit" on the trailing
+keypress and then follow the table. ⋮ **Close all** (terminal tabs
+only) hangs up every tab (`TerminalSessions.hangUp`, as the swipe
+below) and selects the apps tab; the app stays open.
+`home_terminal::` covers each row.
 
 **Swipe = closing the windows.** Only an explicit recents swipe of the
-home task closes in-use shells, like closing desktop terminal windows:
+home task closes shells, like closing desktop terminal windows:
 `SessionService.onTaskRemoved` (never called for system kills; the
-service is up while any tab is in use) checks the root activity's
+service is up while any tab exists) checks the root activity's
 affinity is the default one (not a compositor window) and runs
 `TerminalSessions.hangUpAll`: SIGHUP to each shell (the pid is the
 shell — tawcroot is in-process), which hangs up its jobs as bash/zsh
@@ -205,11 +193,9 @@ stray tail ([session-service.md](session-service.md)).
 (last tab closed), which must not hang up other distros' tabs:
 `TerminalSessions.selfRemoving` marks that one (reset by
 `MainActivity.onCreate` in case the callback never comes). Otherwise
-in-use shells outlive the activity; the notification brings them
+shells outlive the activity; the notification brings them
 back. Detached sessions get a
-`DetachedTerminalClient`, which drops their registry entry (tab or
-pending slot) if they exit meanwhile. `SessionService`'s stray scan
-skips pending pids ([session-service.md](session-service.md)).
+`DetachedTerminalClient`, which drops their tab if they exit meanwhile.
 
 Never `finishIfRunning()` a session no view has sized: its pid is 0
 but it counts as running, and `kill(0, SIGKILL)` takes down the app's
@@ -232,9 +218,11 @@ Debian-root sets nothing (its escape lives only in
 home, i.e. every fresh tab) is shown as `Term <n>` by tab position —
 app-side, since the number must follow the index as tabs close.
 Duplicate labels are fine (desktop terminals behave the same).
-Verified on-device 2026-06-10. The `TerminalTabBar` (`[≡][tabs… +][⋮]`,
-fixed dark palette against the always-black terminal surface) is the
-pane's top row. The selected tab has a faint fill and a 2 dp accent
+Verified on-device 2026-06-10. The `TerminalTabBar`
+(`[≡][⊞][tabs…][+][⋮]`, fixed dark palette against the always-black
+terminal surface) is the home's top row; ⊞ is the apps tab (icon, no
+×, same selection styling) and `+` shows only while a terminal tab
+exists. The selected tab has a faint fill and a 2 dp accent
 strip along its top. Title changes are applied after 150 ms of quiet:
 Arch's `PROMPT_COMMAND` title (`root@localhost:~`) and ShellDefaults'
 `~` can arrive in separate output chunks, and relabelling on each

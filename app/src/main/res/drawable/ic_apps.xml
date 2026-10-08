@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 3x3 app grid (material "apps"): the home FAB's way back from the
-     terminal pane to the app list. -->
+<!-- 3x3 app grid (material "apps"): the home tab bar's apps tab. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"

@@ -8,8 +8,8 @@
 use std::time::{Duration, Instant};
 
 use tawc_integration::helpers::{
-    close_home_terminal, ensure_wayland_debug_app, has_shm_surface, show_home_terminal,
-    terminal_run, wait_for_rootfs_file, wait_terminal_state, TIMEOUT,
+    close_home_terminal, ensure_wayland_debug_app, has_shm_surface, show_home_apps,
+    show_home_terminal, terminal_run, wait_for_rootfs_file, TIMEOUT,
 };
 use tawc_integration::rootfs_process::RootfsProcess;
 use tawc_integration::{adb, compositor, GraphicsBackend};
@@ -258,49 +258,6 @@ fn test_session_holds_follow_commands_and_exit_kills_everything() {
     let _ = cmd.stop();
 }
 
-/// The home screen's pending shell (nobody typed into it yet) holds no
-/// session reason and is not a stray: once a command's hold is gone the
-/// service stops with the shell still running.
-#[test]
-fn test_session_holds_ignore_pending_terminal() {
-    let _unpinned = Unpinned::new();
-    // Visible, so the terminal view lays out and starts the shell.
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
-    adb::home_pane("terminal").expect("home-pane terminal");
-    let wait_state = |want: &str| {
-        let deadline = Instant::now() + TIMEOUT;
-        loop {
-            let state = adb::terminal_state().expect("terminal-state");
-            if state == want {
-                return;
-            }
-            assert!(Instant::now() < deadline, "terminal-state {state:?}, want {want:?}");
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    };
-    wait_state("pending");
-    let reasons = adb::session_state().expect("session-state");
-    assert!(reasons.is_empty(), "pending shell took a hold: {reasons:?}");
-
-    // A command's hold starts the service; releasing it enters the
-    // stray tail, which must not count the pending shell.
-    let out = adb::rootfs_run_with(BACKEND, "true").expect("run true");
-    assert!(out.status.success(), "`true` failed");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while adb::session_service_running().expect("dumpsys") {
-        assert!(
-            Instant::now() < deadline,
-            "session service stayed up with only a pending shell: {:?}",
-            adb::session_state()
-        );
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    wait_state("pending");
-
-    adb::home_pane("apps").expect("home-pane apps");
-    wait_state("none");
-}
-
 /// `am stack remove` on MainActivity's root task: the recents swipe.
 fn remove_main_task() {
     let out = adb::shell("am stack list").expect("am stack list");
@@ -310,7 +267,7 @@ fn remove_main_task() {
     for line in list.lines() {
         if let Some(rest) = line.trim().strip_prefix("RootTask id=") {
             root = rest.split_whitespace().next().map(str::to_string);
-        } else if line.contains("me.phie.tawc/me.phie.tawc.MainActivity") {
+        } else if line.contains(&tawc_integration::main_activity()) {
             found = root.clone();
         }
     }
@@ -324,8 +281,7 @@ fn remove_main_task() {
 #[test]
 fn test_swipe_hangs_up_terminals() {
     let _unpinned = Unpinned::new();
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
-    adb::home_pane("terminal").expect("home-pane terminal");
+    show_home_terminal();
     let wait_until = |what: &str, f: &mut dyn FnMut() -> bool| {
         let deadline = Instant::now() + Duration::from_secs(30);
         while !f() {
@@ -334,9 +290,6 @@ fn test_swipe_hangs_up_terminals() {
         }
     };
     let state = || adb::terminal_state().expect("terminal-state");
-    wait_until("pending shell", &mut || state() == "pending");
-    // Let bash print its first prompt before typing.
-    std::thread::sleep(Duration::from_secs(1));
 
     let sleepers = || {
         let ps = adb::host_sh("ps -A -o ARGS | grep -E 'sleep 392[12]' | grep -v grep; true").expect("ps");
@@ -352,7 +305,7 @@ fn test_swipe_hangs_up_terminals() {
     });
 
     remove_main_task();
-    wait_until("the shell to close", &mut || state() == "none");
+    wait_until("the shell to close", &mut || state() == "tabs:0 selected:none");
     wait_until("the plain job to die", &mut || !sleepers().contains("sleep 3921"));
     assert!(sleepers().contains("sleep 3922"), "nohup child died with the shell");
     let reasons = adb::session_state().expect("session-state");
@@ -365,8 +318,7 @@ fn test_swipe_hangs_up_terminals() {
 
     // Later tests expect a TAWC activity in front: compositor windows
     // can't launch from the background.
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
-    adb::home_pane("apps").expect("home-pane apps");
+    show_home_apps();
 }
 
 /// `wl-copy` from a cold terminal starts the compositor, which mirrors
@@ -378,9 +330,6 @@ fn test_wl_copy_survives_compositor_stop() {
     let _unpinned = Unpinned::new();
     let _ = adb::rootfs_run_with(BACKEND, "rm -f /tmp/tawc-wlp-lazy*");
     show_home_terminal();
-    wait_terminal_state("pending");
-    // Let the shell print its first prompt before typing.
-    std::thread::sleep(Duration::from_secs(1));
 
     terminal_run("wl-copy%slazy-wl-copy");
     let deadline = Instant::now() + START_TIMEOUT;

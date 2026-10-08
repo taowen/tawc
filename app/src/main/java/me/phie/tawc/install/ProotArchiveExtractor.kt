@@ -1,7 +1,8 @@
 package me.phie.tawc.install
 
-import android.system.Os
 import com.github.luben.zstd.ZstdInputStream
+import me.phie.tawc.install.util.AndroidFsOps
+import me.phie.tawc.install.util.FsOps
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
@@ -43,7 +44,7 @@ import java.io.InterruptedIOException
  *      decompression and commons-compress for tar parsing in other
  *      install paths; no shell, no toybox quirks.
  *
- * Hardlinks are created via [Os.link]; symlinks via [Os.symlink].
+ * Hardlinks and symlinks go through [FsOps] (`link(2)` / `symlink(2)`).
  * Device nodes are skipped (Arch bootstrap doesn't ship any, and we
  * can't mknod as app uid anyway). Any unrecognised entry type is
  * skipped with a warning instead of failing the install.
@@ -81,7 +82,42 @@ internal object ProotArchiveExtractor {
         destDir: String,
         stripPrefix: String?,
         onLine: (String) -> Unit,
+    ) = extractEntries({ tin.nextEntry }, tin, destDir, stripPrefix, onLine)
+
+    /**
+     * Core of [extractStream] with the entry source split out: [next]
+     * yields entries (null = end) and [data] reads the current entry's
+     * bytes. Lets [DistroImporter] interpose its allowlist and digest
+     * on a stream that keeps every containment check here. [fs] is
+     * injectable for JVM tests; [preserveMtime] restores file and dir
+     * mtimes (symlinks keep the extract time). [roots], when set,
+     * narrows containment from [destDir] to those top-level children
+     * of it, so a symlink can't steer a write onto a sibling such as
+     * the slot's `metadata.json`. [restoreXattrs] sets `user.*` xattrs
+     * from PAX `SCHILY.xattr.*` headers, best-effort.
+     */
+    internal fun extractEntries(
+        next: () -> TarArchiveEntry?,
+        data: InputStream,
+        destDir: String,
+        stripPrefix: String?,
+        onLine: (String) -> Unit,
+        fs: FsOps = AndroidFsOps,
+        preserveMtime: Boolean = false,
+        roots: List<String>? = null,
+        restoreXattrs: Boolean = false,
     ) {
+        fun chmodSafe(path: File, mode: Int) = fs.chmod(path.absolutePath, mode)
+        // Before the chmod: user.* xattrs need write permission.
+        fun xattrs(entry: TarArchiveEntry, target: File) {
+            if (!restoreXattrs) return
+            for ((k, v) in entry.extraPaxHeaders) {
+                val name = k.removePrefix("SCHILY.xattr.")
+                if (name != k && name.startsWith("user.")) {
+                    fs.setXattr(target.absolutePath, name, v.toByteArray(Charsets.UTF_8))
+                }
+            }
+        }
         val dest = File(destDir).apply { mkdirs() }
         // Record (relative path, archived mode) of every dir we create
         // so we can re-apply the archive's mode at the end. Keyed by
@@ -89,6 +125,7 @@ internal object ProotArchiveExtractor {
         // applying a 0500 mode to a parent before its children are
         // populated would re-create the original problem.
         val deferredDirModes = mutableListOf<Pair<File, Int>>()
+        val deferredDirMtimes = mutableListOf<Pair<File, Long>>()
 
         // Resolve dest once so per-entry containment checks compare
         // against a normalised absolute path. We reject any entry whose
@@ -103,10 +140,16 @@ internal object ProotArchiveExtractor {
         // throwing if [rel] escapes via `..` or absolute paths. The
         // canonical path of the eventual target must start with
         // destReal/.
+        val rootPaths = roots?.map { File(destReal, it).absolutePath }
         fun resolveInside(rel: String, kind: String): File {
             val candidate = File(dest, rel).canonicalFile
             val abs = candidate.absolutePath
-            if (abs != destReal.absolutePath && !abs.startsWith(destPrefix)) {
+            val inside = if (rootPaths == null) {
+                abs == destReal.absolutePath || abs.startsWith(destPrefix)
+            } else {
+                rootPaths.any { abs == it || abs.startsWith(it + File.separator) }
+            }
+            if (!inside) {
                 throw IOException("tar $kind escapes rootfs: rel=\"$rel\" abs=\"$abs\"")
             }
             return candidate
@@ -125,8 +168,7 @@ internal object ProotArchiveExtractor {
                 if (Thread.interrupted()) {
                     throw InterruptedIOException("extract cancelled")
                 }
-                val entry: TarArchiveEntry = tin.nextEntry as? TarArchiveEntry
-                    ?: break
+                val entry: TarArchiveEntry = next() ?: break
                 val rel = stripped(entry.name, stripPrefix) ?: continue
                 if (rel.isEmpty() || rel == "/" || rel == ".") continue
                 val target = resolveInside(rel, "entry")
@@ -139,7 +181,9 @@ internal object ProotArchiveExtractor {
                         // mode as a marker — treat as 0755).
                         val mode = entry.mode and MODE_MASK
                         deferredDirModes += target to (if (mode == 0) MODE_0755 else mode)
+                        if (preserveMtime) deferredDirMtimes += target to entry.modTime.time
                         chmodSafe(target, MODE_0700)
+                        xattrs(entry, target)
                     }
                     entry.isSymbolicLink -> {
                         target.parentFile?.mkdirs()
@@ -152,11 +196,7 @@ internal object ProotArchiveExtractor {
                         // is *following* a symlink during a later
                         // file write, which we mitigate per-write
                         // (see entry.isFile below).
-                        try {
-                            Os.symlink(entry.linkName, target.absolutePath)
-                        } catch (e: Exception) {
-                            throw IOException("symlink ${target.absolutePath} -> ${entry.linkName}: $e", e)
-                        }
+                        fs.symlink(entry.linkName, target.absolutePath)
                     }
                     entry.isLink -> {
                         // Hardlink. linkName is the in-archive path of
@@ -181,26 +221,14 @@ internal object ProotArchiveExtractor {
                         val linkRel = stripped(entry.linkName, stripPrefix)
                             ?: throw IOException("hardlink target outside archive: ${entry.linkName}")
                         val src = resolveInside(linkRel, "hardlink target")
-                        try {
-                            Os.link(src.absolutePath, target.absolutePath)
-                        } catch (e: android.system.ErrnoException) {
+                        if (!fs.link(src.absolutePath, target.absolutePath)) {
                             // EACCES / EPERM: SELinux denied `link` on
                             // `app_data_file`. Fall back to a relative
                             // symlink pointing at the same in-rootfs
                             // path. Same on-disk effect for the proot
                             // tracee since proot's `-r <rootfs>` keeps
                             // both endpoints inside the chroot view.
-                            val rel = relativizeSymlink(target, src)
-                            try {
-                                Os.symlink(rel, target.absolutePath)
-                            } catch (e2: Exception) {
-                                throw IOException(
-                                    "hardlink $target -> $src failed (${e.errno}); " +
-                                        "symlink fallback also failed: $e2", e2,
-                                )
-                            }
-                        } catch (e: Exception) {
-                            throw IOException("hardlink $target -> $src: $e", e)
+                            fs.symlink(relativizeSymlink(target, src), target.absolutePath)
                         }
                     }
                     entry.isFile -> {
@@ -216,9 +244,11 @@ internal object ProotArchiveExtractor {
                         // whatever a previous tar entry left behind.
                         target.delete()
                         FileOutputStream(target).use { out ->
-                            tin.copyTo(out)
+                            data.copyTo(out)
                         }
+                        xattrs(entry, target)
                         chmodSafe(target, entry.mode and MODE_MASK)
+                        if (preserveMtime) target.setLastModified(entry.modTime.time)
                     }
                     else -> {
                         // Character/block devices, FIFOs, etc. — Arch
@@ -235,6 +265,10 @@ internal object ProotArchiveExtractor {
         // parent never blocks chmod of a child it contains.
         deferredDirModes.sortedByDescending { it.first.absolutePath.count { c -> c == '/' } }
             .forEach { (dir, mode) -> chmodSafe(dir, mode) }
+        // After the modes: a dir's mtime moves whenever a child lands,
+        // so it can only be restored once nothing else will be written.
+        // setLastModified works on 0500 dirs (owner-only check).
+        for ((dir, mtime) in deferredDirMtimes) dir.setLastModified(mtime)
 
         onLine("extracted ${deferredDirModes.size} dirs into $destDir")
     }
@@ -281,17 +315,6 @@ internal object ProotArchiveExtractor {
         return linkDir.relativize(target.toPath()).toString()
     }
 
-    /** chmod that swallows the (rare) error rather than failing extract. */
-    private fun chmodSafe(path: File, mode: Int) {
-        try {
-            Os.chmod(path.absolutePath, mode)
-        } catch (_: Exception) {
-            // Files we can't chmod are usually fine — current umask
-            // will be more permissive than the archive intended, and
-            // pacman/runtime will set its own modes on packages it
-            // installs. Bootstrap-time extras don't matter.
-        }
-    }
 }
 
 // Kotlin has no octal literal syntax, so unix mode bits are spelled

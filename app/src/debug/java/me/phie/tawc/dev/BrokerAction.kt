@@ -1,6 +1,8 @@
 package me.phie.tawc.dev
 
 import android.content.Context
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -21,6 +23,10 @@ internal interface BrokerAction {
      * process's exit code on the host.
      */
     fun run(args: Map<String, String>, ctx: ActionContext): Int
+
+    /** True if the action consumes the host's stdin via
+     *  [ActionContext.stdin]; otherwise stdin frames are drained. */
+    val readsStdin: Boolean get() = false
 }
 
 /**
@@ -41,4 +47,10 @@ internal class ActionContext(
      * the broker can free the connection thread.
      */
     val cancelFlag: AtomicBoolean,
+    /** Raw bytes to the host's stdout, framed; throws once the host is
+     *  gone. Don't mix with [out] in one action. `close()` only flushes. */
+    val stdout: OutputStream,
+    /** The host's stdin bytes, EOF at the host's stdin EOF; null unless
+     *  [BrokerAction.readsStdin]. */
+    val stdin: InputStream?,
 )

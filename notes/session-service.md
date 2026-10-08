@@ -20,7 +20,7 @@ reports. The registry itself never touches Android (JVM-unit-tested);
 
 | Reason | Acquired | Released |
 |---|---|---|
-| `Terminal(distroId)` | `TerminalSessions.add` / `promote` (first input to a pending shell) | `remove` / `removeAll` |
+| `Terminal(distroId)` | `TerminalSessions.add` (a tab opens) | `remove` / `removeAll` |
 | `Command(label)` | around the process in `UserRootfsSession.startInside` (launcher headless launch, `RunCommandOp`, broker `RUNINSIDE`) | a waiter thread on process exit |
 | `Compositor(windowCount)` | `CompositorService`, when `nativeStartCompositor` spawned a thread | `onCompositorStopped` |
 | `Remote(distroId, clients)` | `RemoteSession.start` (remote access, [remote-access.md](remote-access.md)); client count updated from the agent's status | the agent ending (Stop, TTL, failure, Exit, uninstall) |
@@ -53,10 +53,7 @@ the spawn carries on unprotected (the next acquire retries).
 **Stray tail.** A `nohup`/`setsid` job outlives its tab and holds nothing.
 When the last hold releases, the service runs `ProcessScanner.scan`
 off-thread; if guests remain it stays up as "N background processes" and
-re-scans every 15 s until none do. Only this tail state polls. The scan
-excludes pending terminal pids (`TerminalSessions.pendingPids`); a
-pending shell has no children, so its pid is enough
-(`lazy_compositor::test_session_holds_ignore_pending_terminal`).
+re-scans every 15 s until none do. Only this tail state polls.
 
 **Notification.** Channel `tawc_session` (the old `tawc_compositor`
 channel is deleted), low importance, ongoing. Title "TAWC running", text
@@ -67,7 +64,7 @@ home screen's recents card hangs up its shells (`onTaskRemoved`,
 leave behind shows as background processes.
 
 **Exit** (`SessionExit.killEverything`) kills everything: finishes every
-terminal session, pending ones included (tabs close through the normal
+terminal session (tabs close through the normal
 `onSessionFinished` path), stops the compositor, and
 `ProcessScanner.killAllInRootfs` for every install — except installs that
 are not `READY` or have a live `install:`/`uninstall:` operation, whose

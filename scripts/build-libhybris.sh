@@ -191,8 +191,15 @@ Version: 1.32
 EOF
 
 # ── Toolchain env ──
-export CC="$CC_BIN"
-export CXX="$CXX_BIN"
+# Debian's gcc links with --as-needed by default (Arch's doesn't), which
+# drops DT_NEEDED entries we rely on — e.g. the GL shims' link to the
+# real GLESv2, leaving libGL.so.1 with no GL symbols. The release APK is
+# built in F-Droid's Debian image, so pin the behaviour. It goes in
+# CC/CXX, not LDFLAGS: libtool puts LDFLAGS after the libraries, where
+# it no longer applies to them.
+NO_AS_NEEDED="-Wl,--no-as-needed"
+export CC="$CC_BIN $NO_AS_NEEDED"
+export CXX="$CXX_BIN $NO_AS_NEEDED"
 export AR="${HOST_TRIPLE}-ar"
 export STRIP="${HOST_TRIPLE}-strip"
 export RANLIB="${HOST_TRIPLE}-ranlib"
@@ -265,7 +272,7 @@ CONFIGURE_ARGS=(
 #     so every link fails with "cannot find crtbeginS.o").
 # So stamp a fingerprint of both after each configure, and reconfigure
 # from scratch whenever the recorded one doesn't match.
-FINGERPRINT="crt=$("$CC_BIN" -print-file-name=crtbeginS.o) args=${CONFIGURE_ARGS[*]}"
+FINGERPRINT="crt=$("$CC_BIN" -print-file-name=crtbeginS.o) args=${CONFIGURE_ARGS[*]} cc=$CC"
 STAMP="$BUILD_DIR/.tawc-configure-stamp"
 NEED_CONFIGURE=0
 if [ "$CLEAN" = "1" ] || [ ! -f "$BUILD_DIR/Makefile" ]; then
@@ -376,9 +383,9 @@ patchelf --set-soname libGLESv2_hybris.so "$SHIM_DIR/libGLESv2_hybris.so"
     -o "$SHIM_DIR/libGLESv2.so.2" \
     "$REPO_DIR/deps/libhybris-shims/libglesv2-shim.c" \
     "$REPO_DIR/deps/libhybris-shims/glx-stubs.c" \
+    -Wl,--no-as-needed \
     -L"$SHIM_DIR" -l:libGLESv2_hybris.so \
     -Wl,-rpath,/usr/lib/hybris/gl-shims \
-    -Wl,--no-as-needed \
     -Wl,--version-script="$REPO_DIR/deps/libhybris-shims/glx-stubs.map" \
     -Wl,-soname,libGLESv2.so.2
 ln -sf libGLESv2.so.2 "$SHIM_DIR/libGLESv2.so"
@@ -392,9 +399,9 @@ ln -sf libGLESv2.so.2 "$SHIM_DIR/libGL.so.1"
     -o "$SHIM_DIR/libGL.so" \
     "$REPO_DIR/deps/libhybris-shims/libgl-shim.c" \
     "$REPO_DIR/deps/libhybris-shims/glx-stubs.c" \
+    -Wl,--no-as-needed \
     -L"$SHIM_DIR" -l:libGL.so.1 \
     -Wl,-rpath,/usr/lib/hybris/gl-shims \
-    -Wl,--no-as-needed \
     -Wl,--version-script="$REPO_DIR/deps/libhybris-shims/glx-stubs.map" \
     -Wl,-soname,libGL.so.1
 
@@ -416,5 +423,16 @@ for shim in "$SHIM_DIR/libGLESv2.so.2" "$SHIM_DIR/libGL.so"; do
     check_glx_export "$shim" glXChooseFBConfig
     check_glx_export "$shim" glXGetProcAddressARB
 done
+
+# The shims export GL only through DT_NEEDED; --as-needed would drop it.
+check_needed() {
+    "${HOST_TRIPLE}-readelf" -d "$1" | grep -qF "Shared library: [$2]" || {
+        echo "ERROR: $1 lacks DT_NEEDED $2 (--as-needed?)" >&2
+        exit 1
+    }
+}
+check_needed "$SHIM_DIR/libGLESv2.so.2" libGLESv2_hybris.so
+check_needed "$SHIM_DIR/libGL.so" libGLESv2.so.2
+check_needed "$LIB_DIR/libEGL.so.1.0.0" libhardware.so.2
 
 echo "==> done. Output in $LIB_DIR"

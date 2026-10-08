@@ -48,6 +48,10 @@ internal object ShellDefaults {
         alias grep='grep --color=auto'
     """.trimIndent() + "\n"
 
+    /** The one-time user-owned `/root/.bashrc` and `/root/.bash_profile`. */
+    const val BASHRC_STUB = "# TAWC shell and prompt defaults:\n[ -f $GUEST_BASHRC_PATH ] && . $GUEST_BASHRC_PATH\n"
+    const val BASH_PROFILE_STUB = "[ -f ~/.bashrc ] && . ~/.bashrc\n"
+
     /**
      * Shell fragment for the distro configure() scripts. Expects
      * `${'$'}ROOTFS` to be set; writes the one-time user-owned stubs.
@@ -57,11 +61,10 @@ internal object ShellDefaults {
         appendLine("# One-time shell-defaults stubs; user-owned after this.")
         appendLine("mkdir -p \"\$ROOTFS/root\"")
         appendLine("cat > \"\$ROOTFS/root/.bashrc\" <<'TAWC_BASHRC_EOF'")
-        appendLine("# TAWC shell and prompt defaults:")
-        appendLine("[ -f $GUEST_BASHRC_PATH ] && . $GUEST_BASHRC_PATH")
+        append(BASHRC_STUB)
         appendLine("TAWC_BASHRC_EOF")
         appendLine("cat > \"\$ROOTFS/root/.bash_profile\" <<'TAWC_BASH_PROFILE_EOF'")
-        appendLine("[ -f ~/.bashrc ] && . ~/.bashrc")
+        append(BASH_PROFILE_STUB)
         appendLine("TAWC_BASH_PROFILE_EOF")
     }
 }

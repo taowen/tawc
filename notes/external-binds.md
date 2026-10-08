@@ -94,6 +94,17 @@ install form warns (grant / install anyway) when the pending binds need
 a grant that's missing, since the fail-closed error would otherwise hit
 mid-install.
 
+## Export / import
+
+Binds travel with an exported distro (in its `metadata.json`), but
+their **contents never do**: the exporter walks the host install dir
+without following anything, and a bind is only a per-spawn path
+rewrite, so only the empty guest mountpoint dir is archived. On import
+into a build without all-files access declared, shared-storage binds
+are dropped (that build could never launch them and has no binds UI);
+otherwise they're kept even when they would currently fail closed, and
+the import form warns. See notes/installation.md "Export / import".
+
 ## UI
 
 - `ManageBindsActivity` — add/edit/remove. Read-only binds show a

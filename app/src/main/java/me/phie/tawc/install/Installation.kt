@@ -90,6 +90,17 @@ data class Installation(
      * leaning on the default forever.
      */
     val bootstrapFlavor: String = FLAVOR_TARBALL,
+    /** Set when this slot was created by importing an export archive
+     *  ([DistroImporter]): when, and which app id wrote the archive.
+     *  Null for regular installs. */
+    val importedAtMillis: Long? = null,
+    val importedFromPackage: String? = null,
+    /** os-release `PRETTY_NAME` (else `NAME`) / `ID` and the detected
+     *  libc ([RootfsFacts.LIBC_GLIBC] / [RootfsFacts.LIBC_MUSL]) of a
+     *  [DISTRO_CUSTOM] import, for display. Null otherwise. */
+    val osName: String? = null,
+    val osId: String? = null,
+    val libc: String? = null,
 ) {
     fun rootfsDir(store: InstallationStore): File = store.rootfsDir(id)
     fun metadataFile(store: InstallationStore): File = store.metadataFile(id)
@@ -120,6 +131,11 @@ data class Installation(
             put("hiddenDesktopIds", JSONArray(hiddenDesktopIds))
         }
         if (andoEnabled) put("andoEnabled", true)
+        if (importedAtMillis != null) put("importedAtMillis", importedAtMillis)
+        if (importedFromPackage != null) put("importedFromPackage", importedFromPackage)
+        if (osName != null) put("osName", osName)
+        if (osId != null) put("osId", osId)
+        if (libc != null) put("libc", libc)
     }.toString(2)
 
     /**
@@ -155,6 +171,9 @@ data class Installation(
         const val DISTRO_MANJARO = "manjaro"
         const val DISTRO_VOID = "void"
         const val DISTRO_DEBIAN_SID = "debian-sid"
+        /** An imported rootfs of any other distro ([DistroImporter]);
+         *  never in [me.phie.tawc.install.distro.DistroRegistry]. */
+        const val DISTRO_CUSTOM = "custom"
         // Kept as constants for the metadata schema; the runtime
         // mapping to InstallationMethod implementations lives in
         // [InstallationMethod.forKey] and the impl objects' KEY fields.
@@ -165,6 +184,8 @@ data class Installation(
          *  [me.phie.tawc.install.distro.BootstrapFlavor.id]. */
         const val FLAVOR_TARBALL = "tarball"
         const val FLAVOR_PACKAGES = "packages"
+        /** A [DISTRO_CUSTOM] rootfs: built elsewhere, imported. */
+        const val FLAVOR_IMPORTED = "imported"
 
         // Allowlist for the id component of `<app data>/distros/<id>/`.
         // The id flows into shell scripts (via `installDir.absolutePath`)
@@ -280,8 +301,17 @@ data class Installation(
                 else emptyList(),
                 andoEnabled = obj.optBoolean("andoEnabled", false),
                 bootstrapFlavor = obj.optString("bootstrapFlavor", FLAVOR_TARBALL),
+                importedAtMillis = if (obj.has("importedAtMillis")) obj.getLong("importedAtMillis") else null,
+                importedFromPackage = if (obj.has("importedFromPackage") && !obj.isNull("importedFromPackage"))
+                    obj.getString("importedFromPackage") else null,
+                osName = optStringOrNull(obj, "osName"),
+                osId = optStringOrNull(obj, "osId"),
+                libc = optStringOrNull(obj, "libc"),
             )
         }
+
+        private fun optStringOrNull(obj: JSONObject, key: String): String? =
+            if (obj.has(key) && !obj.isNull(key)) obj.getString(key) else null
 
         private fun parseTawcInstalls(arr: JSONArray): List<TawcInstall> = buildList {
             for (i in 0 until arr.length()) {

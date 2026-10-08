@@ -12,8 +12,8 @@
  *   - `rt_sigprocmask`: SIGSYS is reserved and cannot be blocked.
  *     Strip it from requested masks and report the actual kernel mask.
  *     No per-thread shadow or thread-exit bookkeeping is needed.
- *   - `sigaltstack`: virtualize via uc->uc_stack so undersized guest
- *     altstacks never receive our SA_ONSTACK frame (sigalt.h).
+ *   - `sigaltstack`: virtualize so undersized guest altstacks never
+ *     receive our SA_ONSTACK frame, applying it off-stack (sigalt.h).
  *   - Other signals are unaffected.
  */
 
@@ -205,8 +205,15 @@ static long handle_rt_sigprocmask(const tawcroot_syscall_args *args,
 	return 0;
 }
 
-/* sigaltstack(ss, old_ss). Never forwarded — see sigalt.h. Old is
- * copied out before anything mutates, so EFAULT leaves no trace. */
+static long apply_sigaltstack(const stack_t *ss)
+{
+	return tawcroot_raw_syscall_off_stack(TAWC_SYS_sigaltstack,
+					      (long)ss, 0);
+}
+
+/* sigaltstack(ss, old_ss). Never forwarded verbatim — see sigalt.h.
+ * Old is copied out before anything mutates, so EFAULT leaves no
+ * trace. */
 static long handle_sigaltstack(const tawcroot_syscall_args *args,
 			       ucontext_t *uc)
 {
@@ -222,9 +229,10 @@ static long handle_sigaltstack(const tawcroot_syscall_args *args,
 	if (r < 0) return r;
 	if (guest_old && tawc_copy_to_guest(guest_old, &old, sizeof old) < 0)
 		return TAWC_EFAULT;
-	if (guest_ss)
-		tawc_sigalt_commit(&uc->uc_stack, &ss);
-	return 0;
+	if (!guest_ss) return 0;
+	long tid = TAWC_RAW(TAWC_SYS_gettid, 0, 0, 0, 0, 0, 0);
+	return tawc_sigalt_commit(&uc->uc_stack, &ss, (int)tid,
+				  apply_sigaltstack);
 }
 
 #if defined(__x86_64__)

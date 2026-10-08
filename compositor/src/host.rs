@@ -178,6 +178,8 @@ pub enum SurfaceEvent {
     FocusChanged { activity_id: ActivityId, has_focus: bool },
     /// Runtime output scale change from Settings / test broker.
     OutputScaleChanged { scale: f64 },
+    /// Refresh rate (mHz) the Activity's display runs at for this app.
+    OutputRefreshChanged { mhz: u32 },
     /// Runtime toggle for the compositor-owned Xwayland process.
     XwaylandChanged { enabled: bool },
     /// Runtime toggle for the contained GTK3 broken menubar workaround.

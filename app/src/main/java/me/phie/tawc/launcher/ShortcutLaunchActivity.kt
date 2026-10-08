@@ -13,10 +13,10 @@ import me.phie.tawc.install.InstallationStore
 /**
  * Invisible trampoline behind every pinned home-screen shortcut
  * ([EntryShortcuts]). The shortcut intent carries only
- * (installId, desktopId, label); the entry is re-resolved with a fresh
- * rootfs scan at tap time — the same walk the launcher does on open —
- * so a pin keeps working across `.desktop` edits and never stores a
- * command.
+ * (installId, desktopId, label); the entry is re-resolved at tap time —
+ * a built-in id ([LauncherEntry.Builtin]) directly, anything else with a
+ * fresh rootfs scan, the same walk the launcher does on open — so a pin
+ * keeps working across `.desktop` edits and never stores a command.
  *
  * Stale pins (distro uninstalled or mid-(un)install, entry gone) turn
  * into a [LaunchErrorActivity] dialog instead of a crash. A hidden
@@ -43,6 +43,11 @@ class ShortcutLaunchActivity : AppCompatActivity() {
         }
         if (inst.state != Installation.State.READY) {
             fail(label, getString(R.string.shortcut_install_not_ready, inst.state.name.lowercase()))
+            return
+        }
+        LauncherEntry.Builtin.fromId(desktopId)?.takeIf { it.opensTerminal }?.let {
+            EntryLauncher.launch(applicationContext, inst, LauncherEntry.builtin(this, it))
+            finish()
             return
         }
         val rootfs = store.rootfsDir(inst.id).absolutePath

@@ -20,6 +20,9 @@
 
 bool (*tawcroot_test_raw_hook)(long nr, const long args[6], long *ret);
 
+/* noinline: the asm defines a global label, so it may only be emitted
+ * once (tawcroot_raw_syscall_off_stack below calls this). */
+__attribute__((noinline))
 long tawcroot_raw_syscall(long nr, long a, long b, long c,
 			  long d, long e, long f)
 {
@@ -63,6 +66,12 @@ long tawcroot_raw_syscall(long nr, long a, long b, long c,
 #else
 #error "no hosted raw-syscall shim for this arch"
 #endif
+}
+
+/* No SIGSYS handler (so no altstack to step off) in hosted tests. */
+long tawcroot_raw_syscall_off_stack(long nr, long a, long b)
+{
+	return tawcroot_raw_syscall(nr, a, b, 0, 0, 0, 0);
 }
 
 /* SA_RESTORER trampoline, same shape as the asm stubs'. handler.c

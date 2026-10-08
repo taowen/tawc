@@ -36,6 +36,9 @@ done
 
 # shellcheck source=../scripts/lib/select-device.sh
 source "$ROOT_DIR/scripts/lib/select-device.sh"
+# shellcheck source=../scripts/lib/tawc-package.sh
+source "$ROOT_DIR/scripts/lib/tawc-package.sh"
+PKG="$TAWC_PACKAGE"
 
 echo "=== Checking adb connection ($ANDROID_SERIAL) ==="
 adb get-state >/dev/null 2>&1 || { echo "ERROR: No adb device connected"; exit 1; }
@@ -70,7 +73,7 @@ source "$ROOT_DIR/scripts/lib/tawc-install-id.sh"
 # and exactly one install is present; errors if 0 or >1). The cargo
 # test harness reads the same env var via tawc_integration::install_id.
 INSTALL_ID="$TAWC_INSTALL_ID"
-INSTALL_DIR="/data/data/me.phie.tawc/distros/$INSTALL_ID"
+INSTALL_DIR="/data/data/$PKG/distros/$INSTALL_ID"
 TAWC_DISTROS_DIR="$INSTALL_DIR"
 ROOTFS_DIR="$INSTALL_DIR/rootfs"
 
@@ -211,8 +214,10 @@ copy_test_app() {
     adb shell rm -rf "$staging" >/dev/null
     adb push "$out_dir" "$staging" >/dev/null
     if [ "$name" = "libhybris-tls-repro" ]; then
+        # Arch's rootfs `/` is 0555; open it just long enough for /data.
         "$TAWC_EXEC" /system/bin/sh -c "\
-            mkdir -p $bin_dir $lib_dir && \
+            mkdir -p $bin_dir && \
+            { [ -d $lib_dir ] || { chmod u+w $ROOTFS_DIR && mkdir -p $lib_dir; r=\$?; chmod u-w $ROOTFS_DIR; [ \$r = 0 ]; }; } && \
             cp $staging/$name $bin_dir/$name && \
             cp $staging/tls_lib.so $staging/weak_lib.so $lib_dir/ && \
             chmod a+rx $bin_dir/$name $lib_dir/tls_lib.so $lib_dir/weak_lib.so"
@@ -330,7 +335,7 @@ fi
 # lifecycle drop the pin themselves. Force-stop first so a previous app
 # process is gone.
 echo "=== Starting compositor ==="
-adb shell "am force-stop me.phie.tawc"
+adb shell "am force-stop $PKG"
 sleep 0.3
 "$TAWC_EXEC" --action compositor-hold --arg hold=on >/dev/null
 
@@ -341,8 +346,8 @@ COMPOSITOR_READY=0
 for _ in $(seq 1 150); do
     # Wayland socket lives in the app's private data dir; probe via
     # the broker (runs as the app uid).
-    if adb shell 'pidof me.phie.tawc >/dev/null' 2>/dev/null && \
-       "$TAWC_EXEC" /system/bin/sh -c "test -e /data/data/me.phie.tawc/share/wayland-0" 2>/dev/null && \
+    if adb shell "pidof $PKG >/dev/null" 2>/dev/null && \
+       "$TAWC_EXEC" /system/bin/sh -c "test -e /data/data/$PKG/share/wayland-0" 2>/dev/null && \
        "$TAWC_EXEC" --action query-state 2>/dev/null | grep -q clients=; then
         COMPOSITOR_READY=1
         break
@@ -351,7 +356,7 @@ for _ in $(seq 1 150); do
 done
 if [ "$COMPOSITOR_READY" -ne 1 ]; then
     echo "ERROR: compositor did not become ready within 15s" >&2
-    adb shell am force-stop me.phie.tawc || true
+    adb shell am force-stop "$PKG" || true
     exit 1
 fi
 
@@ -364,13 +369,13 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 PY
 )"
 echo "=== Forwarding exec broker on localhost:$TAWC_EXEC_BROKER_PORT ==="
-adb forward "tcp:$TAWC_EXEC_BROKER_PORT" "localabstract:me.phie.tawc.exec" >/dev/null
+adb forward "tcp:$TAWC_EXEC_BROKER_PORT" "localabstract:$PKG.exec" >/dev/null
 cleanup() {
     local status=$?
     if [ -n "${TAWC_EXEC_BROKER_PORT:-}" ]; then
         adb forward --remove "tcp:$TAWC_EXEC_BROKER_PORT" >/dev/null 2>&1 || true
     fi
-    adb shell am force-stop me.phie.tawc >/dev/null 2>&1 || true
+    adb shell am force-stop "$PKG" >/dev/null 2>&1 || true
     exit "$status"
 }
 trap cleanup EXIT
@@ -408,6 +413,18 @@ if [ "${TAWC_LIVE_RELAY:-}" = 1 ]; then
     echo "=== Enabling the live-relay remote access test ==="
     EXTRA_RUSTFLAGS+=(--cfg tawc_live_relay)
 fi
+# Distro export/import does real installs through the cache proxy
+# (minutes, GBs), against the suite's persistent-state policy; opt in
+# with TAWC_EXPORT_TESTS=1. The cross-package half also needs a peer
+# build installed: TAWC_EXPORT_PEER_PACKAGE=<app id>.
+if [ "${TAWC_EXPORT_TESTS:-}" = 1 ]; then
+    echo "=== Enabling the distro export/import tests ==="
+    EXTRA_RUSTFLAGS+=(--cfg tawc_export_tests)
+    if [ -n "${TAWC_EXPORT_PEER_PACKAGE:-}" ]; then
+        export TAWC_EXPORT_PEER_PACKAGE
+        EXTRA_RUSTFLAGS+=(--cfg tawc_export_peer)
+    fi
+fi
 if [ "${#EXTRA_RUSTFLAGS[@]}" -gt 0 ]; then
     export RUSTFLAGS="${RUSTFLAGS:-} ${EXTRA_RUSTFLAGS[*]}"
 fi
@@ -431,6 +448,6 @@ if [ "$COLD_EXIT" -ne 0 ]; then
 fi
 
 echo "=== Stopping compositor ==="
-adb shell am force-stop me.phie.tawc
+adb shell am force-stop "$PKG"
 
 exit $TEST_EXIT

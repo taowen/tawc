@@ -98,6 +98,11 @@ val xwaylandPackageAbis: List<String> =
     if (xwaylandRequested) tawcAbis.filter { it in xwaylandScriptAbiFor } else emptyList()
 val xwaylandPackaged: Boolean = xwaylandPackageAbis.isNotEmpty()
 
+// Debug builds are me.phie.tawc.dev so they install beside a
+// release-signed me.phie.tawc; `-PtawcAppIdSuffix=` (empty) restores the
+// plain ID. Host tools follow via TAWC_PACKAGE; see notes/building.md.
+val tawcAppIdSuffix: String = (project.findProperty("tawcAppIdSuffix") as String?) ?: ".dev"
+
 android {
     namespace = "me.phie.tawc"
     compileSdk = 36
@@ -108,7 +113,7 @@ android {
         minSdk = 29
         targetSdk = 36
         // Plain release counter, single source of truth; see notes/release.md.
-        versionName = "3"
+        versionName = "4"
         versionCode = versionName!!.toInt()
         ndk {
             abiFilters.addAll(tawcAbis)
@@ -117,6 +122,7 @@ android {
 
     buildTypes {
         getByName("debug") {
+            applicationIdSuffix = tawcAppIdSuffix
             // LogScreenActivity is exported in debug only — the export
             // exists so `am start … --es operationId` from adb can
             // attach to a running op; release keeps it app-internal.

@@ -93,6 +93,11 @@ void tawcroot_linkstore_configure(const char *store_host_path);
 
 int tawcroot_linkstore_state(void);
 
+/* The store's tmp/ dirfd (store created on demand), for unnamed
+ * O_TMPFILE scratch that must not depend on the guest's rootfs modes
+ * (shm.c migration). -errno when there is no usable store. */
+long tawcroot_linkstore_tmp_dirfd(void);
+
 /* Resolver-side LATENT upgrade: a token symlink was encountered while
  * this process still believes no store exists (it started before
  * another process created the very first link — e.g. a shell whose

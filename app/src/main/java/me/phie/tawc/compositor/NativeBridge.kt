@@ -292,6 +292,9 @@ object NativeBridge {
      *  this through wl_output, fractional-scale, and xdg configure events. */
     external fun nativeSetOutputScale(scale: Float)
 
+    /** Display refresh rate (mHz) for `wl_output.mode`. */
+    external fun nativeSetOutputRefreshRate(mhz: Int)
+
     /** Start/stop the compositor-owned Xwayland server live. */
     external fun nativeSetXwaylandEnabled(enabled: Boolean)
 
@@ -320,6 +323,16 @@ object NativeBridge {
      * any thread (AppsPane dispatches it on Dispatchers.IO).
      */
     external fun nativeLauncherScan(rootfs: String): String
+
+    /** Resolve one `Icon=` value (name or in-rootfs absolute path) the
+     *  way the launcher scan does: a decodable PNG path, or empty. File
+     *  I/O and maybe an SVG render; call on Dispatchers.IO. */
+    external fun nativeResolveIcon(rootfs: String, value: String): String
+
+    /** Every icon name in the rootfs, as a JSON array of
+     *  `{name, user}` sorted by name; `user` = has a copy under
+     *  `/root/.local/share/icons`. Call on Dispatchers.IO. */
+    external fun nativeListIcons(rootfs: String): String
 
     // --- Remote access (me.phie.tawc.remote.RemoteSession; notes/remote-access.md) ---
 

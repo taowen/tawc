@@ -16,24 +16,58 @@ static stack_t mk(void *sp, int flags, size_t size)
 	return (stack_t){ .ss_sp = sp, .ss_flags = flags, .ss_size = size };
 }
 
-test(sigalt_big_stack_installed_verbatim)
+/* Stands in for the real off-stack sigaltstack. */
+static stack_t g_applied;
+static long g_apply_rv;
+static int g_apply_calls;
+
+static long fake_apply(const stack_t *ss)
+{
+	g_apply_calls++;
+	if (g_apply_rv < 0) return g_apply_rv;
+	g_applied = *ss;
+	return 0;
+}
+
+static void reset(void)
 {
 	tawc_sigalt_reset();
+	g_applied = DISABLED;
+	g_apply_rv = 0;
+	g_apply_calls = 0;
+}
+
+#define TID 100
+
+static void commit_ok_(TestCtx *test_ctx, stack_t *cur, const stack_t *ss,
+		       int tid)
+{
+	test_int_eq(tawc_sigalt_commit(cur, ss, tid, fake_apply), 0);
+	/* The kernel gets exactly what uc_stack will hold. */
+	test_true(g_applied.ss_sp == cur->ss_sp);
+	test_int_eq(g_applied.ss_size, cur->ss_size);
+	test_int_eq(g_applied.ss_flags, cur->ss_flags);
+}
+#define commit_ok(...) commit_ok_(test_ctx, __VA_ARGS__)
+
+test(sigalt_big_stack_installed_verbatim)
+{
+	reset();
 	stack_t cur = DISABLED, old;
 	stack_t ss = mk(g_buf, 0, TAWC_SIGALT_MIN);
 	test_int_eq(tawc_sigalt_check(&cur, 1, &ss, &old), 0);
 	test_int_eq(old.ss_flags, SS_DISABLE);
-	tawc_sigalt_commit(&cur, &ss);
+	commit_ok(&cur, &ss, TID);
 	test_true(cur.ss_sp == (void *)g_buf);
 	test_int_eq(cur.ss_size, TAWC_SIGALT_MIN);
 }
 
 test(sigalt_small_stack_substituted_and_read_back)
 {
-	tawc_sigalt_reset();
+	reset();
 	stack_t cur = DISABLED, old;
 	stack_t ss = mk(g_buf, 0, TAWC_SIGALT_MIN - 1);
-	tawc_sigalt_commit(&cur, &ss);
+	commit_ok(&cur, &ss, TID);
 	test_true(tawc_sigalt_is_slab(cur.ss_sp));
 	test_int_eq(cur.ss_size, TAWC_SIGALT_SLOT);
 
@@ -45,13 +79,13 @@ test(sigalt_small_stack_substituted_and_read_back)
 	/* Replacing a substituted stack reuses the slot. */
 	void *slot = cur.ss_sp;
 	ss = mk(g_buf + 8, 0, TAWC_SIGALT_KERN_MIN);
-	tawc_sigalt_commit(&cur, &ss);
+	commit_ok(&cur, &ss, TID);
 	test_true(cur.ss_sp == slot);
 }
 
 test(sigalt_validation_matches_kernel)
 {
-	tawc_sigalt_reset();
+	reset();
 	stack_t cur = DISABLED;
 	stack_t ss = mk(g_buf, 0, TAWC_SIGALT_KERN_MIN - 1);
 	test_int_eq(tawc_sigalt_check(&cur, 1, &ss, NULL), -ENOMEM);
@@ -64,7 +98,7 @@ test(sigalt_validation_matches_kernel)
 
 test(sigalt_on_stack_is_eperm_and_reported)
 {
-	tawc_sigalt_reset();
+	reset();
 	stack_t cur = mk(g_buf, 0, 32768), old;
 	stack_t ss = mk(NULL, SS_DISABLE, 0);
 	uintptr_t sp = (uintptr_t)g_buf + 100;
@@ -75,30 +109,90 @@ test(sigalt_on_stack_is_eperm_and_reported)
 
 test(sigalt_disable_and_exit_free_slots)
 {
-	tawc_sigalt_reset();
+	reset();
 	stack_t small = mk(g_buf, 0, TAWC_SIGALT_KERN_MIN);
 	stack_t cur[TAWC_SIGALT_SLOTS + 1];
 	for (int i = 0; i < TAWC_SIGALT_SLOTS; i++) {
 		cur[i] = DISABLED;
-		tawc_sigalt_commit(&cur[i], &small);
+		commit_ok(&cur[i], &small, TID + i);
 		test_true(tawc_sigalt_is_slab(cur[i].ss_sp));
 	}
 	/* Exhausted: fall back to the guest's own stack. */
 	cur[TAWC_SIGALT_SLOTS] = DISABLED;
-	tawc_sigalt_commit(&cur[TAWC_SIGALT_SLOTS], &small);
+	commit_ok(&cur[TAWC_SIGALT_SLOTS], &small, TID + TAWC_SIGALT_SLOTS);
 	test_true(cur[TAWC_SIGALT_SLOTS].ss_sp == (void *)g_buf);
 
 	stack_t dis = mk(NULL, SS_DISABLE, 0);
-	tawc_sigalt_commit(&cur[0], &dis);
+	commit_ok(&cur[0], &dis, TID);
 	test_int_eq(cur[0].ss_size, 0);
-	tawc_sigalt_thread_exit(&cur[1]);
+	/* Retired, not free: the handler frame is still on it. */
+	stack_t x = DISABLED;
+	commit_ok(&x, &small, TID + 1000);
+	test_true(x.ss_sp == (void *)g_buf);
+	/* Thread 1 exits; thread 0's next commit reclaims its retiree. */
+	tawc_sigalt_thread_exit(&cur[1], TID + 1);
+	stack_t big = mk(g_buf, 0, TAWC_SIGALT_MIN);
+	commit_ok(&cur[0], &big, TID);
 
 	stack_t a = DISABLED, b = DISABLED, c = DISABLED;
-	tawc_sigalt_commit(&a, &small);
-	tawc_sigalt_commit(&b, &small);
-	tawc_sigalt_commit(&c, &small);
+	commit_ok(&a, &small, TID + 2000);
+	commit_ok(&b, &small, TID + 2001);
+	commit_ok(&c, &small, TID + 2002);
 	test_true(tawc_sigalt_is_slab(a.ss_sp));
 	test_true(tawc_sigalt_is_slab(b.ss_sp));
 	test_true(a.ss_sp != b.ss_sp);
 	test_true(c.ss_sp == (void *)g_buf);
+}
+
+test(sigalt_disable_is_applied)
+{
+	reset();
+	stack_t cur = DISABLED;
+	stack_t ss = mk(g_buf, 0, 32768);
+	commit_ok(&cur, &ss, TID);
+	test_true(g_applied.ss_sp == (void *)g_buf);
+	ss = mk(NULL, SS_DISABLE, 0);
+	commit_ok(&cur, &ss, TID);
+	test_int_eq(g_applied.ss_flags, SS_DISABLE);
+	test_int_eq(g_applied.ss_size, 0);
+	test_int_eq(g_apply_calls, 2);
+}
+
+test(sigalt_apply_failure_changes_nothing)
+{
+	reset();
+	stack_t small = mk(g_buf, 0, TAWC_SIGALT_KERN_MIN);
+	stack_t cur = DISABLED;
+	g_apply_rv = -ENOMEM;
+	test_int_eq(tawc_sigalt_commit(&cur, &small, TID, fake_apply), -ENOMEM);
+	test_int_eq(cur.ss_flags, SS_DISABLE);
+	/* The slot it tried to claim went back. */
+	g_apply_rv = 0;
+	stack_t s[TAWC_SIGALT_SLOTS];
+	for (int i = 0; i < TAWC_SIGALT_SLOTS; i++) {
+		s[i] = DISABLED;
+		commit_ok(&s[i], &small, TID + i);
+		test_true(tawc_sigalt_is_slab(s[i].ss_sp));
+	}
+}
+
+test(sigalt_retired_slot_freed_by_owner_only)
+{
+	reset();
+	stack_t small = mk(g_buf, 0, TAWC_SIGALT_KERN_MIN);
+	stack_t dis = mk(NULL, SS_DISABLE, 0);
+	stack_t cur[TAWC_SIGALT_SLOTS];
+	for (int i = 0; i < TAWC_SIGALT_SLOTS; i++) {
+		cur[i] = DISABLED;
+		commit_ok(&cur[i], &small, TID + i);
+	}
+	void *slot0 = cur[0].ss_sp;
+	commit_ok(&cur[0], &dis, TID);
+	/* Another thread's commit doesn't free it. */
+	stack_t other = DISABLED;
+	commit_ok(&other, &small, TID + 1);
+	test_true(other.ss_sp == (void *)g_buf);
+	/* The owner's next commit does, and may take it right back. */
+	commit_ok(&cur[0], &small, TID);
+	test_true(cur[0].ss_sp == slot0);
 }

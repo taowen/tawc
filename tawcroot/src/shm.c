@@ -23,6 +23,7 @@
 #include "errno_neg.h"
 #include "fdtab.h"
 #include "io.h"
+#include "linkstore.h"
 #include "path.h"
 #include "path_scratch.h"
 #include "raw_sys.h"
@@ -464,10 +465,18 @@ static long migrate_fds(const int *fds, size_t n)
 	if (r == 0) r = maps_has_inode(st.st_dev, st.st_ino, scratch->buf[0]);
 	if (r != 0) return r > 0 ? TAWC_EBUSY : r;
 
-	/* Unnamed, so nothing to unlink or sweep, and the rootfs dir is
-	 * app-private (the guest can't see the inode by name). */
-	long tf = tawc_openat(tawcroot_rootfs_fd, ".",
-			      TAWC_O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
+	/* Unnamed, so nothing to unlink or sweep; both dirs are
+	 * app-private (the guest can't see the inode by name). Prefer the
+	 * store's tmp/: the rootfs root may deny the owner write (Arch
+	 * ships `/` 0555) and O_TMPFILE needs it. */
+	long tf = TAWC_ENOENT;
+	long sd = tawcroot_linkstore_tmp_dirfd();
+	if (sd >= 0)
+		tf = tawc_openat((int)sd, ".",
+				 TAWC_O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
+	if (tf < 0)
+		tf = tawc_openat(tawcroot_rootfs_fd, ".",
+				 TAWC_O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
 	if (tf < 0) return tf;
 	r = TAWC_RAW(TAWC_SYS_fchmod, tf,
 		     SHM_FILE_TAG | (seals & SHM_SEAL_MASK), 0, 0, 0, 0);

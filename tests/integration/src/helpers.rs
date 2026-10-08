@@ -331,6 +331,26 @@ pub fn assert_client_animating(name: &str, window: Duration, min_frames: u64) {
     );
 }
 
+/// Assert an animating client renders at (nearly) the output refresh rate
+/// over `window`. Rate is frames per vsync-clock second, so adb latency
+/// doesn't skew it.
+pub fn assert_client_at_refresh_rate(name: &str, window: Duration) {
+    let before = compositor::query_state(TIMEOUT)
+        .unwrap_or_else(|e| panic!("query compositor state before {name} rate check: {e}"));
+    std::thread::sleep(window);
+    let after = compositor::query_state(TIMEOUT)
+        .unwrap_or_else(|e| panic!("query compositor state after {name} rate check: {e}"));
+    let seconds = (after.last_vsync_ns - before.last_vsync_ns) as f64 / 1e9;
+    let frames = after.frames.saturating_sub(before.frames);
+    let refresh = after.output_refresh_mhz as f64 / 1000.0;
+    let fps = frames as f64 / seconds;
+    assert!(
+        seconds > 0.0 && fps >= 0.95 * refresh,
+        "{name} rendered {frames} frames in {seconds:.3}s of vsync time ({fps:.1} fps), \
+         expected >= 95% of {refresh:.1} Hz. before={before:?} after={after:?}"
+    );
+}
+
 /// True if the compositor currently has at least one SHM-backed surface.
 ///
 /// This is the test oracle for clients expected to use SHM.
@@ -625,8 +645,8 @@ pub fn assert_renders_via_ahb(backend: GraphicsBackend, cmd: &str, name: &str, t
     assert_compositor_clean();
 }
 
-/// Wait until the test install's terminal is `want` (`pending`,
-/// `inUse:<n>` or `none`).
+/// Wait until the test install's terminal state is `want`
+/// (`tabs:<n> selected:<apps|i|none>`, see [adb::terminal_state]).
 pub fn wait_terminal_state(want: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -639,11 +659,21 @@ pub fn wait_terminal_state(want: &str) {
     }
 }
 
-/// Bring the home terminal to the front and wait until MainActivity has
-/// window focus (typed text goes to the focused window).
+/// Bring the home screen to the front with one new terminal tab (the
+/// test install must have none) and wait until MainActivity has window
+/// focus (typed text goes to the focused window) and the shell has had
+/// time to print its prompt.
 pub fn show_home_terminal() {
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
-    adb::home_pane("terminal").expect("home-pane terminal");
+    show_home_tab("new");
+    wait_terminal_state("tabs:1 selected:0");
+    thread::sleep(Duration::from_secs(1));
+}
+
+/// Bring the home screen to the front on `tab` ([adb::home_tab]) and
+/// wait until MainActivity has window focus.
+pub fn show_home_tab(tab: &str) {
+    adb::shell(&format!("am start -n {}", crate::main_activity())).expect("start MainActivity");
+    adb::home_tab(tab).unwrap_or_else(|e| panic!("home-tab {tab}: {e}"));
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let out = adb::shell("dumpsys window | grep mCurrentFocus").expect("dumpsys window");
@@ -663,13 +693,18 @@ pub fn terminal_run(line: &str) {
     adb::shell("input keyevent 66").expect("enter");
 }
 
-/// `exit` the last terminal tab (which closes the app), then put the
-/// home screen back on apps: later tests expect a TAWC activity in front.
+/// `exit` the last terminal tab (which closes the app), then reopen the
+/// home screen: later tests expect a TAWC activity in front.
 pub fn close_home_terminal() {
     terminal_run("exit");
-    wait_terminal_state("none");
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
-    adb::home_pane("apps").expect("home-pane apps");
+    wait_terminal_state("tabs:0 selected:none");
+    show_home_apps();
+}
+
+/// Start MainActivity on the apps tab.
+pub fn show_home_apps() {
+    adb::shell(&format!("am start -n {}", crate::main_activity())).expect("start MainActivity");
+    adb::home_tab("apps").expect("home-tab apps");
 }
 
 /// Wait for `path` to exist in the rootfs, then return its contents.

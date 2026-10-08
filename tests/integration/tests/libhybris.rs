@@ -18,7 +18,8 @@
 use std::time::Duration;
 
 use tawc_integration::helpers::{
-    assert_client_animating, assert_compositor_clean, assert_renders_via_ahb,
+    assert_client_animating, assert_client_at_refresh_rate, assert_compositor_clean,
+    assert_renders_via_ahb,
     firefox_profile_cleanup, launch_and_wait_for_ahb, TIMEOUT,
 };
 use tawc_integration::{adb, compositor, rootfs, GraphicsBackend};
@@ -270,6 +271,7 @@ fn test_weston_simple_egl_renders_via_ahb() {
     );
 
     assert_client_animating("weston-simple-egl", Duration::from_millis(1500), 10);
+    assert_client_at_refresh_rate("weston-simple-egl", Duration::from_secs(3));
 
     app.stop().expect("weston-simple-egl failed to stop cleanly");
     assert_compositor_clean();
@@ -305,6 +307,7 @@ fn test_vkcube_renders_via_ahb() {
     );
 
     assert_client_animating("vkcube", Duration::from_millis(1500), 10);
+    assert_client_at_refresh_rate("vkcube", Duration::from_secs(3));
 
     app.stop().expect("vkcube failed to stop cleanly");
     assert_compositor_clean();

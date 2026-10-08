@@ -437,7 +437,7 @@ Post-boot it also brings the AVD into a known-good state for TAWC dev:
   the SELinux `type_transition` that lets the compositor mmap memfds
   from chroot clients can't be installed; permissive mode is the
   emulator-only workaround. Resets every reboot.
-- If `me.phie.tawc` is installed, grants Magisk `su` to its uid (so
+- For each of `me.phie.tawc.dev` / `me.phie.tawc` that is installed, grants Magisk `su` to its uid (so
   `InstallationService` doesn't pop a prompt) and grants
   `POST_NOTIFICATIONS` (so the install foreground-service notification
   displays). Both grants reset on emulator wipe; the `su` policy
