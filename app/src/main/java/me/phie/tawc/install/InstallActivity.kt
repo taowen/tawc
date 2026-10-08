@@ -124,6 +124,11 @@ class InstallActivity : AppCompatActivity() {
      */
     private var resolvedId: String? = null
 
+    /** A started import replaces this form, like a started install. */
+    private val importLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) { if (it.resultCode == RESULT_OK) finish() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         selectedMethod = savedInstanceState?.getString(KEY_METHOD)
@@ -193,6 +198,14 @@ class InstallActivity : AppCompatActivity() {
         // the service-level gate refuse the install if the user taps
         // anyway.
         val available = DistroRegistry.availableForHost()
+
+        // Import sits on top: the other way to get a new distro.
+        s.addView(
+            tonalButton(getString(R.string.action_import_tarball)) {
+                importLauncher.launch(Intent(this, ImportActivity::class.java))
+            },
+            verticalLp(MATCH_PARENT, WRAP_CONTENT, bottomMargin = pad),
+        )
 
         s.addView(buildDistroPicker(available), verticalLp(MATCH_PARENT, WRAP_CONTENT, bottomMargin = pad))
 
@@ -507,18 +520,11 @@ class InstallActivity : AppCompatActivity() {
      */
     private fun revalidate() {
         if (!::labelField.isInitialized) return
-        val rawLabel = labelField.text.toString().trim()
-        val slug = if (rawLabel.isEmpty()) null else Installation.slugifyLabel(rawLabel)
-        val collides = slug != null && store.installationDir(slug).exists()
-        resolvedId = slug?.takeUnless { collides }
+        val check = LabelValidation.check(this, store, labelField.text.toString())
+        resolvedId = check.id
 
         if (::locationLabel.isInitialized) {
-            locationLabel.text = when {
-                rawLabel.isEmpty() -> getString(R.string.install_label_empty)
-                slug == null -> getString(R.string.install_label_invalid)
-                collides -> getString(R.string.install_already_installed_at, store.installationDir(slug).absolutePath)
-                else -> store.installationDir(slug).absolutePath
-            }
+            locationLabel.text = check.message
             val colorAttr = if (resolvedId == null) {
                 com.google.android.material.R.attr.colorError
             } else {

@@ -134,6 +134,35 @@ class TawcrootMethod(context: Context) : InstallationMethod {
     }
 
     /**
+     * Run `/bin/true` under tawcroot in [rootfs] — no shell, so no
+     * profile scripts that could start daemons. Starting any tawcroot
+     * session runs the link store's crash recovery, which is all the
+     * export quiesce wants from this. Busy-gate exempt (the exporter
+     * holds the busy mark). No user binds or ando: recovery needs
+     * neither, and a missing bind host dir must not block an export.
+     */
+    fun runNoop(rootfs: String): MethodResult = DistroBusy.bypassing {
+        val assetBinds = assetBinds()
+        val tmpdir = prepareSpawn(rootfs, assetBinds, emptyList())
+        val argv = buildList {
+            add("/system/bin/setsid")
+            addAll(rootfsArgv(
+                rootfs, null, assetBinds, emptyList(), null,
+                RootShell.resolve(File(rootfs)),
+            ))
+            add("/bin/true")
+        }
+        val proc = ProcessBuilder(argv)
+            .directory(File(tmpdir))
+            .also {
+                it.environment().clear()
+                it.environment()["TMPDIR"] = tmpdir
+            }
+            .start()
+        MethodRunHelper.collectProcess(proc, null)
+    }
+
+    /**
      * Spawn parameters for an interactive in-rootfs login shell on a
      * caller-owned pty — the in-app terminal
      * ([me.phie.tawc.terminal.TerminalPane]), whose termux
@@ -248,6 +277,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
         assetBinds: List<BindSpec>,
         externalBinds: List<ExternalBind>,
     ): String {
+        store.idForRootfs(rootfs)?.let { DistroBusy.check(it) }
         LinkerConfig.install(rootfs)
         File(rootfs, GUEST_TAWC_SHARE_DIR.removePrefix("/")).mkdirs()
         for (dir in LIBHYBRIS_BIND_DIRS) {

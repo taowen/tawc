@@ -283,6 +283,80 @@ pub fn run_capture_with_input(invocation: Invocation, input: &[u8]) -> io::Resul
     })
 }
 
+/// Stream a binary request: `stdin` (if any) is sent as stdin frames
+/// from a helper thread while stdout bytes go to `stdout` and stderr
+/// chunks to `on_stderr` as they arrive. Returns the exit code and all
+/// stderr. For archive-sized payloads (distro export/import) that
+/// [run_capture] / [run_capture_with_input] would hold in memory.
+pub fn run_streaming(
+    invocation: Invocation,
+    stdin: Option<Box<dyn Read + Send>>,
+    stdout: &mut dyn Write,
+    mut on_stderr: impl FnMut(&[u8]),
+) -> io::Result<(i32, Vec<u8>)> {
+    let (sock, _fwd) = connect(&invocation)?;
+    let mut tx = sock.try_clone()?;
+    let feeder = thread::spawn(move || {
+        if let Some(mut input) = stdin {
+            let mut buf = vec![0u8; 65536];
+            loop {
+                let n = match input.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                let mut frame = Vec::with_capacity(5 + n);
+                frame.push(STREAM_STDIN);
+                frame.extend_from_slice(&(n as u32).to_be_bytes());
+                frame.extend_from_slice(&buf[..n]);
+                if tx.write_all(&frame).is_err() {
+                    return;
+                }
+            }
+        }
+        let _ = tx.write_all(&[STREAM_STDIN_EOF, 0, 0, 0, 0]);
+    });
+    let mut s = sock;
+    let mut stderr = Vec::new();
+    let mut exit_code = -2;
+    loop {
+        let mut hdr = [0u8; 5];
+        match read_exact(&mut s, &mut hdr) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
+        }
+        let len = u32::from_be_bytes([hdr[1], hdr[2], hdr[3], hdr[4]]) as usize;
+        if len > 16 * 1024 * 1024 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("frame too large: {len}")));
+        }
+        let mut payload = vec![0u8; len];
+        read_exact(&mut s, &mut payload)?;
+        match hdr[0] {
+            STREAM_STDOUT => stdout.write_all(&payload)?,
+            STREAM_STDERR | STREAM_ERR => {
+                on_stderr(&payload);
+                stderr.extend_from_slice(&payload);
+            }
+            STREAM_EXIT if payload.len() == 4 => {
+                exit_code = i32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                break;
+            }
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected server stream {other}"),
+                ))
+            }
+        }
+    }
+    stdout.flush()?;
+    // The feeder may be blocked on a socket write if the action quit
+    // reading; shutting the socket down unblocks it.
+    let _ = s.shutdown(Shutdown::Both);
+    let _ = feeder.join();
+    Ok((exit_code, stderr))
+}
+
 pub type BrokerPipe = UnixStream;
 
 pub struct BrokerChild {

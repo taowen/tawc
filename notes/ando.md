@@ -196,6 +196,9 @@ made a chroot `mkdir` of the mount point pollute the shared dir.)
   which re-reads and applies the edit under a per-id lock so a
   concurrent writer (installer manifest refresh, binds edit) can't
   revert the toggle; then `AndoBrokers.refresh`.
+- **Export/import:** `andoEnabled` travels in the archive's
+  `metadata.json`, so an imported distro keeps its setting; the import
+  refreshes the broker listeners when it lands READY.
 - **Tests:** an in-memory per-id override in `InstallationStore`
   (`setAndoOverride`, mirrors `Settings.enterTestMode`) that the
   `set-ando` broker action writes and spawn paths / `AndoBrokers.refresh`

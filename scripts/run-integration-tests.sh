@@ -411,6 +411,18 @@ if [ "${TAWC_LIVE_RELAY:-}" = 1 ]; then
     echo "=== Enabling the live-relay remote access test ==="
     EXTRA_RUSTFLAGS+=(--cfg tawc_live_relay)
 fi
+# Distro export/import does real installs through the cache proxy
+# (minutes, GBs), against the suite's persistent-state policy; opt in
+# with TAWC_EXPORT_TESTS=1. The cross-package half also needs a peer
+# build installed: TAWC_EXPORT_PEER_PACKAGE=<app id>.
+if [ "${TAWC_EXPORT_TESTS:-}" = 1 ]; then
+    echo "=== Enabling the distro export/import tests ==="
+    EXTRA_RUSTFLAGS+=(--cfg tawc_export_tests)
+    if [ -n "${TAWC_EXPORT_PEER_PACKAGE:-}" ]; then
+        export TAWC_EXPORT_PEER_PACKAGE
+        EXTRA_RUSTFLAGS+=(--cfg tawc_export_peer)
+    fi
+fi
 if [ "${#EXTRA_RUSTFLAGS[@]}" -gt 0 ]; then
     export RUSTFLAGS="${RUSTFLAGS:-} ${EXTRA_RUSTFLAGS[*]}"
 fi

@@ -52,5 +52,6 @@ internal object SessionExit {
 
     private fun hasLiveInstallOp(id: String): Boolean =
         OperationsRegistry.get("install:$id") != null ||
+            OperationsRegistry.get("import:$id") != null ||
             OperationsRegistry.get("uninstall:$id") != null
 }

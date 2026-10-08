@@ -18,6 +18,8 @@ enum class InstallStage {
     PKG_KEYRING,
     /** Distro-agnostic name for "install the base package set". */
     PKG_INSTALL,
+    EXPORTING,
+    IMPORTING,
     UNMOUNTING,
     DELETING,
     DONE,

@@ -5,6 +5,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.os.Binder
 import android.os.IBinder
 import android.util.Log
@@ -24,6 +25,7 @@ import me.phie.tawc.R
 import me.phie.tawc.install.distro.BootstrapFlavor
 import me.phie.tawc.install.distro.Distro
 import me.phie.tawc.install.distro.DistroRegistry
+import me.phie.tawc.install.util.HumanSize
 import me.phie.tawc.launcher.EntryShortcuts
 import me.phie.tawc.ops.CancelConfirmation
 import me.phie.tawc.ops.MutableOperation
@@ -33,9 +35,15 @@ import me.phie.tawc.ops.OperationsNotificationCenter
 import me.phie.tawc.ops.OperationsRegistry
 import me.phie.tawc.tasks.ProcessScanner
 import me.phie.tawc.terminal.TerminalSessions
+import java.io.Closeable
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 
 /**
- * Foreground service that runs install / uninstall jobs in a coroutine
+ * Foreground service that runs install / uninstall jobs (plus distro
+ * export, and import as an install variant — notes/installation.md
+ * "Export / import") in a coroutine
  * **and** enforces the installation state machine — the single gate
  * through which `<distros>/<id>/` is mutated.
  *
@@ -99,7 +107,18 @@ import me.phie.tawc.terminal.TerminalSessions
  */
 class InstallationService : Service() {
 
-    enum class JobKind { INSTALL, UNINSTALL }
+    enum class JobKind { INSTALL, UNINSTALL, EXPORT, IMPORT }
+
+    /**
+     * Where an export writes / an import reads: a SAF document (the
+     * app UI) or an in-process stream handed over via [JobStreams] (the
+     * debug broker actions). The job owns it: [release] runs when the
+     * job ends, however it ends.
+     */
+    private sealed class ArchiveIo {
+        data class Document(val uri: Uri) : ArchiveIo()
+        class Stream(val stream: Closeable) : ArchiveIo()
+    }
 
     private data class JobState(val job: Job, val id: String, val kind: JobKind, val op: MutableOperation)
 
@@ -146,6 +165,9 @@ class InstallationService : Service() {
      */
     @Volatile private var installCancelTailUninstallId: String? = null
 
+    /** Set by [onTimeout] so an export's failure text can say why. */
+    @Volatile private var timedOutId: String? = null
+
     private val binder = LocalBinder()
 
     private val _log = MutableSharedFlow<String>(replay = 200, extraBufferCapacity = 1024)
@@ -184,11 +206,15 @@ class InstallationService : Service() {
         val anchorOpId = when (intent?.action) {
             ACTION_INSTALL -> "install:$rawId"
             ACTION_UNINSTALL -> "uninstall:$rawId"
+            ACTION_EXPORT -> "export:$rawId"
+            ACTION_IMPORT -> "import:$rawId"
             else -> "tawc:installation"
         }
         val anchorTitle = when (intent?.action) {
             ACTION_INSTALL -> getString(R.string.operation_title_install, rawId)
             ACTION_UNINSTALL -> getString(R.string.operation_title_uninstall, rawId)
+            ACTION_EXPORT -> getString(R.string.operation_title_export, rawId)
+            ACTION_IMPORT -> getString(R.string.operation_title_import, rawId)
             else -> getString(R.string.app_name)
         }
         val (notifId, notif) = OperationsNotificationCenter.placeholderForegroundFor(
@@ -208,6 +234,10 @@ class InstallationService : Service() {
                 intent.getStringExtra(EXTRA_BOOTSTRAP),
             )
             ACTION_UNINSTALL -> startUninstall(rawId)
+            ACTION_EXPORT -> startExport(
+                rawId, archiveIo(intent), intent.getBooleanExtra(EXTRA_DELETE_AFTER, false),
+            )
+            ACTION_IMPORT -> startImport(rawId, intent.getStringExtra(EXTRA_LABEL), archiveIo(intent))
             else -> {
                 Log.w(TAG, "InstallationService started without a known action")
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -225,6 +255,7 @@ class InstallationService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) {
         val state = currentJob
         if (state != null) {
+            timedOutId = state.id
             val msg = "foreground service timed out; cancelling ${state.kind.name.lowercase()} '${state.id}'"
             Log.e(TAG, msg)
             appendLog(msg)
@@ -558,6 +589,229 @@ class InstallationService : Service() {
     }
 
     /**
+     * Export READY tawcroot distro [id] to [io] (notes/installation.md
+     * "Export / import"). Never changes the slot; a failure or cancel
+     * deletes a partial document. With [deleteAfter], a successful
+     * export chains into the normal uninstall.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun startExport(id: String, io: ArchiveIo?, deleteAfter: Boolean) {
+        val reason = when {
+            io == null -> getString(R.string.export_reject_no_target)
+            !Installation.isValidId(id) -> getString(R.string.install_reject_invalid_id)
+            currentJob?.job?.isActive == true -> getString(R.string.install_reject_job_running)
+            else -> {
+                val inst = InstallationStore(applicationContext).load(id)
+                when {
+                    inst == null -> getString(R.string.export_reject_missing)
+                    inst.state != Installation.State.READY ->
+                        getString(R.string.export_reject_state, stateLabel(inst.state))
+                    inst.method != TawcrootMethod.KEY ->
+                        getString(R.string.export_reject_method, inst.method)
+                    else -> null
+                }
+            }
+        }
+        if (reason != null) {
+            io?.let { release(it, failed = false) }
+            rejectAsTransientOp(
+                "export:$id",
+                getString(R.string.operation_title_export, id),
+                getString(R.string.operation_what_export, id),
+                reason,
+            )
+            return
+        }
+        io!!
+        _log.resetReplayCache()
+        lastLoggedStage = null
+        val store = InstallationStore(applicationContext)
+        val op = MutableOperation(
+            id = "export:$id",
+            title = getString(R.string.operation_title_export, id),
+            log = _log,
+            // Nothing is lost by cancelling an export.
+            cancelConfirmation = null,
+            cancelHandler = { cancelExport(id) },
+        )
+        OperationsRegistry.register(op)
+        val (notifId, notif) = OperationsNotificationCenter.fgsAnchorFor(op.id)
+        startDataSyncForeground(notifId, notif)
+        val job = scope.launch {
+            var ok = false
+            try {
+                runInterruptible(Dispatchers.IO) {
+                    publishProgress(InstallProgress(InstallStage.EXPORTING, getString(R.string.export_progress_stopping)))
+                    val r = DistroExporter.export(applicationContext, store, id, openOutput(io), ::appendLog) { done, total ->
+                        publishProgress(InstallProgress(
+                            InstallStage.EXPORTING,
+                            getString(R.string.export_progress_writing, HumanSize.format(done), HumanSize.format(total)),
+                            if (total > 0) ((done * 100) / total).toInt().coerceIn(0, 100) else null,
+                        ))
+                    }
+                    appendLog("[export] wrote ${r.entries} entries, ${HumanSize.format(r.bytes)} uncompressed")
+                }
+                ok = true
+                if (deleteAfter) pendingFollowupUninstallId = id
+                publishProgress(InstallProgress(
+                    InstallStage.DONE,
+                    getString(if (deleteAfter) R.string.export_progress_done_deleting else R.string.export_progress_done),
+                ))
+            } catch (t: Throwable) {
+                handleExportThrow(id, t)
+            } finally {
+                release(io, failed = !ok)
+                if (pendingFollowupUninstallId != id) stopForeground(STOP_FOREGROUND_REMOVE)
+                clearCurrentJob(id)
+            }
+        }
+        currentJob = JobState(job, id, JobKind.EXPORT, op)
+        if (deleteAfter) {
+            // Same FGS bridge as the cancel-install tail: stay anchored
+            // until the uninstall registers its own op.
+            scope.launch {
+                try {
+                    job.join()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                }
+                if (pendingFollowupUninstallId != id) return@launch
+                val (bridgeId, bridge) = OperationsNotificationCenter.placeholderForegroundFor(
+                    applicationContext, "uninstall:$id", getString(R.string.operation_title_uninstall, id),
+                )
+                startDataSyncForeground(bridgeId, bridge)
+                pendingFollowupUninstallId = null
+                startUninstall(id)
+            }
+        }
+    }
+
+    /**
+     * Import an export archive from [io] into the empty slot [id]. An
+     * install variant: INSTALLING → READY | FAILED, same gate, and a
+     * cancel parks FAILED then auto-uninstalls (the slot only holds
+     * what the import wrote).
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun startImport(id: String, label: String?, io: ArchiveIo?) {
+        val store = InstallationStore(applicationContext)
+        val reason = when {
+            io == null -> getString(R.string.import_reject_no_source)
+            !Installation.isValidId(id) -> getString(R.string.install_reject_invalid_id)
+            currentJob?.job?.isActive == true -> getString(R.string.install_reject_job_running)
+            else -> store.load(id)?.let { getString(R.string.install_reject_id_state, stateLabel(it.state)) }
+                ?: if (store.installationDir(id).exists()) getString(R.string.import_reject_dir_exists) else null
+        }
+        if (reason != null) {
+            io?.let { release(it, failed = false) }
+            rejectAsTransientOp(
+                "import:$id",
+                getString(R.string.operation_title_import, id),
+                getString(R.string.operation_what_import, id),
+                reason,
+            )
+            return
+        }
+        io!!
+        _log.resetReplayCache()
+        lastLoggedStage = null
+        val op = MutableOperation(
+            id = "import:$id",
+            title = getString(R.string.operation_title_import, id),
+            log = _log,
+            cancelConfirmation = CancelConfirmation(
+                title = getString(R.string.import_cancel_title, id),
+                message = getString(R.string.import_cancel_message, store.installationDir(id).absolutePath),
+                confirmLabel = getString(R.string.import_cancel_confirm),
+                keepLabel = getString(R.string.import_cancel_keep),
+            ),
+            cancelHandler = { cancelInstallAndUninstall(id) },
+        )
+        OperationsRegistry.register(op)
+        val (notifId, notif) = OperationsNotificationCenter.fgsAnchorFor(op.id)
+        startDataSyncForeground(notifId, notif)
+        val job = scope.launch {
+            try {
+                runInterruptible(Dispatchers.IO) {
+                    publishProgress(InstallProgress(InstallStage.IMPORTING, getString(R.string.import_progress_reading)))
+                    DistroImporter.import(applicationContext, store, id, label, openInput(io), ::appendLog) { msg, pct ->
+                        publishProgress(InstallProgress(InstallStage.IMPORTING, msg, pct))
+                    }
+                }
+                publishProgress(InstallProgress(InstallStage.DONE, getString(R.string.import_progress_done)))
+            } catch (t: Throwable) {
+                handleInstallThrow(store, id, t, import = true)
+            } finally {
+                release(io, failed = false)
+                if (pendingFollowupUninstallId != id) stopForeground(STOP_FOREGROUND_REMOVE)
+                clearCurrentJob(id)
+            }
+        }
+        currentJob = JobState(job, id, JobKind.IMPORT, op)
+    }
+
+    /** Cancel the in-flight export of [id]. The distro is untouched. */
+    fun cancelExport(id: String) {
+        val state = currentJob
+        if (state == null || !state.job.isActive || state.id != id || state.kind != JobKind.EXPORT) {
+            appendLog("[cancel] no export for '$id' to cancel")
+            return
+        }
+        appendLog("[cancel] cancelling export of '$id'")
+        userCancelledId = id
+        state.job.cancel(CancellationException("cancelled by user"))
+    }
+
+    private fun handleExportThrow(id: String, t: Throwable) {
+        val msg = when {
+            userCancelledId == id -> getString(R.string.operation_status_export_cancelled)
+            timedOutId == id -> getString(R.string.operation_status_export_timed_out)
+            else -> getString(R.string.operation_status_export_failed, firstLine(t.message))
+        }
+        if (userCancelledId == id) Log.w(TAG, "export cancelled") else Log.e(TAG, "export failed", t)
+        appendLog("FAILED: ${t.message}")
+        publishProgress(InstallProgress(InstallStage.FAILED, msg, errorMessage = t.message))
+    }
+
+    private fun archiveIo(intent: Intent): ArchiveIo? {
+        intent.data?.let { return ArchiveIo.Document(it) }
+        val token = intent.getStringExtra(EXTRA_STREAM) ?: return null
+        return JobStreams.take(token)?.let { ArchiveIo.Stream(it) }
+    }
+
+    private fun openOutput(io: ArchiveIo): OutputStream = when (io) {
+        is ArchiveIo.Document -> contentResolver.openOutputStream(io.uri, "wt")
+            ?: throw IOException("cannot open ${io.uri} for writing")
+        is ArchiveIo.Stream -> io.stream as? OutputStream ?: throw IOException("export target is not writable")
+    }
+
+    private fun openInput(io: ArchiveIo): InputStream = when (io) {
+        is ArchiveIo.Document -> contentResolver.openInputStream(io.uri)
+            ?: throw IOException("cannot open ${io.uri}")
+        is ArchiveIo.Stream -> io.stream as? InputStream ?: throw IOException("import source is not readable")
+    }
+
+    /** End-of-job cleanup: close a handed-over stream, delete a partial
+     *  export document ([failed]), drop the persisted SAF grant. */
+    private fun release(io: ArchiveIo, failed: Boolean) {
+        when (io) {
+            is ArchiveIo.Stream -> runCatching { io.stream.close() }
+            is ArchiveIo.Document -> {
+                if (failed) {
+                    runCatching { android.provider.DocumentsContract.deleteDocument(contentResolver, io.uri) }
+                }
+                runCatching {
+                    contentResolver.releasePersistableUriPermission(
+                        io.uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    )
+                }
+            }
+        }
+    }
+
+    /**
      * Dispatch a cancel based on the current job kind. UI panel
      * doesn't need to know whether install or uninstall is in flight
      * — it just calls this.
@@ -570,8 +824,9 @@ class InstallationService : Service() {
         val state = currentJob ?: return null
         if (state.id != id || !state.job.isActive) return null
         return when (state.kind) {
-            JobKind.INSTALL -> { cancelInstallAndUninstall(id); JobKind.INSTALL }
+            JobKind.INSTALL, JobKind.IMPORT -> { cancelInstallAndUninstall(id); state.kind }
             JobKind.UNINSTALL -> { cancelUninstall(id); JobKind.UNINSTALL }
+            JobKind.EXPORT -> { cancelExport(id); JobKind.EXPORT }
         }
     }
 
@@ -588,7 +843,9 @@ class InstallationService : Service() {
      */
     fun cancelInstallAndUninstall(id: String) {
         val state = currentJob
-        if (state == null || !state.job.isActive || state.id != id || state.kind != JobKind.INSTALL) {
+        if (state == null || !state.job.isActive || state.id != id ||
+            (state.kind != JobKind.INSTALL && state.kind != JobKind.IMPORT)
+        ) {
             // Don't fall through to startUninstall — a confirm-and-
             // cancel tap that arrives after the install has already
             // completed shouldn't accidentally wipe a freshly READY
@@ -677,28 +934,34 @@ class InstallationService : Service() {
         state.job.cancel(CancellationException("cancelled by user"))
     }
 
-    private fun handleInstallThrow(store: InstallationStore, id: String, t: Throwable) {
+    /** Install and import failures; [import] only picks the wording.
+     *  setState no-ops if an import failed before writing its record. */
+    private fun handleInstallThrow(store: InstallationStore, id: String, t: Throwable, import: Boolean = false) {
         // Only treat as user-cancelled when we explicitly set the
         // flag; a bare CancellationException with no flag means the
         // service scope itself died (onDestroy), in which case
         // "Cancelled by user" would be a lie.
         val cancelled = userCancelledId == id
+        val verb = if (import) "import" else "install"
         if (cancelled) {
-            Log.w(TAG, "install cancelled by user")
-            store.setState(id, Installation.State.FAILED, getString(R.string.operation_status_install_cancelled_by_user))
-            appendLog("[cancel] install of '$id' cancelled")
-            publishProgress(InstallProgress(
-                InstallStage.FAILED,
-                getString(R.string.operation_status_install_cancelled_by_user),
-                errorMessage = "cancelled",
-            ))
+            val msg = getString(
+                if (import) R.string.operation_status_import_cancelled_by_user
+                else R.string.operation_status_install_cancelled_by_user,
+            )
+            Log.w(TAG, "$verb cancelled by user")
+            store.setState(id, Installation.State.FAILED, msg)
+            appendLog("[cancel] $verb of '$id' cancelled")
+            publishProgress(InstallProgress(InstallStage.FAILED, msg, errorMessage = "cancelled"))
         } else {
-            Log.e(TAG, "install failed", t)
+            Log.e(TAG, "$verb failed", t)
             store.setState(id, Installation.State.FAILED, t.message ?: getString(R.string.operation_status_no_detail))
             appendLog("FAILED: ${t.message}")
             publishProgress(InstallProgress(
                 InstallStage.FAILED,
-                getString(R.string.operation_status_install_failed, firstLine(t.message)),
+                getString(
+                    if (import) R.string.operation_status_import_failed else R.string.operation_status_install_failed,
+                    firstLine(t.message),
+                ),
                 errorMessage = t.message,
             ))
         }
@@ -762,6 +1025,7 @@ class InstallationService : Service() {
         // via its eventual real uninstall, but the id-keyed match in
         // [publishProgress] also protects unrelated jobs in the gap.
         if (installCancelTailUninstallId == id) installCancelTailUninstallId = null
+        if (timedOutId == id) timedOutId = null
     }
 
     /**
@@ -929,6 +1193,8 @@ class InstallationService : Service() {
 
         const val ACTION_INSTALL = "me.phie.tawc.install.SERVICE_INSTALL"
         const val ACTION_UNINSTALL = "me.phie.tawc.install.SERVICE_UNINSTALL"
+        const val ACTION_EXPORT = "me.phie.tawc.install.SERVICE_EXPORT"
+        const val ACTION_IMPORT = "me.phie.tawc.install.SERVICE_IMPORT"
         const val EXTRA_ID = "id"
         const val EXTRA_METHOD = "method"
         const val EXTRA_DISTRO = "distro"
@@ -942,6 +1208,9 @@ class InstallationService : Service() {
          *  distro's supported flavor. Non-supported flavors are
          *  debug-only, enforced in [startInstall]. */
         const val EXTRA_BOOTSTRAP = "bootstrap"
+        /** [JobStreams] token; export/import without a SAF document. */
+        const val EXTRA_STREAM = "stream"
+        const val EXTRA_DELETE_AFTER = "deleteAfter"
 
         fun startInstall(
             context: Context,
@@ -965,6 +1234,34 @@ class InstallationService : Service() {
             if (andoEnabled) i.putExtra(EXTRA_ANDO, true)
             if (bootstrapFlavorId != null) i.putExtra(EXTRA_BOOTSTRAP, bootstrapFlavorId)
             context.startForegroundService(i)
+        }
+
+        /** Export [id] to the SAF document [uri] or the [JobStreams]
+         *  stream [streamToken] (exactly one). */
+        fun startExport(context: Context, id: String, uri: Uri?, streamToken: String?, deleteAfter: Boolean) {
+            val i = Intent(context, InstallationService::class.java)
+                .setAction(ACTION_EXPORT)
+                .putExtra(EXTRA_ID, id)
+                .putExtra(EXTRA_DELETE_AFTER, deleteAfter)
+            archiveExtras(i, uri, streamToken, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            context.startForegroundService(i)
+        }
+
+        /** Import into the empty slot [id]; source as for [startExport]. */
+        fun startImport(context: Context, id: String, label: String?, uri: Uri?, streamToken: String?) {
+            val i = Intent(context, InstallationService::class.java)
+                .setAction(ACTION_IMPORT)
+                .putExtra(EXTRA_ID, id)
+            if (label != null) i.putExtra(EXTRA_LABEL, label)
+            archiveExtras(i, uri, streamToken, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            context.startForegroundService(i)
+        }
+
+        /** The document rides as the intent data so the URI grant
+         *  carries over to the service. */
+        private fun archiveExtras(i: Intent, uri: Uri?, streamToken: String?, grant: Int) {
+            if (uri != null) i.setData(uri).addFlags(grant)
+            if (streamToken != null) i.putExtra(EXTRA_STREAM, streamToken)
         }
 
         fun startUninstall(context: Context, id: String) {

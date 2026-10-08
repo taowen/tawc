@@ -90,6 +90,11 @@ data class Installation(
      * leaning on the default forever.
      */
     val bootstrapFlavor: String = FLAVOR_TARBALL,
+    /** Set when this slot was created by importing an export archive
+     *  ([DistroImporter]): when, and which app id wrote the archive.
+     *  Null for regular installs. */
+    val importedAtMillis: Long? = null,
+    val importedFromPackage: String? = null,
 ) {
     fun rootfsDir(store: InstallationStore): File = store.rootfsDir(id)
     fun metadataFile(store: InstallationStore): File = store.metadataFile(id)
@@ -120,6 +125,8 @@ data class Installation(
             put("hiddenDesktopIds", JSONArray(hiddenDesktopIds))
         }
         if (andoEnabled) put("andoEnabled", true)
+        if (importedAtMillis != null) put("importedAtMillis", importedAtMillis)
+        if (importedFromPackage != null) put("importedFromPackage", importedFromPackage)
     }.toString(2)
 
     /**
@@ -280,6 +287,9 @@ data class Installation(
                 else emptyList(),
                 andoEnabled = obj.optBoolean("andoEnabled", false),
                 bootstrapFlavor = obj.optString("bootstrapFlavor", FLAVOR_TARBALL),
+                importedAtMillis = if (obj.has("importedAtMillis")) obj.getLong("importedAtMillis") else null,
+                importedFromPackage = if (obj.has("importedFromPackage") && !obj.isNull("importedFromPackage"))
+                    obj.getString("importedFromPackage") else null,
             )
         }
 
