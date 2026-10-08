@@ -15,6 +15,7 @@ import android.view.KeyEvent
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -586,6 +587,11 @@ class MainActivity : AppCompatActivity() {
         // Added after setGroupCheckable, so it isn't checkable.
         menu.add(DRAWER_GROUP_DISTROS, DRAWER_INSTALL, installations.size, R.string.action_install_new_distro)
             .setIcon(R.drawable.ic_add)
+            // NavigationView recycles row views and only ever replaces
+            // an action view, never clears one: without an explicit
+            // empty one, this row keeps the ⋮ of the distro row it was
+            // when the list shrinks.
+            .setActionView(View(this).apply { layoutParams = ViewGroup.LayoutParams(0, 0) })
     }
 
     /** Trailing ⋮ on a drawer row: [inst]'s items without switching to it. */
