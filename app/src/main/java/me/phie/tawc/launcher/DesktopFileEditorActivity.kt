@@ -27,7 +27,7 @@ import java.io.IOException
 /**
  * Create/edit/delete a personal `.desktop` entry in a rootfs's managed
  * dir ([DesktopEntryFile.MANAGED_SUBDIR]). Makes personal launchers,
- * not production `.desktop` files: Name + Exec (required), Icon
+ * not production `.desktop` files: Exec (required) + Name (defaults to Exec), Icon
  * (freeform `Icon=` value, resolved by the scanner's normal icon
  * search on next scan), Terminal checkbox — no locale keys, actions,
  * field codes or extra groups. `Comment=` is read and written back but
@@ -125,8 +125,8 @@ class DesktopFileEditorActivity : AppCompatActivity() {
             )
         }
         existingComment = loaded.draft.comment
-        nameField = addField(form, R.string.editor_field_name, loaded.draft.name, pad)
         execField = addField(form, R.string.editor_field_exec, loaded.draft.exec, pad)
+        nameField = addField(form, R.string.editor_field_name, loaded.draft.name, pad)
         iconField = addField(form, R.string.editor_field_icon, loaded.draft.icon, pad)
         terminalCheckbox = CheckBox(this).apply {
             text = getString(R.string.editor_field_terminal)
@@ -174,8 +174,10 @@ class DesktopFileEditorActivity : AppCompatActivity() {
         return field
     }
 
+    /** Name defaults to the command when left blank; the field shows it
+     *  as the hint. */
     private fun draft() = DesktopEntryFile.Draft(
-        name = nameField.text.toString(),
+        name = nameField.text.toString().ifBlank { execField.text.toString().trim() },
         exec = execField.text.toString(),
         comment = existingComment,
         icon = iconField.text.toString(),
@@ -184,8 +186,8 @@ class DesktopFileEditorActivity : AppCompatActivity() {
 
     private fun revalidate() {
         if (!::saveButton.isInitialized) return
-        val d = draft()
-        saveButton.isEnabled = d.name.isNotBlank() && d.exec.isNotBlank()
+        nameField.hint = execField.text.toString().trim()
+        saveButton.isEnabled = draft().exec.isNotBlank()
     }
 
     /**
@@ -194,7 +196,7 @@ class DesktopFileEditorActivity : AppCompatActivity() {
      * filename is the entry id, which pins and hidden-state reference.
      */
     private fun save() {
-        val file = editFile ?: DesktopEntryFile.newFile(managedDir, nameField.text.toString())
+        val file = editFile ?: DesktopEntryFile.newFile(managedDir, draft().name)
         try {
             managedDir.mkdirs()
             // Atomic: the filename is the entry id (pins and hidden-

@@ -156,7 +156,7 @@ exactly the complex foreign files the editor shouldn't touch).
   tawcroot/proot but not chroot's root-owned rootfs (see "Access
   model") — chroot installs get no New/Edit entry points, consistent
   with the terminal gating.
-- Editor scope (`DesktopEntryFile`): Name + Exec (required), Icon
+- Editor scope (`DesktopEntryFile`): Exec (required) + Name (blank = Exec, shown as the hint), Icon
   (freeform `Icon=` value, resolved by `resolve_icon` on next scan),
   Terminal checkbox (checked by default for new entries — hand-made
   entries are usually CLI scripts). `Comment=` has no form field but is

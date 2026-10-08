@@ -168,7 +168,7 @@
     <string name="editor_title_edit">Edit program</string>
     <string name="editor_field_name">Name</string>
     <string name="editor_field_exec">Command</string>
-    <string name="editor_field_icon">Icon (name or path)</string>
+    <string name="editor_field_icon">Icon</string>
     <string name="editor_field_terminal">Run in terminal</string>
     <string name="editor_save">Save</string>
     <string name="editor_delete">Delete</string>
