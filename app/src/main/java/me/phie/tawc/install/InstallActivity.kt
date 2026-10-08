@@ -19,6 +19,10 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.color.MaterialColors
 import me.phie.tawc.R
@@ -600,7 +604,6 @@ class InstallActivity : AppCompatActivity() {
         container.addView(title, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
 
         methodGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
-        val rootAvailable = Su.rootAvailable()
 
         // Use generateViewId() rather than hand-picked constants —
         // any literal we'd reach for in the AAPT range collides with
@@ -619,9 +622,6 @@ class InstallActivity : AppCompatActivity() {
                     ChrootMethod.KEY -> getString(R.string.install_method_chroot_requires_root)
                     else -> key
                 }
-                // Chroot greys out on un-rooted devices so the
-                // limitation is visible at the form level.
-                if (key == ChrootMethod.KEY) isEnabled = rootAvailable
             }
             methodGroup.addView(rb, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         }
@@ -642,22 +642,31 @@ class InstallActivity : AppCompatActivity() {
     }
 
     private fun beginInstall() {
-        // Only the chroot path needs `su`. Proot/tawcroot are rootless
-        // by definition, so a missing-root device fails this check only
-        // if the user picked chroot anyway.
+        // Only chroot needs `su`, so only probe it (and trigger the
+        // Magisk prompt) once chroot is actually picked. The probe
+        // blocks until the user answers, so keep it off the UI thread.
         val methodKey = selectedMethod ?: EnabledMethods.keys.firstOrNull() ?: TawcrootMethod.KEY
-        if (methodKey == ChrootMethod.KEY && !Su.rootAvailable()) {
-            // We don't have a panel anymore; surface as a quick
-            // toast-style status on the form. Service-level gate would
-            // also refuse, but a fail-fast at the form level avoids the
-            // service start.
-            android.widget.Toast.makeText(
-                this,
-                getString(R.string.install_root_unavailable),
-                android.widget.Toast.LENGTH_LONG,
-            ).show()
+        if (methodKey != ChrootMethod.KEY) {
+            startInstall(methodKey)
             return
         }
+        installButton.isEnabled = false
+        lifecycleScope.launch {
+            val root = withContext(Dispatchers.IO) { Su.rootAvailable() }
+            installButton.isEnabled = resolvedId != null
+            if (root) {
+                startInstall(methodKey)
+            } else {
+                android.widget.Toast.makeText(
+                    this@InstallActivity,
+                    getString(R.string.install_root_unavailable),
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
+    private fun startInstall(methodKey: String) {
         val targetId = resolvedId ?: return  // button disabled when null
 
         val distroKey = selectedDistro
