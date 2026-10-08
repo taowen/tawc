@@ -1,5 +1,19 @@
 # tawcroot — SIGSYS handler
 
+## Robust-list compatibility on Android
+
+Native `set_robust_list` / `get_robust_list` remain kernel operations when allowed.
+On Android `ENOSYS`, tawcroot retains the actual per-thread registration and
+supports querying the calling thread (pid 0 or its tid). This lets clients inspect
+glibc's list without depending on libc-private TLS offsets. Foreign-thread queries
+remain unsupported. This mode does **not** implement automatic owner-death cleanup
+or wakeups; a thread dying while holding such a lock can leave its peers blocked.
+The bounded registry reclaims dead-thread entries on exhaustion. No exit syscall
+trap is added, because musl can unmap its stack before issuing exit.
+
+Test through an Android-spawned process: ADB/run-as does not inherit Zygote's app
+seccomp policy and cannot establish compatibility with the production launch path.
+
 ## SIGSYS handler
 
 The hot path. Called any time the seccomp filter returns

@@ -90,6 +90,74 @@ static long handle_prctl(const tawcroot_syscall_args *args, ucontext_t *uc)
 			args->d, args->e, 0);
 }
 
+/* Android omits robust-list syscalls from the app allowlist. Keep the guest's
+ * actual registration for libraries which inspect their own pthread list.
+ * This is registration/query compatibility, NOT kernel owner-death recovery.
+ * Native kernels retain their complete implementation. No libc TLS layout or
+ * fabricated list is involved; exit(2) stays untrapped for musl stack safety. */
+#define ROBUST_SLOTS 4096
+static struct { uint64_t owner; uintptr_t head; } robust_lists[ROBUST_SLOTS];
+
+static uint64_t robust_owner(void)
+{
+	uint64_t pid = (uint32_t)TAWC_RAW(TAWC_SYS_getpid, 0, 0, 0, 0, 0, 0);
+	uint64_t tid = (uint32_t)TAWC_RAW(TAWC_SYS_gettid, 0, 0, 0, 0, 0, 0);
+	return (pid << 32) | tid;
+}
+
+static long handle_set_robust_list(const tawcroot_syscall_args *args, ucontext_t *uc)
+{
+	(void)uc;
+	if (args->b != 3 * (long)sizeof(uintptr_t)) return TAWC_EINVAL;
+	long result = TAWC_RAW(TAWC_SYS_set_robust_list, args->a, args->b, 0, 0, 0, 0);
+	if (result != TAWC_ENOSYS) return result;
+	uint64_t owner = robust_owner();
+	/* A registration overwrites any previous registration for this thread,
+	 * including a reused tid. Reap dead registrations only on exhaustion. */
+	for (int pass = 0; pass < 2; pass++) {
+		for (unsigned i = 0; i < ROBUST_SLOTS; i++) {
+			unsigned slot = ((uint32_t)owner + i) % ROBUST_SLOTS;
+			uint64_t found = __atomic_load_n(&robust_lists[slot].owner, __ATOMIC_ACQUIRE);
+			if (found != owner) {
+				if (pass && found && found != UINT64_MAX &&
+				    TAWC_RAW(TAWC_SYS_tgkill, found >> 32, (uint32_t)found,
+				             0, 0, 0, 0) == TAWC_ESRCH) {
+					__atomic_compare_exchange_n(&robust_lists[slot].owner, &found,
+					                            0, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+					found = __atomic_load_n(&robust_lists[slot].owner, __ATOMIC_ACQUIRE);
+				}
+				if (found || !__atomic_compare_exchange_n(&robust_lists[slot].owner,
+				        &found, UINT64_MAX, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) continue;
+			}
+			__atomic_store_n(&robust_lists[slot].head, (uintptr_t)args->a, __ATOMIC_RELAXED);
+			__atomic_store_n(&robust_lists[slot].owner, owner, __ATOMIC_RELEASE);
+			return 0;
+		}
+	}
+	return TAWC_ENOMEM;
+}
+
+static long handle_get_robust_list(const tawcroot_syscall_args *args, ucontext_t *uc)
+{
+	(void)uc;
+	long result = TAWC_RAW(TAWC_SYS_get_robust_list, args->a, args->b, args->c, 0, 0, 0);
+	if (result != TAWC_ENOSYS) return result;
+	uint64_t owner = robust_owner();
+	if ((int)args->a && (uint32_t)args->a != (uint32_t)owner) return TAWC_EPERM;
+	uintptr_t head = 0;
+	size_t size = 3 * sizeof(uintptr_t);
+	for (unsigned i = 0; i < ROBUST_SLOTS; i++) {
+		unsigned slot = ((uint32_t)owner + i) % ROBUST_SLOTS;
+		if (__atomic_load_n(&robust_lists[slot].owner, __ATOMIC_ACQUIRE) == owner) {
+			head = __atomic_load_n(&robust_lists[slot].head, __ATOMIC_RELAXED);
+			break;
+		}
+	}
+	if (tawc_copy_to_guest((void *)args->c, &size, sizeof size) < 0 ||
+	    tawc_copy_to_guest((void *)args->b, &head, sizeof head) < 0) return TAWC_EFAULT;
+	return 0;
+}
+
 static long handle_rt_sigaction(const tawcroot_syscall_args *args,
 				ucontext_t *uc)
 {
@@ -297,6 +365,8 @@ static long handle_alarm(const tawcroot_syscall_args *args, ucontext_t *uc)
 
 void tawcroot_control_register(void)
 {
+	tawcroot_dispatch_install(TAWC_SYS_set_robust_list, handle_set_robust_list);
+	tawcroot_dispatch_install(TAWC_SYS_get_robust_list, handle_get_robust_list);
 	/* Some Android 4.19 kernels backport pidfd_open but not P_PIDFD
 	 * waitid. GLib then selects pidfds and loses child exit status.
 	 * Probe an invalid fd: supported kernels return EBADF, incomplete

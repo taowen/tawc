@@ -88,6 +88,9 @@
 # define TAWC_SYS_process_vm_readv  270
 # define TAWC_SYS_process_vm_writev 271
 # define TAWC_SYS_gettid           178
+# define TAWC_SYS_set_robust_list   99
+# define TAWC_SYS_get_robust_list  100
+# define TAWC_SYS_tgkill           131
 # define TAWC_SYS_pread64           67
 # define TAWC_SYS_pwrite64          68
 # define TAWC_SYS_futex             98
@@ -136,6 +139,9 @@
  * CLOSE_RANGE_UNSHARE, and prlimit64 for the no-/proc fallback loop. */
 # define TAWC_SYS_prlimit64       261
 #elif defined(__x86_64__)
+# define TAWC_SYS_set_robust_list  273
+# define TAWC_SYS_get_robust_list  274
+# define TAWC_SYS_tgkill           234
 # define TAWC_SYS_waitid        247
 # define TAWC_SYS_read            0
 # define TAWC_SYS_write           1
