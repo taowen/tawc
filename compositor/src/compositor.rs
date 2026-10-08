@@ -66,6 +66,7 @@ use smithay::wayland::shell::xdg::decoration::{XdgDecorationHandler, XdgDecorati
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::tablet_manager::TabletSeatHandler;
+use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xwayland_shell::XWaylandShellState;
 use smithay::xwayland::{X11Surface, X11Wm, XWaylandActivation, XWaylandClientData};
@@ -98,6 +99,13 @@ pub struct WindowMetadata {
 /// This is what Smithay handler callbacks receive. It also carries
 /// `RenderState` because Smithay's compositor pre-commit hooks require the
 /// same state type that owns protocol handlers.
+/// Output refresh rate until the Activity or the choreographer reports one.
+const DEFAULT_OUTPUT_REFRESH_MHZ: u32 = 60_000;
+/// Plausible output refresh rates. Also keeps the mHz value inside the
+/// `i32` that `wl_output.mode` carries.
+const MIN_OUTPUT_REFRESH_MHZ: u32 = 10_000;
+const MAX_OUTPUT_REFRESH_MHZ: u32 = 240_000;
+
 pub struct TawcState {
     pub display_handle: DisplayHandle,
     /// Calloop handle, set by `event_loop::run` before any source can fire.
@@ -246,15 +254,15 @@ pub struct TawcState {
     pub client_count: Arc<AtomicU32>,
     pub client_ids: Arc<Mutex<Vec<ClientId>>>,
 
-    /// Set when toplevels are added or removed; cleared by the frame timer
-    /// after updating focus. Avoids per-frame focus scans when nothing changed.
+    /// Set when toplevels are added or removed; cleared after dispatch
+    /// once focus is updated. Avoids per-frame focus scans when nothing changed.
     pub toplevels_changed: bool,
 
-    /// Set by the compositor commit handler when any surface commits. Smithay
-    /// imports textures while building render elements; this flag only wakes
-    /// TAWC's render loop for new buffers, damage, viewport changes, or
-    /// same-buffer reattaches with fresh client-written content.
-    pub buffer_commit_pending: bool,
+    /// Some surface committed since the last vsync tick, possibly with
+    /// `wl_surface.frame` callbacks. Kept apart from `needs_render`: a
+    /// direct render (host register/resize) clears that without sending
+    /// callbacks.
+    pub frame_callbacks_pending: bool,
 
     /// XWayland state. The shell state global is created on startup and
     /// lets X11 clients associate their X11 windows with backing
@@ -289,6 +297,12 @@ pub struct TawcState {
     /// Set when buffer contents change; cleared after rendering.
     /// Skips GPU work when the screen hasn't changed.
     pub needs_render: bool,
+    pub frame_clock: crate::vsync::FrameClock,
+    /// Refresh rate in the output's single mode, in mHz, as the Activity
+    /// reads it from its `Display` (`nativeSetOutputRefreshRate`). Not
+    /// from `AChoreographer_registerRefreshRateCallback`: that reports the
+    /// display mode, not a per-app frame-rate override.
+    pub output_refresh_mhz: u32,
     /// Number of toplevels visible in the last rendered frame.
     /// Used by the state query to verify the screen actually reflects cleanup.
     pub last_rendered_toplevels: usize,
@@ -328,6 +342,9 @@ impl TawcState {
         // the surface on a scaled output. The returned `ViewporterState` has no
         // Drop impl — the global lives for the lifetime of the Display.
         ViewporterState::new::<Self>(&dh);
+        // Feedback is stamped with choreographer vsync times, which are
+        // CLOCK_MONOTONIC.
+        PresentationState::new::<Self>(&dh, libc::CLOCK_MONOTONIC as u32);
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "tawc");
         // Advertise only input devices TAWC actually has. Android touch
@@ -416,7 +433,7 @@ impl TawcState {
             client_count: Arc::new(AtomicU32::new(0)),
             client_ids: Arc::new(Mutex::new(Vec::new())),
             toplevels_changed: false,
-            buffer_commit_pending: false,
+            frame_callbacks_pending: false,
             hosts: HashMap::new(),
             host_fullscreen: HashMap::new(),
             window_metadata: HashMap::new(),
@@ -441,6 +458,8 @@ impl TawcState {
             start_time: std::time::Instant::now(),
             frame_count: 0,
             needs_render: true,
+            frame_clock: Default::default(),
+            output_refresh_mhz: DEFAULT_OUTPUT_REFRESH_MHZ,
             last_rendered_toplevels: 0,
         };
 
@@ -498,7 +517,10 @@ impl TawcState {
         self.output_physical_size = (w, h);
         self.output_logical_size = self.output_scale.logical_size(w, h);
         let previous = self.output.current_mode();
-        let mode = smithay::output::Mode { size: (w, h).into(), refresh: 60_000 };
+        let mode = smithay::output::Mode {
+            size: (w, h).into(),
+            refresh: self.output_refresh_mhz as i32,
+        };
         self.output.change_current_state(
             Some(mode),
             Some(smithay::utils::Transform::Normal),
@@ -513,6 +535,26 @@ impl TawcState {
         if let Some(previous) = previous.filter(|previous| *previous != mode) {
             self.output.delete_mode(previous);
         }
+    }
+
+    /// Adopt a new output refresh rate and re-publish the mode.
+    /// Implausible values are ignored.
+    pub fn set_output_refresh_mhz(&mut self, mhz: u32) {
+        if !(MIN_OUTPUT_REFRESH_MHZ..=MAX_OUTPUT_REFRESH_MHZ).contains(&mhz) {
+            warn!("Ignoring implausible output refresh rate: {} mHz", mhz);
+            return;
+        }
+        if self.output_refresh_mhz == mhz {
+            return;
+        }
+        self.output_refresh_mhz = mhz;
+        self.set_output_mode(self.output_physical_size);
+        info!("Output refresh rate: {} mHz", mhz);
+    }
+
+    /// One frame at the current output refresh rate.
+    pub fn output_refresh_period(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(1_000_000_000_000 / u64::from(self.output_refresh_mhz.max(1)))
     }
 
     /// Move the seat's keyboard focus and the text-input v3 focus to the
@@ -973,13 +1015,17 @@ impl CompositorHandler for TawcState {
     fn commit(&mut self, surface: &WlSurface) {
         self.popup_manager.commit(surface);
         // Catch up only the X11Surface backed by this committed
-        // wl_surface. The frame timer does the wider Xwayland race-closing
+        // wl_surface. `after_dispatch` does the wider Xwayland race-closing
         // scan without making unrelated commits mutate other windows.
         crate::xwayland::associate_committed_x11_surface(self, surface);
         smithay::backend::renderer::utils::on_commit_buffer_handler::<TawcState>(surface);
         self.desktop.commit_surface(surface);
         self.sync_desktop_hosts();
-        self.buffer_commit_pending = true;
+        // Smithay imports textures while building render elements; this
+        // only wakes the frame clock for new buffers, damage, viewport
+        // changes, same-buffer reattaches, or bare frame-callback commits.
+        self.needs_render = true;
+        self.frame_callbacks_pending = true;
 
         crate::cursor::after_commit(self, surface);
         crate::gtk3_menus_workaround::after_commit(self, surface);

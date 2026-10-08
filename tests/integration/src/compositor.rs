@@ -38,6 +38,11 @@ pub struct CompositorState {
     pub output_physical_h: i32,
     pub output_logical_w: i32,
     pub output_logical_h: i32,
+    /// Vsync ticks the compositor has handled; idle compositors don't tick.
+    pub vsync_ticks: u64,
+    /// `CLOCK_MONOTONIC` ns of the last vsync tick.
+    pub last_vsync_ns: i64,
+    pub output_refresh_mhz: u32,
 }
 
 /// Query the compositor's current state via the in-app broker.
@@ -147,6 +152,9 @@ fn parse_compositor_state_payload(payload: &str) -> Option<CompositorState> {
     let mut output_physical_h = None;
     let mut output_logical_w = None;
     let mut output_logical_h = None;
+    let mut vsync_ticks = None;
+    let mut last_vsync_ns = None;
+    let mut output_refresh_mhz = None;
     for part in payload.split_whitespace() {
         if let Some((key, val)) = part.split_once('=') {
             match key {
@@ -179,6 +187,9 @@ fn parse_compositor_state_payload(payload: &str) -> Option<CompositorState> {
                 "output_physical_h" => output_physical_h = Some(val.parse().ok()?),
                 "output_logical_w" => output_logical_w = Some(val.parse().ok()?),
                 "output_logical_h" => output_logical_h = Some(val.parse().ok()?),
+                "vsync_ticks" => vsync_ticks = Some(val.parse().ok()?),
+                "last_vsync_ns" => last_vsync_ns = Some(val.parse().ok()?),
+                "output_refresh_mhz" => output_refresh_mhz = Some(val.parse().ok()?),
                 _ => {}
             }
         }
@@ -206,6 +217,9 @@ fn parse_compositor_state_payload(payload: &str) -> Option<CompositorState> {
         output_physical_h: output_physical_h.unwrap_or_default(),
         output_logical_w: output_logical_w.unwrap_or_default(),
         output_logical_h: output_logical_h.unwrap_or_default(),
+        vsync_ticks: vsync_ticks.unwrap_or_default(),
+        last_vsync_ns: last_vsync_ns.unwrap_or_default(),
+        output_refresh_mhz: output_refresh_mhz.unwrap_or_default(),
     })
 }
 

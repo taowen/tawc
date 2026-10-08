@@ -880,7 +880,7 @@ pub fn associate_committed_x11_surface(state: &mut TawcState, committed: &WlSurf
     associate_x11_surface(state, surface)
 }
 
-/// Called from the frame timer. Scans `state.x11_surfaces` and promotes any
+/// Called after every event-loop dispatch. Scans `state.x11_surfaces` and promotes any
 /// X11Surface whose wl_surface is set but missing from the desktop registry
 /// into the host map (using its `PendingHost` user_data, or
 /// `assign_host_for_x11` as fallback).
@@ -889,8 +889,8 @@ pub fn associate_committed_x11_surface(state: &mut TawcState, committed: &WlSurf
 /// first commit and smithay's `WL_SURFACE_SERIAL` handler setting
 /// `X11Surface.wl_surface`. If the commit lands first, no X11Surface yet has
 /// the wl_surface bound; smithay sets it asynchronously and the next commit
-/// might not fire before the renderer needs the host mapping. The frame timer
-/// closes that gap without letting one commit mutate a different window.
+/// might not fire before the renderer needs the host mapping. The
+/// post-dispatch scan closes that gap without letting one commit mutate a different window.
 pub fn associate_pending_x11_surfaces(state: &mut TawcState) -> bool {
     if state.x11_surfaces.is_empty() {
         return false;

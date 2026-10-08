@@ -214,8 +214,10 @@ copy_test_app() {
     adb shell rm -rf "$staging" >/dev/null
     adb push "$out_dir" "$staging" >/dev/null
     if [ "$name" = "libhybris-tls-repro" ]; then
+        # Arch's rootfs `/` is 0555; open it just long enough for /data.
         "$TAWC_EXEC" /system/bin/sh -c "\
-            mkdir -p $bin_dir $lib_dir && \
+            mkdir -p $bin_dir && \
+            { [ -d $lib_dir ] || { chmod u+w $ROOTFS_DIR && mkdir -p $lib_dir; r=\$?; chmod u-w $ROOTFS_DIR; [ \$r = 0 ]; }; } && \
             cp $staging/$name $bin_dir/$name && \
             cp $staging/tls_lib.so $staging/weak_lib.so $lib_dir/ && \
             chmod a+rx $bin_dir/$name $lib_dir/tls_lib.so $lib_dir/weak_lib.so"

@@ -9,15 +9,20 @@ import android.content.ServiceConnection
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.os.IBinder
 import android.util.Log
+import android.view.Display
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.PointerIcon
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -38,6 +43,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.phie.tawc.RefreshRate
 import me.phie.tawc.Settings
 import java.io.File
 
@@ -143,12 +149,15 @@ class CompositorActivity : Activity(), SurfaceHolder.Callback {
         surfaceView.setOnTouchListener { _, event -> dispatchTouchToCompositor(event) }
         applyCompositorFullscreen(NativeBridge.fullscreenForActivity(activityId))
         registerBackCallback()
+        getSystemService(DisplayManager::class.java)
+            .registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
 
         initialized = true
     }
 
     override fun onDestroy() {
         if (initialized) {
+            getSystemService(DisplayManager::class.java).unregisterDisplayListener(displayListener)
             surfaceView.removeCallbacks(scrollStopRunnable)
             unregisterBackCallback()
             metadataScope.cancel()
@@ -187,6 +196,68 @@ class CompositorActivity : Activity(), SurfaceHolder.Callback {
         NativeBridge.nativeRegisterActivitySurface(
             activityId, holder.surface, frame.width(), frame.height()
         )
+        requestMaxRefreshRate(holder)
+    }
+
+    /**
+     * Ask for the display's fastest mode. Without a request Android keeps
+     * the app at 60 Hz on a faster panel. The compositor renders on demand
+     * from vsync, so an idle window still costs nothing per frame.
+     */
+    private fun requestMaxRefreshRate(holder: SurfaceHolder) {
+        val display = currentDisplay() ?: return
+        val modes = display.supportedModes
+        val mhz = RefreshRate.maxUsableMhz(modes.map { it.refreshRate }) ?: return
+        val hz = mhz / 1000f
+        val attributes = window.attributes
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            attributes.preferredRefreshRate = hz
+        } else {
+            // API 29 has no per-window rate preference; name the mode.
+            val current = display.mode
+            modes.filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+                .minByOrNull { kotlin.math.abs(it.refreshRate - hz) }
+                ?.let { attributes.preferredDisplayModeId = it.modeId }
+        }
+        window.attributes = attributes
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // The surface can be released under us; setFrameRate throws then.
+            try {
+                holder.surface.setFrameRate(hz, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "setFrameRate($hz) on a released surface", e)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "setFrameRate($hz) rejected", e)
+            }
+        }
+        reportRefreshRate()
+    }
+
+    /**
+     * Tell the compositor the rate the display actually runs at for us.
+     * That can be below the request (user caps, per-app overrides), and it
+     * changes later when the mode switch lands.
+     */
+    private fun reportRefreshRate() {
+        val mhz = currentDisplay()?.let { RefreshRate.usableMhz(it.refreshRate) } ?: return
+        Settings.outputRefreshMhz = mhz
+        NativeBridge.nativeSetOutputRefreshRate(mhz)
+    }
+
+    private fun currentDisplay(): Display? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            display
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay
+        }
+
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == currentDisplay()?.displayId) reportRefreshRate()
+        }
+        override fun onDisplayAdded(displayId: Int) = Unit
+        override fun onDisplayRemoved(displayId: Int) = Unit
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {

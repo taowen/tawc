@@ -331,6 +331,26 @@ pub fn assert_client_animating(name: &str, window: Duration, min_frames: u64) {
     );
 }
 
+/// Assert an animating client renders at (nearly) the output refresh rate
+/// over `window`. Rate is frames per vsync-clock second, so adb latency
+/// doesn't skew it.
+pub fn assert_client_at_refresh_rate(name: &str, window: Duration) {
+    let before = compositor::query_state(TIMEOUT)
+        .unwrap_or_else(|e| panic!("query compositor state before {name} rate check: {e}"));
+    std::thread::sleep(window);
+    let after = compositor::query_state(TIMEOUT)
+        .unwrap_or_else(|e| panic!("query compositor state after {name} rate check: {e}"));
+    let seconds = (after.last_vsync_ns - before.last_vsync_ns) as f64 / 1e9;
+    let frames = after.frames.saturating_sub(before.frames);
+    let refresh = after.output_refresh_mhz as f64 / 1000.0;
+    let fps = frames as f64 / seconds;
+    assert!(
+        seconds > 0.0 && fps >= 0.95 * refresh,
+        "{name} rendered {frames} frames in {seconds:.3}s of vsync time ({fps:.1} fps), \
+         expected >= 95% of {refresh:.1} Hz. before={before:?} after={after:?}"
+    );
+}
+
 /// True if the compositor currently has at least one SHM-backed surface.
 ///
 /// This is the test oracle for clients expected to use SHM.

@@ -152,6 +152,89 @@ basic placement regressions in the Smithay element path.
 The canonical output scale factor lives in `TawcState::output_scale` as an
 `OutputScale`, not an integer. Do not hardcode a scale elsewhere.
 
+## Frame clock
+
+Rendering follows Android's display vsync, on demand (`vsync.rs`,
+`event_loop.rs`):
+
+- A process-lifetime `tawc-vsync` thread owns an `ALooper` and its
+  `AChoreographer`; each compositor run attaches a fresh channel. It never
+  exits because the NDK keeps the choreographer in a destructor-less
+  `thread_local`: a thread per run leaked 4 fds per cycle
+  (`test_compositor_cycles_do_not_leak`). The
+  compositor arms one `AChoreographer_postFrameCallback64` at a time
+  (`Vsync::request` → `ALooper_wake`); the callback sends the vsync
+  timestamp (`CLOCK_MONOTONIC` ns) over a calloop channel.
+- `event_loop::after_dispatch` runs after every dispatch: Xwayland
+  service, X11 association catch-up, dead window/popup/text-input cleanup,
+  focus update on `toplevels_changed`, flush. It then arms vsync if
+  `needs_render` or `frame_callbacks_pending` is set and the visible host
+  has an EGL surface. Code that dirties state never arms anything itself.
+- A vsync tick (`frame_tick`) first sends `wl_surface.frame` done to the
+  visible host's windows and flushes, then renders the visible host if
+  `needs_render`. Callbacks first give clients the whole period: sending
+  them after render+swap (3–4 ms at 120 Hz) cost Firefox ~3 fps. Replies
+  are dispatched only after the tick, so the render can't see half a
+  frame. Every successful render answers `wp_presentation` feedback,
+  including direct ones (host register/resize): GTK4 lost a Ctrl+V paste
+  (`test_gtk4_widget_factory_copy_paste_and_text_input`) when a resize
+  render left its feedback pending. Callback and presentation times are
+  the vsync timestamp; presentation uses flag `VSYNC`, the output period
+  as `refresh`, and an estimated MSC.
+- Every commit sets both `needs_render` and `frame_callbacks_pending`.
+  They are separate because Register/SurfaceChanged render directly and
+  clear `needs_render` without sending callbacks.
+- Idle (nothing committed, nothing dirty, or no visible bound host) means
+  no ticks and no wakeups. A 250 ms timer covers the time-based work:
+  `check_idle` and Xwayland start retries. `nativeStopCompositor` wakes
+  the loop through a `LoopSignal`, since dispatch blocks without timeout.
+- `query-state` reports `vsync_ticks`, `last_vsync_ns`, `vsync_period_ns`
+  (shortest tick gap over the last 32 ticks), `tick_latency_max_ns`
+  (worst vsync-to-tick-done over the same window; near the period means
+  the compositor itself drops frames) and `output_refresh_mhz`.
+  `helpers::assert_client_at_refresh_rate` divides frames by vsync-clock
+  time, so adb latency doesn't skew it.
+
+Measured (fps over vsync-clock time, one tick per frame):
+
+| Device | Rate | weston-simple-egl (window / `-f` / `-b`) | vkcube | es2gears (Wayland / X11) | Firefox rAF page |
+|---|---|---|---|---|---|
+| 60 Hz phone | 60 | 60 | 60 | | |
+| Pixel 9 Pro | 60 (Smooth display off) | 60 | | | |
+| Pixel 9 Pro | 120 | 120 / 120 / 120 | 120 | 120 / 120 | 117.5–118 (Firefox rAF 120) |
+
+Worst tick latency at 120 Hz: 3–5 ms of 8.3. The old 16 ms re-armed
+timer gave ~55 fps at 60 Hz. Firefox's shortfall is its commits
+occasionally missing a vsync; it was 115 with callbacks sent after
+render.
+
+Not done: render-late pacing with `AChoreographer_postVsyncCallback`
+(API 33) frame deadlines, and real present times from
+`EGL_ANDROID_get_frame_timestamps` (`HW_COMPLETION`).
+
+## Refresh rate
+
+`TawcState::output_refresh_mhz` is the single output mode's refresh
+(default 60 Hz). `CompositorActivity`:
+
+- requests the display's fastest mode in `surfaceCreated`:
+  `preferredRefreshRate` + `Surface.setFrameRate(…, DEFAULT)` on API 30+,
+  `preferredDisplayModeId` on 29. Without a request Android keeps the app
+  at 60 Hz on a faster panel.
+- reports `Display.getRefreshRate()` (`nativeSetOutputRefreshRate`) then
+  and on every `DisplayListener.onDisplayChanged`. That is the rate the
+  app actually gets, after user caps (Smooth display off sets
+  `peak_refresh_rate=60`) and per-uid frame-rate overrides. The test phone
+  is 120 Hz-capable but capped to 60 this way.
+- persists it in `Settings.outputRefreshMhz`; `CompositorService` pushes
+  that on start so a client's first `wl_output.mode` is already right. A
+  service can't read display modes itself (`DisplayManager.getDisplay()`
+  is null for non-visual contexts on Android 12+).
+
+`AChoreographer_registerRefreshRateCallback` is deliberately not used: it
+reports the display mode, not the per-app override, so it would fight
+the Activity's value.
+
 ## SHM Buffer Support
 
 SHM buffers (`wl_shm`) are supported alongside the AHB path. SHM matters even for

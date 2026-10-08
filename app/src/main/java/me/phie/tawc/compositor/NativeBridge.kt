@@ -292,6 +292,9 @@ object NativeBridge {
      *  this through wl_output, fractional-scale, and xdg configure events. */
     external fun nativeSetOutputScale(scale: Float)
 
+    /** Display refresh rate (mHz) for `wl_output.mode`. */
+    external fun nativeSetOutputRefreshRate(mhz: Int)
+
     /** Start/stop the compositor-owned Xwayland server live. */
     external fun nativeSetXwaylandEnabled(enabled: Boolean)
 

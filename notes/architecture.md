@@ -9,7 +9,9 @@ The compositor (`compositor/src/`) is split into:
 - **event_loop.rs** -- Calloop-based event loop. Sources: Wayland display fd
   (dispatch client messages), listener socket (accept connections), touch input channel
   (Android touch -> wl_touch), text-input channel, state-query channel, surface-event
-  channel (per-Activity `SurfaceView` lifecycle), frame timer (~60 fps render loop).
+  channel (per-Activity `SurfaceView` lifecycle), vsync ticks (render loop, armed on
+  demand), and a 250 ms housekeeping timer. `after_dispatch` runs event-driven
+  housekeeping after every dispatch. See [rendering.md](rendering.md) "Frame clock".
   Also owns `set_host_foreground` and the per-host render iteration.
 - **host.rs** -- `OutputHost` (per-Activity render target — owns ANativeWindow + EGLSurface
   + foreground bool), `SurfaceEvent` (Register / SurfaceChanged / SurfaceDestroyed /
@@ -28,6 +30,8 @@ The compositor (`compositor/src/`) is split into:
   Returns a JSON array string to Kotlin (`LauncherEntry.scan`) via the
   `nativeLauncherScan` JNI entry. No compositor-state interaction — just pure
   file I/O, safe to call from any thread.
+- **vsync.rs** -- process-lifetime `tawc-vsync` thread (ALooper + AChoreographer) that relays one
+  vsync per request to the event loop, and the `FrameClock` counters.
 - **text_input.rs** -- `zwp_text_input_v3` server impl bridging Android InputConnection.
 - **compositor.rs** -- `TawcState` (the single Smithay/calloop state, including `hosts`,
   `single_activity_mode`, `RenderState`, and all Smithay handler trait impls including
@@ -111,8 +115,8 @@ Kotlin side (`app/src/main/java/me/phie/tawc/`):
   callbacks matches the type `CompositorState` was constructed for, so a wrapper
   struct is not an option. `Display<TawcState>` lives inside a calloop `Generic`
   source rather than on the state struct (avoids a self-referential cycle).
-- `dispatch_clients()` runs only from the Wayland fd `Generic` source; the frame
-  timer flushes pending writes but does not dispatch. Smithay's calloop integration
+- `dispatch_clients()` runs only from the Wayland fd `Generic` source; vsync
+  ticks and `after_dispatch` flush pending writes but do not dispatch. Smithay's calloop integration
   wakes the fd source whenever a client message arrives.
 - calloop `LoopHandle` is a strong `Rc` into the loop's own source list, and
   `EventLoop::drop` does not clear that list — so any source callback that
@@ -160,7 +164,7 @@ explicitly, and an idle one stops.
   Rc-cycle below would otherwise let a dead loop steal connections) and
   `return_x11()`s an unused socket. After an Xwayland run consumed it, the
   compositor (or the idle holder) prepares a fresh one.
-- **Auto-stop** (`event_loop::check_idle`, frame timer): no Wayland client
+- **Auto-stop** (`event_loop::check_idle`, housekeeping timer): no Wayland client
   and no Xwayland (it exits by itself 5 s after its last X client) for 1 s.
   Not zero: app startup has short-lived helper connections, and each cycle
   costs a GL context. A connection pending when the thread exits restarts it

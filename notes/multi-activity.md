@@ -420,10 +420,10 @@ they do need to leave room for tightening later.
 
 ## Render-loop changes
 
-Today (`event_loop.rs:246`): one frame timer, one render call drawing all
-toplevels onto one EGLSurface. The new shape:
+Original design notes (the loop is now vsync-driven; see
+[rendering.md](rendering.md) "Frame clock"):
 
-1. Frame timer fires.
+1. Frame tick fires.
 2. Dispatch client messages (global, as today).
 3. Import buffers — **only for surfaces whose host is `Foreground`**.
    Backgrounded clients shouldn't be producing frames; if they do, we let

@@ -23,6 +23,7 @@ object Settings {
     private const val KEY_GRAPHICS_BACKEND = "graphics_backend"
     private const val KEY_TINT_BUFFERS_BY_TYPE = "tint_buffers_by_type"
     private const val KEY_OUTPUT_SCALE = "output_scale"
+    private const val KEY_OUTPUT_REFRESH_MHZ = "output_refresh_mhz"
     private const val KEY_TERMINAL_SCALE = "terminal_scale"
     private const val KEY_XWAYLAND = "xwayland"
     private const val KEY_GTK3_BROKEN_MENUS_WORKAROUND = "gtk3_broken_menus_workaround"
@@ -55,6 +56,7 @@ object Settings {
         var graphicsBackend: GraphicsBackend
         var tintBuffersByType: Boolean
         var outputScale: Float
+        var outputRefreshMhz: Int
         var terminalScale: Float
         var xwayland: Boolean
         var gtk3BrokenMenusWorkaround: Boolean
@@ -88,6 +90,11 @@ object Settings {
             get() = snapOutputScale(prefs.getFloat(KEY_OUTPUT_SCALE, DEFAULT_OUTPUT_SCALE))
             set(value) {
                 prefs.edit { putFloat(KEY_OUTPUT_SCALE, snapOutputScale(value)) }
+            }
+        override var outputRefreshMhz: Int
+            get() = prefs.getInt(KEY_OUTPUT_REFRESH_MHZ, 0)
+            set(value) {
+                prefs.edit { putInt(KEY_OUTPUT_REFRESH_MHZ, value) }
             }
         override var terminalScale: Float
             get() = snapTerminalScale(prefs.getFloat(KEY_TERMINAL_SCALE, DEFAULT_TERMINAL_SCALE))
@@ -161,6 +168,7 @@ object Settings {
         @Volatile override var tintBuffersByType: Boolean = DEFAULT_TINT_BUFFERS_BY_TYPE
         @Volatile override var outputScale: Float = DEFAULT_OUTPUT_SCALE
             set(value) { field = snapOutputScale(value) }
+        @Volatile override var outputRefreshMhz: Int = 0
         @Volatile override var terminalScale: Float = DEFAULT_TERMINAL_SCALE
             set(value) { field = snapTerminalScale(value) }
         @Volatile override var xwayland: Boolean = true
@@ -221,6 +229,15 @@ object Settings {
     var outputScale: Float
         get() = requireStore().outputScale
         set(value) { requireStore().outputScale = snapOutputScale(value) }
+
+    /**
+     * Display refresh rate (mHz) a `CompositorActivity` last resolved; 0
+     * until one has. Persisted so the compositor's first `wl_output.mode`
+     * is right: only an Activity can read the display's modes.
+     */
+    var outputRefreshMhz: Int
+        get() = requireStore().outputRefreshMhz
+        set(value) { requireStore().outputRefreshMhz = value }
 
     /** Multiplier on the terminal's sp text size (so it also follows system font size). */
     var terminalScale: Float

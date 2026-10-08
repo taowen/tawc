@@ -40,6 +40,7 @@ mod keymap;
 mod icon_cache;
 mod launcher;
 mod text_input;
+mod vsync;
 mod xwayland;
 
 use compositor::TawcState;
@@ -440,6 +441,7 @@ pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeStopCompo
     info!("nativeStopCompositor");
     let phase = LIFECYCLE.phase.lock().unwrap();
     RUNNING.store(false, Ordering::SeqCst);
+    event_loop::wake();
     if !wait_for_idle(phase).1 {
         log::error!("nativeStopCompositor: compositor thread did not exit");
     }
@@ -840,6 +842,20 @@ pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeSetOutput
         }
         None => log::error!("Ignoring invalid output scale: {}", scale),
     }
+}
+
+/// Refresh rate (mHz) the Activity's display runs at for this app.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_me_phie_tawc_compositor_NativeBridge_nativeSetOutputRefreshRate(
+    _env: JNIEnv,
+    _class: JClass,
+    mhz: jint,
+) {
+    if mhz <= 0 {
+        log::error!("Ignoring invalid output refresh rate: {}", mhz);
+        return;
+    }
+    host::send_surface_event(SurfaceEvent::OutputRefreshChanged { mhz: mhz as u32 });
 }
 
 #[unsafe(no_mangle)]

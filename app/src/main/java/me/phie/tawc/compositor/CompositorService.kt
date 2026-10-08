@@ -97,6 +97,11 @@ class CompositorService : Service() {
         // process restart with no extra control flow.
         NativeBridge.nativeSetTintBuffersByType(me.phie.tawc.Settings.tintBuffersByType)
         NativeBridge.nativeSetOutputScale(me.phie.tawc.Settings.outputScale)
+        // Resolved by an Activity (a service can't read display modes);
+        // 0 means none has run yet.
+        me.phie.tawc.Settings.outputRefreshMhz
+            .takeIf { it > 0 }
+            ?.let { NativeBridge.nativeSetOutputRefreshRate(it) }
         NativeBridge.nativeSetXwaylandEnabled(me.phie.tawc.Settings.xwayland)
         NativeBridge.nativeSetGtk3BrokenMenusWorkaround(me.phie.tawc.Settings.gtk3BrokenMenusWorkaround)
         // A fresh watcher re-seeds mouse presence; a surviving one would
