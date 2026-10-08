@@ -36,7 +36,9 @@ screen"), plus pinned shortcuts.
 5. **AppsPane** filters hidden entries + the search query, then
    renders rows (icon ImageView + name + comment). `IconLoader`
    async-decodes PNGs with `BitmapFactory.inSampleSize` keeping memory
-   bounded, and holds them in a byte-bounded `LruCache`. An entry with
+   bounded, and holds them in a byte-bounded `LruCache` keyed by path; each rescan
+   evicts bitmaps whose file mtime/size changed (`dropStale`), so an
+   icon replaced in place updates. An entry with
    no resolvable icon gets `ic_terminal_fallback` or `ic_app_fallback`.
 6. Tap or Enter → `EntryLauncher.launch(appContext, inst, entry)`, the
    shared dispatch point for every launch surface. `Terminal=true`

@@ -24,6 +24,10 @@ import java.io.File
  * has hundreds of icon-bearing `.desktop` entries, so an unbounded map
  * would grow with the distro rather than with anything the app controls.
  *
+ * Cached bitmaps remember their file's mtime + size; [dropStale] (run
+ * on every rescan) evicts ones whose file changed, so an icon replaced
+ * in place shows up without a process restart.
+ *
  * Concurrency: each `load()` call sets `ImageView.tag` to the requested
  * path and re-checks it before applying the bitmap. So if the same
  * `ImageView` gets recycled with a different path mid-flight (rapid
@@ -37,8 +41,10 @@ class IconLoader(
     /** Cache ceiling in bytes of decoded bitmap. */
     budgetBytes: Int = budgetBytes(sizePx),
 ) {
-    private val cache = object : LruCache<String, Bitmap>(budgetBytes) {
-        override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
+    private class Cached(val bitmap: Bitmap, val stamp: Pair<Long, Long>)
+
+    private val cache = object : LruCache<String, Cached>(budgetBytes) {
+        override fun sizeOf(key: String, value: Cached) = value.bitmap.allocationByteCount
     }
 
     /**
@@ -52,23 +58,35 @@ class IconLoader(
             return
         }
         cache.get(path)?.let {
-            target.setImageBitmap(it)
+            target.setImageBitmap(it.bitmap)
             target.tag = path
             return
         }
         target.setImageDrawable(null)
         target.tag = path
         scope.launch {
-            val bmp = withContext(Dispatchers.IO) { decode(path, sizePx) }
+            // Stamp before decoding: a change mid-decode is caught by
+            // the next [dropStale].
+            val (stamp, bmp) = withContext(Dispatchers.IO) { stamp(path) to decode(path, sizePx) }
             if (target.tag != path) return@launch
             if (bmp == null) {
                 applyFallback(target, fallbackRes)
                 return@launch
             }
-            cache.put(path, bmp)
+            cache.put(path, Cached(bmp, stamp))
             target.setImageBitmap(bmp)
         }
     }
+
+    /** Evict bitmaps whose file changed since decode. Stats every
+     *  cached path, so call off the main thread. */
+    fun dropStale() {
+        for ((path, cached) in cache.snapshot()) {
+            if (stamp(path) != cached.stamp) cache.remove(path)
+        }
+    }
+
+    private fun stamp(path: String) = File(path).let { it.lastModified() to it.length() }
 
     private fun applyFallback(target: ImageView, fallbackRes: Int) {
         if (fallbackRes != 0) target.setImageResource(fallbackRes)

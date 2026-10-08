@@ -288,7 +288,10 @@ internal class AppsPane(
         val inst = installation
         val rootfs = store.rootfsDir(inst.id).absolutePath
         uiScope.launch {
-            allEntries = withContext(Dispatchers.IO) { LauncherEntry.list(activity, inst, rootfs) }
+            allEntries = withContext(Dispatchers.IO) {
+                iconLoader.dropStale()
+                LauncherEntry.list(activity, inst, rootfs)
+            }
             loaded = true
             applyFilter()
         }
