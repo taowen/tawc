@@ -116,6 +116,8 @@ static bool build_rootfs(void)
 		  "static_sigaltstack_open_argv1" },
 		{ TAWCROOT_STATIC_SIGALTSTACK_SMALL_OPEN_ARGV1_BIN,
 		  "static_sigaltstack_small_open_argv1" },
+		{ TAWCROOT_STATIC_SIGALTSTACK_SWAP_ARGV1_BIN,
+		  "static_sigaltstack_swap_argv1" },
 		{ TAWCROOT_STATIC_FEXECVE_ARGV1_BIN,
 		  "static_fexecve_argv1" },
 		{ TAWCROOT_STATIC_OPEN_CREAT_ARGV1_BIN,
@@ -449,6 +451,14 @@ test(prod_undersized_sigaltstack_is_substituted)
 {
 	test_int_eq(sigaltstack_case("/bin/static_sigaltstack_small_open_argv1",
 	                             "/marker-sigaltstack-small"), 42);
+}
+
+/* 60 = replacement not applied (frame missed B), 61 = frame still on A,
+ * 62 = disable not read back; a SIGSEGV death = disable not applied. */
+test(prod_sigaltstack_replace_and_disable_reach_kernel)
+{
+	test_int_eq(sigaltstack_case("/bin/static_sigaltstack_swap_argv1",
+	                             "/marker-sigaltstack-swap"), 42);
 }
 
 test(prod_long_path_over_1024_still_translates)

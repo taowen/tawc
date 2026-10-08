@@ -484,17 +484,29 @@ Because of that cost, guest altstacks get a floor (`src/sigalt.c`).
 pass untouched) is swapped for a tawcroot-owned 16 KiB slot from a
 256-slot BSS slab; `sigaltstack(NULL, &old)` still reports the guest's
 own `ss_sp`/`ss_size`. On slab exhaustion the guest's stack is installed
-as-is. Slots free on `SS_DISABLE`, replacement by a big stack, and
-`exit(2)`.
+as-is. A slot given up on `SS_DISABLE` or replacement by a big stack
+still holds the handler's own frame, so it is retired under the tid
+and freed at that thread's next `sigaltstack` or `exit(2)`; `exit(2)`
+also frees the live slot.
 
-The handler can't forward `sigaltstack`: running on the altstack makes
-the kernel return `-EPERM`, and sigreturn reinstalls `uc_stack` over
-whatever was set anyway. So `handle_sigaltstack` reads and writes
-`uc->uc_stack` — the kernel applies it on handler return, judging
-on-stack-ness by the guest's SP — and replicates `do_sigaltstack`'s
-validation (`EPERM`/`EINVAL`/`ENOMEM`) itself, since that restore
-ignores errors. Same trick as `rt_sigprocmask` and `uc_sigmask`.
-Pinned by `static_sigaltstack{,_small}_open_argv1` and
+The handler can't forward `sigaltstack` verbatim: it runs on the
+altstack, so the kernel returns `-EPERM`. Leaving the change in
+`uc->uc_stack` for sigreturn's `restore_altstack` doesn't work either:
+x86_64 kernels (host 7.2, emulator 6.6) silently drop that edit when
+the handler ran on the altstack, though arm64 applies it. Firefox hit
+this: each thread's altstack is disabled and unmapped at thread exit,
+the disable was dropped, and the next trapped syscall's SIGSYS frame
+hit unmapped memory (forced SIGSEGV, no guest handler).
+So `handle_sigaltstack` replicates `do_sigaltstack`'s validation
+(`EPERM`/`EINVAL`/`ENOMEM`, judging on-stack-ness by the guest's SP),
+then issues the real call through `tawcroot_raw_syscall_off_stack`:
+the stub's own `syscall`/`svc` (so the filter's single IP allowlist
+entry covers it), with SP pointed at a static slot off any altstack.
+Nothing is written there — x86_64's `ret` only pops a pre-stored
+continuation, arm64's uses x30 — and the handler masks all signals.
+`uc_stack` is set to the same value so the restore is a no-op.
+Pinned by `static_sigaltstack{,_small}_open_argv1`,
+`static_sigaltstack_swap_argv1` (replace, then disable + munmap) and
 `tests/unit/test_sigalt.c`.
 
 The budget is enforced mechanically, not by convention: every

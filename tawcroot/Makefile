@@ -410,6 +410,12 @@ $(OUT)/programs/static_sigaltstack_small_open_argv1: $(SRC_TS)/integration/progr
 	@mkdir -p $(dir $@)
 	$(CC) -static -nostdlib -O2 -Wl,--build-id=none $< -o $@
 
+# static_sigaltstack_swap_argv1: replace then disable+munmap an altstack
+# (Firefox's per-thread pattern); trapped openats after each must follow.
+$(OUT)/programs/static_sigaltstack_swap_argv1: $(SRC_TS)/integration/programs/static_sigaltstack_swap_argv1_x86_64.S | $(OUT)
+	@mkdir -p $(dir $@)
+	$(CC) -static -nostdlib -O2 -Wl,--build-id=none $< -o $@
+
 # static_fork_exec_argv1: clone(SIGCHLD), child execve(argv[1]), parent
 # waits and forwards. Exercises the full bash-style fork+execve chain
 # through the SIGSYS handler, --exec-child handoff, and per-process

@@ -393,7 +393,9 @@ covered by unit/hosted/smoke tests.)
   against its own buffer would notice. Slots leak on involuntary thread
   death, for other threads' slots in a fork child, and for a
   `sigaltstack` made inside an `SS_AUTODISARM` handler; a vfork child
-  replacing an inherited substituted stack frees the parent's slot.
+  replacing an inherited substituted stack frees the parent's slot, as
+  does an `SS_AUTODISARM` handler on a substituted slot replacing its
+  altstack twice.
   All bounded by the fallback: slab exhausted → guest stack as-is.
 - **Freed-but-still-registered altstacks get written.** `SA_ONSTACK`
   means every trapped syscall writes the guest's altstack, not just its

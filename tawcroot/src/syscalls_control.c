@@ -18,8 +18,8 @@
  *     when reporting the previous mask. Guest reads back what it set;
  *     the kernel never actually blocks SIGSYS, so traps continue
  *     reaching our handler.
- *   - `sigaltstack`: virtualize via uc->uc_stack so undersized guest
- *     altstacks never receive our SA_ONSTACK frame (sigalt.h).
+ *   - `sigaltstack`: virtualize so undersized guest altstacks never
+ *     receive our SA_ONSTACK frame, applying it off-stack (sigalt.h).
  *   - Other signals are unaffected.
  */
 
@@ -300,8 +300,15 @@ static long handle_rt_sigprocmask(const tawcroot_syscall_args *args,
 	return 0;
 }
 
-/* sigaltstack(ss, old_ss). Never forwarded — see sigalt.h. Old is
- * copied out before anything mutates, so EFAULT leaves no trace. */
+static long apply_sigaltstack(const stack_t *ss)
+{
+	return tawcroot_raw_syscall_off_stack(TAWC_SYS_sigaltstack,
+					      (long)ss, 0);
+}
+
+/* sigaltstack(ss, old_ss). Never forwarded verbatim — see sigalt.h.
+ * Old is copied out before anything mutates, so EFAULT leaves no
+ * trace. */
 static long handle_sigaltstack(const tawcroot_syscall_args *args,
 			       ucontext_t *uc)
 {
@@ -317,9 +324,10 @@ static long handle_sigaltstack(const tawcroot_syscall_args *args,
 	if (r < 0) return r;
 	if (guest_old && tawc_copy_to_guest(guest_old, &old, sizeof old) < 0)
 		return TAWC_EFAULT;
-	if (guest_ss)
-		tawc_sigalt_commit(&uc->uc_stack, &ss);
-	return 0;
+	if (!guest_ss) return 0;
+	long tid = TAWC_RAW(TAWC_SYS_gettid, 0, 0, 0, 0, 0, 0);
+	return tawc_sigalt_commit(&uc->uc_stack, &ss, (int)tid,
+				  apply_sigaltstack);
 }
 
 /* exit(2) — per-thread exit (kills only the calling thread, not the
@@ -344,7 +352,7 @@ static long handle_exit(const tawcroot_syscall_args *args, ucontext_t *uc)
 	long code = args->a;
 	long tid = TAWC_RAW(TAWC_SYS_gettid, 0, 0, 0, 0, 0, 0);
 	tawc_sigshadow_blocked_clear((int)tid);
-	tawc_sigalt_thread_exit(&uc->uc_stack);
+	tawc_sigalt_thread_exit(&uc->uc_stack, (int)tid);
 	TAWC_RAW(TAWC_SYS_exit, code, 0, 0, 0, 0, 0);
 	__builtin_unreachable();
 }
