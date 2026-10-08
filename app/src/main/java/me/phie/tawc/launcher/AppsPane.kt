@@ -2,6 +2,8 @@ package me.phie.tawc.launcher
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.os.SystemClock
 import android.text.TextUtils
 import android.util.TypedValue
@@ -40,19 +42,20 @@ import me.phie.tawc.ui.tawcCard
 import me.phie.tawc.ui.verticalLp
 
 /**
- * The home screen's apps pane: an alphabetical icon grid of installed
- * `.desktop` apps for one distro. The Rust compositor library does the
+ * The home screen's apps tab: an alphabetical icon grid of installed
+ * `.desktop` apps for one distro, plus the app's built-in entries
+ * ([LauncherEntry.Builtin]). The Rust compositor library does the
  * actual scanning and name sort ([LauncherEntry.scan]); Kotlin here
  * just renders + filters + dispatches launches.
  *
- * Layout is Android-launcher-like: a `[≡] <distro> [🔍][⋮]` header,
- * then a grid of icons with single-line names (no descriptions). 🔍
- * (or typing on a hardware keyboard) opens a search field under the
- * header that filters the grid; Enter launches the top match, and ✕ or
- * Back closes it. Tap launches; long-press opens a per-entry action
- * menu (Hide/Unhide, Add to home screen, Edit — assembled in
- * [entryActionsFor]). The home ⋮ gets this pane's items from
- * [addMenuItems] (Show hidden, Add entry…). Pinning, frecency,
+ * Layout is Android-launcher-like: an always-visible search bar
+ * ("Search <distro>"), then a grid of icons with single-line names (no
+ * descriptions). The bar filters the grid; Enter launches the top
+ * match, ✕ or Back clears it, and typing on a hardware keyboard with
+ * nothing focused types into it. Tap launches; long-press opens a
+ * per-entry action menu (Hide/Unhide, Add to home screen, Edit —
+ * assembled in [entryActionsFor]). The home ⋮ gets this pane's items
+ * from [addMenuItems] (Show hidden, Add entry…). Frecency and
  * window-list integration are deferred (see notes/launcher.md
  * "Future UX").
  *
@@ -72,8 +75,6 @@ internal class AppsPane(
 ) {
 
     interface Host {
-        fun openDrawer()
-        fun showMenu(anchor: View)
         /** Start the `.desktop` editor for result; RESULT_OK → [rescan]. */
         fun openEditor(intent: Intent)
         /** Grid scrolled; hide the FAB going down, show it going up. */
@@ -84,8 +85,8 @@ internal class AppsPane(
     private val density = activity.resources.displayMetrics.density
     private val pad = (16 * density).toInt()
 
-    private val searchRow: View
     private val searchField: EditText
+    private val clearButton: View
     private val grid: RecyclerView
     private val gridLayout: GridLayoutManager
     private val adapter = EntryAdapter()
@@ -99,10 +100,19 @@ internal class AppsPane(
      *  per-pane state, deliberately not persisted. */
     private var showHidden = false
 
+    /** The first scan is done (until then the empty view says loading). */
+    private var loaded = false
+
     /** UI scope for loading + search filtering. Cancelled on [destroy]. */
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val iconSizePx = (ICON_SIZE_DP * density).toInt()
+
+    /** `?attr/colorControlNormal`, for the bare Add entry glyph. */
+    private val controlTint: ColorStateList? = TypedValue().let {
+        activity.theme.resolveAttribute(androidx.appcompat.R.attr.colorControlNormal, it, true)
+        if (it.resourceId != 0) activity.getColorStateList(it.resourceId) else ColorStateList.valueOf(it.data)
+    }
     private val iconLoader = IconLoader(uiScope, iconSizePx)
 
     /** A hardware Enter arrives both as a key event and as the IME
@@ -112,20 +122,29 @@ internal class AppsPane(
 
     val view: LinearLayout
 
-    val isSearchOpen: Boolean get() = searchRow.visibility == View.VISIBLE
+    val searchHasFocus: Boolean get() = searchField.hasFocus()
 
     init {
-        view = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        view.addView(buildHeader(), LinearLayout.LayoutParams(MATCH_PARENT, (HEADER_HEIGHT_DP * density).toInt()))
+        view = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            // Soaks up the window's initial focus, which would otherwise
+            // land in the search field: it takes focus only on a tap or
+            // hardware typing ([onUnhandledKey]).
+            isFocusableInTouchMode = true
+        }
 
+        clearButton = activity.plainIconButton(R.drawable.ic_close, activity.getString(R.string.action_clear_search)) {
+            clearSearch()
+        }.apply { visibility = View.INVISIBLE }
         searchField = EditText(activity).apply {
-            hint = activity.getString(R.string.hint_search_apps)
+            hint = activity.getString(R.string.hint_search_distro, DistroRegistry.displayLabel(installation))
             textSize = 16f
             isSingleLine = true
             background = null
             imeOptions = EditorInfo.IME_ACTION_GO
             isFocusableInTouchMode = true
             doAfterTextChanged {
+                clearButton.visibility = if (it.isNullOrEmpty()) View.INVISIBLE else View.VISIBLE
                 applyFilter()
                 grid.scrollToPosition(0)
             }
@@ -136,11 +155,10 @@ internal class AppsPane(
                 if (isEnter) { launchTop(); true } else false
             }
         }
-        searchRow = buildSearchRow()
         view.addView(
-            searchRow,
+            buildSearchRow(),
             LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).also {
-                it.setMargins(pad, 0, pad, pad / 2)
+                it.setMargins(pad, pad * 3 / 4, pad, pad / 2)
             },
         )
 
@@ -178,50 +196,10 @@ internal class AppsPane(
         rescan()
     }
 
-    /** `[≡] <distro> [🔍][⋮]`, taller than the terminal's tab row. */
-    private fun buildHeader(): View {
-        val row = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(pad / 4, 0, pad / 4, 0)
-        }
-        val button = activity.tawcButtonSizePx()
-        row.addView(
-            activity.plainIconButton(R.drawable.ic_menu, activity.getString(R.string.action_open_drawer)) {
-                host.openDrawer()
-            },
-            LinearLayout.LayoutParams(button, button),
-        )
-        row.addView(TextView(activity).apply {
-            text = DistroRegistry.displayLabel(installation)
-            textSize = 22f
-            isSingleLine = true
-            ellipsize = TextUtils.TruncateAt.END
-            setPadding(pad / 2, 0, pad / 2, 0)
-        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        row.addView(
-            activity.plainIconButton(R.drawable.ic_search, activity.getString(R.string.action_search)) {
-                if (isSearchOpen) closeSearch() else openSearch()
-            },
-            LinearLayout.LayoutParams(button, button),
-        )
-        // Under the shared glyph size: three solid dots read heavier
-        // than the line icons everything else uses.
-        lateinit var menuButton: View
-        menuButton = activity.plainIconButton(
-            R.drawable.ic_more_vert,
-            activity.getString(R.string.home_menu_description),
-            iconSizeDp = 21,
-        ) { host.showMenu(menuButton) }
-        row.addView(menuButton, LinearLayout.LayoutParams(button, button))
-        return row
-    }
-
-    /** Rounded `[🔍 field ✕]` pill under the header; hidden until opened. */
+    /** Rounded `[🔍 field ✕]` pill; ✕ shows while there is a query. */
     private fun buildSearchRow(): View {
         val card = activity.tawcCard().apply {
             radius = activity.tawcButtonSizePx() / 2f
-            visibility = View.GONE
         }
         val row = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -235,12 +213,7 @@ internal class AppsPane(
         }, LinearLayout.LayoutParams(glyph, glyph).also { it.marginEnd = pad / 2 })
         row.addView(searchField, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         val button = activity.tawcButtonSizePx()
-        row.addView(
-            activity.plainIconButton(R.drawable.ic_close, activity.getString(R.string.action_close_search)) {
-                closeSearch()
-            },
-            LinearLayout.LayoutParams(button, button),
-        )
+        row.addView(clearButton, LinearLayout.LayoutParams(button, button))
         card.addView(row)
         return card
     }
@@ -255,40 +228,36 @@ internal class AppsPane(
         uiScope.cancel()
     }
 
-    /** Show the search field, focused with the IME up; [initial] seeds it. */
-    fun openSearch(initial: CharSequence = "") {
-        searchRow.visibility = View.VISIBLE
-        if (initial.isNotEmpty()) {
-            searchField.append(initial)
-        }
-        searchField.requestFocus()
-        // Post: on first show the field isn't laid out yet.
-        searchField.post {
-            val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.showSoftInput(searchField, InputMethodManager.SHOW_IMPLICIT)
-        }
-    }
-
-    /** Clear and hide the search field. Returns whether it was open (Back). */
-    fun closeSearch(): Boolean {
-        if (!isSearchOpen) return false
+    /**
+     * Clear the query, drop the IME and give up focus. Returns whether
+     * there was a query (Back clears it before leaving).
+     */
+    fun clearSearch(): Boolean {
+        val had = searchField.text.isNotEmpty()
         val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.hideSoftInputFromWindow(searchField.windowToken, 0)
-        searchField.clearFocus()
-        searchRow.visibility = View.GONE
+        view.requestFocus()
         searchField.text.clear()
-        return true
+        return had
+    }
+
+    /** Take focus off the search field (the apps tab was just shown). */
+    fun unfocus() {
+        view.requestFocus()
     }
 
     /**
      * A key nothing focused consumed (hardware keyboard): a printable
-     * character opens search with it, launcher-style.
+     * character goes into the search field, launcher-style.
      */
     fun onUnhandledKey(event: KeyEvent): Boolean {
-        if (isSearchOpen || event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
+        if (searchField.hasFocus() || event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
         val c = event.unicodeChar
         if (c == 0 || Character.isISOControl(c) || Character.isWhitespace(c)) return false
-        openSearch(String(Character.toChars(c)))
+        searchField.requestFocus()
+        searchField.append(String(Character.toChars(c)))
+        val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showSoftInput(searchField, InputMethodManager.SHOW_IMPLICIT)
         return true
     }
 
@@ -316,13 +285,12 @@ internal class AppsPane(
     }
 
     fun rescan() {
-        val rootfs = store.rootfsDir(installation.id).absolutePath
+        val inst = installation
+        val rootfs = store.rootfsDir(inst.id).absolutePath
         uiScope.launch {
-            allEntries = withContext(Dispatchers.IO) { LauncherEntry.scan(rootfs) }
+            allEntries = withContext(Dispatchers.IO) { LauncherEntry.list(activity, inst, rootfs) }
+            loaded = true
             applyFilter()
-            if (allEntries.isEmpty()) {
-                emptyView.text = activity.getString(R.string.launcher_no_launchable_apps)
-            }
         }
     }
 
@@ -346,20 +314,21 @@ internal class AppsPane(
 
     private fun renderList() {
         adapter.submit(filteredEntries, hiddenIds())
-        if (filteredEntries.isEmpty() && allEntries.isNotEmpty()) {
-            val q = searchField.text.toString().trim()
-            emptyView.text = if (q.isEmpty()) {
-                // Every entry is hidden (show-hidden off): keep the
-                // no-apps message but say why the grid is empty.
-                activity.getString(R.string.launcher_no_launchable_apps) + "\n" +
-                    activity.getString(R.string.launcher_hidden_count_hint, hiddenCount())
-            } else {
-                activity.getString(R.string.launcher_no_matches)
-            }
-            emptyView.visibility = View.VISIBLE
+        if (!loaded) return
+        if (filteredEntries.isNotEmpty()) {
+            emptyView.visibility = View.GONE
             return
         }
-        emptyView.visibility = if (allEntries.isEmpty()) View.VISIBLE else View.GONE
+        val hidden = hiddenCount()
+        emptyView.text = when {
+            searchField.text.isNotBlank() -> activity.getString(R.string.launcher_no_matches)
+            // Every entry is hidden (show-hidden off): say why the grid
+            // is empty.
+            hidden > 0 -> activity.getString(R.string.launcher_no_launchable_apps) + "\n" +
+                activity.getString(R.string.launcher_hidden_count_hint, hidden)
+            else -> activity.getString(R.string.launcher_no_launchable_apps)
+        }
+        emptyView.visibility = View.VISIBLE
     }
 
     /**
@@ -388,18 +357,20 @@ internal class AppsPane(
 
     private fun entryActionsFor(entry: LauncherEntry): List<EntryAction> {
         val hidden = entry.id in hiddenIds()
+        val builtin = entry.builtin
         return listOfNotNull(
             if (hidden) {
                 EntryAction(activity.getString(R.string.launcher_action_unhide)) { setEntryHidden(entry, false) }
             } else {
                 EntryAction(activity.getString(R.string.launcher_action_hide)) { setEntryHidden(entry, true) }
             },
-            EntryAction(activity.getString(R.string.launcher_action_add_home)) { pinEntry(entry) },
+            EntryAction(activity.getString(R.string.launcher_action_add_home)) { pinEntry(entry) }
+                .takeIf { builtin == null || builtin.opensTerminal },
             // Only entries in the managed dir are editable — everything
-            // else is package-owned (see DesktopEntryFile).
+            // else is package-owned (see DesktopEntryFile) or built in.
             EntryAction(activity.getString(R.string.launcher_action_edit)) { openEditor(entry.path) }
                 .takeIf {
-                    canEditEntries() &&
+                    builtin == null && canEditEntries() &&
                         DesktopEntryFile.isManaged(entry.path, store.rootfsDir(installation.id))
                 },
         )
@@ -499,6 +470,27 @@ internal class AppsPane(
             cell.root.alpha = if (entry.id in hidden) 0.5f else 1f
             cell.root.setOnClickListener { launchEntry(entry) }
             cell.root.setOnLongClickListener { showEntryMenu(entry); true }
+            val builtin = entry.builtin
+            cell.icon.background = null
+            cell.icon.imageTintList = null
+            cell.icon.setPadding(0, 0, 0, 0)
+            if (builtin != null) {
+                cell.icon.tag = null
+                cell.icon.setImageResource(builtin.iconRes)
+                if (builtin.opensTerminal) {
+                    // White on a round black tile, like a terminal entry.
+                    cell.icon.setBackgroundResource(R.drawable.builtin_icon_bg)
+                    cell.icon.imageTintList = ColorStateList.valueOf(Color.WHITE)
+                    val inset = iconSizePx / 4
+                    cell.icon.setPadding(inset, inset, inset, inset)
+                } else {
+                    // The vector's own theme tint was cleared above.
+                    cell.icon.imageTintList = controlTint
+                    val inset = iconSizePx / 8
+                    cell.icon.setPadding(inset, inset, inset, inset)
+                }
+                return
+            }
             iconLoader.load(
                 entry.iconPath,
                 cell.icon,
@@ -514,25 +506,26 @@ internal class AppsPane(
 
     /**
      * Fire-and-forget launch via [EntryLauncher]; failures surface from
-     * there ([LaunchErrorActivity]). Search is closed and the IME
-     * dropped: the app's window (or the terminal) comes forward, and
-     * this pane is what the user returns to.
+     * there ([LaunchErrorActivity]). Add entry opens the editor here
+     * instead, for its result. Search is cleared and the IME dropped:
+     * the app's window (or the terminal) comes forward, and this pane
+     * is what the user returns to.
      */
     private fun launchEntry(entry: LauncherEntry) {
         val now = SystemClock.uptimeMillis()
         if (now - lastLaunchMs < LAUNCH_DEBOUNCE_MS) return
         lastLaunchMs = now
-        EntryLauncher.launch(activity.applicationContext, installation, entry)
-        closeSearch()
+        clearSearch()
+        if (entry.builtin == LauncherEntry.Builtin.ADD_ENTRY) {
+            openEditor(null)
+        } else {
+            EntryLauncher.launch(activity.applicationContext, installation, entry)
+        }
     }
 
     private companion object {
         /** Square icon edge in dp, about a phone launcher's. */
         const val ICON_SIZE_DP = 52f
-
-        /** Header height: a Material top app bar, roomier than the
-         *  terminal's 48dp tab row. */
-        const val HEADER_HEIGHT_DP = 64
 
         /** Columns: as many [CELL_MIN_WIDTH_DP] cells as fit, at least [MIN_COLUMNS]. */
         const val CELL_MIN_WIDTH_DP = 88

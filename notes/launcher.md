@@ -1,16 +1,17 @@
 # In-app launcher
 
 Per-distro app picker that reads `.desktop` files inside a rootfs and
-lets the user search + launch: the home screen's apps pane
+lets the user search + launch: the home screen's apps tab
 (`launcher/AppsPane`, for the open distro, notes/android.md "Home
 screen"), plus pinned shortcuts.
 
 ## Pipeline
 
-1. **MainActivity** shows `AppsPane` for a READY open distro when the
-   chosen pane is apps (or the install can't host the terminal).
+1. **MainActivity** shows a READY open distro's `DistroHome`, whose
+   first tab is `AppsPane`.
 2. **AppsPane.rescan()** — on every show, distro switch and resume, so
    packages installed from the terminal appear — →
+   `LauncherEntry.list` (scan + built-ins, below) →
    `LauncherEntry.scan(rootfs)` on
    `Dispatchers.IO` — the shared wrapper around
    `NativeBridge.nativeLauncherScan` + JSON parse that every scan
@@ -39,8 +40,8 @@ screen"), plus pinned shortcuts.
    no resolvable icon gets `ic_terminal_fallback` or `ic_app_fallback`.
 6. Tap or Enter → `EntryLauncher.launch(appContext, inst, entry)`, the
    shared dispatch point for every launch surface. `Terminal=true`
-   entries on tawcroot installs open the home terminal pane with a
-   command tab instead (see notes/terminal.md "Command sessions"); proot/chroot
+   entries on tawcroot installs open a new home terminal tab running
+   the command instead (see notes/terminal.md "Command sessions"); proot/chroot
    terminal entries fall through to the headless path with a logcat
    warn. Everything else runs
    `UserRootfsSession.runInside(rootfs, "<exec> </dev/null >/dev/null
@@ -86,15 +87,16 @@ in `launcher.rs::scan_entries`:
 - `resolve_metadata_for_app_id` shares `scan_entries` for window
   icons/titles — a hidden app that is *running* must still resolve.
 
-The pane is an Android-launcher-style grid: header `≡ <distro> 🔍 ⋮`
-(64dp, buttons background-less `plainIconButton`), then icons in name
+The pane is an Android-launcher-style grid under the home tab bar: an
+always-visible search pill ("Search <distro>"), then icons in name
 order with one-line, end-ellipsized names; descriptions are not shown.
 Columns = width / 88dp (min 3). Bottom padding lets the last row scroll
-clear of the FAB, which also hides while scrolling down. 🔍 (or a
-printable hardware key with nothing focused) opens a search field under
-the header; Enter launches the top match; ✕, Back or a launch closes
-and clears it. ≡ opens the home drawer. The ⋮ is the home screen's one
-menu; this pane adds a
+clear of the FAB, which also hides while scrolling down. The search
+field never takes focus on its own (the pane's column soaks up the
+window's initial focus): only a tap or a printable hardware key with
+nothing focused puts it there. Enter launches the top match; ✕ (shown
+with a query), Back or a launch clears it and drops the IME. The ⋮ is
+the home screen's one menu; on the apps tab it adds a
 checkable **"Show hidden (N)"** item (N counts hidden ids that match
 actual entries; omitted when N is 0) and, on editable methods, **"Add
 entry…"** (the editor). Show-hidden is transient
@@ -109,6 +111,31 @@ the post-filter list as JSON (optionally including hidden entries with
 see what the scanner picked; `set-entry-hidden` performs the same
 metadata write as the UI. Integration coverage: `launcher::` tests in
 `tests/integration/tests/launcher.rs`.
+
+## Built-in entries
+
+`LauncherEntry.Builtin` entries are synthesized Kotlin-side
+(`builtinsFor` + `withBuiltins`, unit-tested) after the scan, not
+`.desktop` files. Ids carry a reserved `tawc:` prefix (scanned ids with
+it are dropped), so hide state (`hiddenDesktopIds`) and pin ids work
+unchanged and the query matches them like any entry. Edit is never
+offered.
+
+| Entry | Id | Action | Offered | Pin |
+|---|---|---|---|---|
+| TAWC Term | `tawc:term` | new shell tab | tawcroot | yes |
+| Update packages | `tawc:update` | new command tab running `Distro.upgradeCommand` | tawcroot | yes |
+| Add entry | `tawc:add-entry` | `DesktopFileEditorActivity` (new), for result | not chroot | no |
+
+TAWC Term and Update packages sort by name with everything else; Add
+entry sorts last whatever the query (`LauncherEntry.filter`). The
+terminal ones draw their glyph (`ic_terminal`, `ic_update`) white on a
+round black `builtin_icon_bg` tile — the same circle as
+`ic_terminal_fallback` — in grid and pins alike, so TAWC Term looks
+like any icon-less terminal entry; Add entry is a bare themed
+`ic_add_entry` plus.
+`launcher-list` includes them with `builtin: true`
+(`launcher::test_builtin_entries_listed_and_hideable`).
 
 ## Managed dir + .desktop editor
 
@@ -189,6 +216,8 @@ trampoline).
   stale-pin story: uninstalling a distro leaves pins behind, and a
   stale tap gets a clear error. (Optional follow-up if that annoys:
   uninstall could `disableShortcuts` ids prefixed `"<installId>/"`.)
+  A built-in id resolves before the scan, straight to
+  `EntryLauncher`, which sends it through the `.CommandLaunch` path.
 - A hidden entry still launches from its pin — hiding declutters the
   list; an existing pin is explicit user intent. Terminal entries get
   no special casing: dispatch goes through `EntryLauncher`, same as
@@ -302,7 +331,7 @@ Symbolic SVGs are a single near-black colour, so they vanish on a dark
 background, and a cached PNG can't follow the app theme. They are baked
 light-on-dark instead: the SVG is rendered at 60 % scale, its **alpha is
 kept as a mask** and repainted white over a black rounded tile with the
-same proportions as `ic_terminal_fallback`. Masking rather than
+same proportions as `ic_app_fallback`. Masking rather than
 string-replacing the fill is deliberate — a symbolic icon's colour can
 come from `fill`, `style`, a class or a `use` reference, so rewriting the
 source is fragile. The cache key carries a `symbolic` bit.
@@ -333,7 +362,7 @@ or copy icons into an app-uid-readable cache at install time.
 - Window-list integration: show running Wayland windows alongside apps
   to switch.
 - Recently-launched section.
-- Launching from the terminal pane's search (one field for commands
-  and apps).
+- Launching from the apps tab's search (one field for commands and
+  apps).
 
 None of these block today's "type-and-go" flow; revisit after dogfooding.

@@ -775,14 +775,15 @@ pub fn session_exit() -> io::Result<Output> {
     broker_action("session-exit", &[])
 }
 
-/// Put the home screen on `pane` (`terminal` / `apps`) for the test
-/// install, without the IME (notes/exec-broker.md `home-pane`).
-pub fn home_pane(pane: &str) -> io::Result<Output> {
+/// Put the test install's home on `tab`: `apps`, `new` (a new terminal
+/// tab) or a terminal tab index (notes/exec-broker.md `home-tab`).
+pub fn home_tab(tab: &str) -> io::Result<Output> {
     let install_id = crate::install_id();
-    broker_action("home-pane", &[("pane", pane), ("installId", &install_id)])
+    broker_action("home-tab", &[("tab", tab), ("installId", &install_id)])
 }
 
-/// The test install's terminal: `pending`, `inUse:<n>` or `none`.
+/// The test install's terminal tabs and home selection:
+/// `tabs:<n> selected:<apps|i|none>` (`none`: its home isn't showing).
 pub fn terminal_state() -> io::Result<String> {
     let install_id = crate::install_id();
     let output = broker_action("terminal-state", &[("installId", &install_id)])?;

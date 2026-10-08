@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Round black tile behind a terminal built-in's white glyph
+     (AppsPane), the same circle as ic_terminal_fallback. Inset so it
+     sits at about the visual size of a padded app icon. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:inset="8%">
+    <shape android:shape="oval">
+        <solid android:color="#FF000000" />
+    </shape>
+</inset>

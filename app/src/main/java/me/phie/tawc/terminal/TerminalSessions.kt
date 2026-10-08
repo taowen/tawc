@@ -15,129 +15,52 @@ import me.phie.tawc.session.SessionHolds
 
 /**
  * Process-wide registry of live terminal sessions: per installation id,
- * an ordered tab list plus the selected index, and at most one
- * *pending* shell. Sessions outlive the home screen's [TerminalPane] —
- * activity recreation and distro switches reattach to the running
- * shells instead of spawning new ones. Selection lives here too so
- * recreation restores which tab was showing.
+ * an ordered tab list. Sessions outlive the home screen's [DistroHome]
+ * — activity recreation and distro switches reattach to the running
+ * shells instead of spawning new ones. Which tab is selected is the
+ * activity's business, not stored here.
  *
- * Every tab-list session holds a [Reason.Terminal] in [SessionHolds],
- * which keeps the process a foreground service while any shell is alive
- * (notes/session-service.md). The pending shell — the one the pane
- * auto-spawns and nobody has typed into yet — holds nothing until
- * [promote] moves it into the list; [SessionService]'s stray scan skips
- * its pid ([pendingPids]).
+ * Every session holds a [Reason.Terminal] in [SessionHolds], which
+ * keeps the process a foreground service while any shell is alive
+ * (notes/session-service.md).
  *
- * Dumb bookkeeping only (order + selection): tab policy — what to
- * select after a close, when to close the app — lives in [TerminalPane].
+ * Dumb bookkeeping only: tab policy — what to select after a close,
+ * when to close the app — lives in [DistroHome].
  */
 internal object TerminalSessions {
-    private class Entry {
-        val sessions = ArrayList<TerminalSession>()
-        var selected = 0
-    }
-
     /** Held here, not by the activity: sessions outlive it. */
     private val holds = java.util.IdentityHashMap<TerminalSession, Hold>()
 
-    private val entries = HashMap<String, Entry>()
-
-    private val pending = HashMap<String, TerminalSession>()
+    private val entries = HashMap<String, ArrayList<TerminalSession>>()
 
     /** Live sessions for [id] in tab order (snapshot copy). */
     @Synchronized
-    fun list(id: String): List<TerminalSession> =
-        entries[id]?.sessions?.toList() ?: emptyList()
+    fun list(id: String): List<TerminalSession> = entries[id]?.toList() ?: emptyList()
 
     /** Append [session] as the last tab for [id]. */
     @Synchronized
     fun add(id: String, session: TerminalSession) {
-        entries.getOrPut(id) { Entry() }.sessions.add(session)
+        entries.getOrPut(id) { ArrayList() }.add(session)
         holds[session] = SessionHolds.acquire(Reason.Terminal(id))
     }
 
-    /** Every live session, all installs, pending ones included. */
+    /** Every live session, all installs. */
     @Synchronized
-    fun all(): List<TerminalSession> = entries.values.flatMap { it.sessions } + pending.values
+    fun all(): List<TerminalSession> = entries.values.flatten()
 
-    /** [id]'s pending shell, if any. */
-    @Synchronized
-    fun pending(id: String): TerminalSession? = pending[id]
-
-    /** Park [session] as [id]'s pending shell (no hold). Kills a
-     *  previous pending shell rather than leaking it. */
-    @Synchronized
-    fun setPending(id: String, session: TerminalSession) {
-        val old = pending.put(id, session)
-        if (old != null && old !== session) old.kill()
-    }
-
-    /**
-     * First input reached [id]'s pending shell: append it as the last
-     * tab and take its hold. Returns it, or null when there was none.
-     */
-    @Synchronized
-    fun promote(id: String): TerminalSession? {
-        val session = pending.remove(id) ?: return null
-        add(id, session)
-        return session
-    }
-
-    /**
-     * The reverse of [promote]: [session], [id]'s only tab, is idle
-     * again (ShellIdle) — make it the pending shell and drop its hold.
-     * False (no change) when it isn't the only tab.
-     */
-    @Synchronized
-    fun demote(id: String, session: TerminalSession): Boolean {
-        val tabs = entries[id]?.sessions ?: return false
-        if (tabs.size != 1 || tabs[0] !== session) return false
-        remove(id, session)
-        setPending(id, session)
-        return true
-    }
-
-    /** Drop [id]'s pending shell and kill it. */
-    @Synchronized
-    fun killPending(id: String) {
-        pending.remove(id)?.kill()
-    }
-
-    /** Forget [session] if it is [id]'s pending shell (it exited). */
-    @Synchronized
-    fun clearPending(id: String, session: TerminalSession) {
-        if (pending[id] === session) pending.remove(id)
-    }
-
-    /** Pids of every live pending shell; 0 (not yet started) skipped. */
-    @Synchronized
-    fun pendingPids(): Set<Int> = pending.values.map { it.pid }.filter { it > 0 }.toSet()
-
-    /**
-     * Drop [session] from [id]'s list if present, keeping the selection
-     * pointing at the same session when possible and clamped in range
-     * otherwise (closing the selected tab lands on its next neighbor,
-     * or the previous one if it was last).
-     */
+    /** Drop [session] from [id]'s list if present. */
     @Synchronized
     fun remove(id: String, session: TerminalSession) {
-        val entry = entries[id] ?: return
-        val index = entry.sessions.indexOfFirst { it === session }
-        if (index < 0) return
-        entry.sessions.removeAt(index)
+        val sessions = entries[id] ?: return
+        if (!sessions.removeIf { it === session }) return
         holds.remove(session)?.release()
-        if (entry.sessions.isEmpty()) {
-            entries.remove(id)
-            return
-        }
-        if (index < entry.selected) entry.selected--
-        entry.selected = entry.selected.coerceIn(0, entry.sessions.size - 1)
+        if (sessions.isEmpty()) entries.remove(id)
     }
 
     /** Drop every session for [id], returning them (in tab order). */
     @Synchronized
     fun removeAll(id: String): List<TerminalSession> {
-        val sessions = entries.remove(id)?.sessions ?: return emptyList()
+        val sessions = entries.remove(id) ?: return emptyList()
         for (s in sessions) holds.remove(s)?.release()
         return sessions
     }
@@ -165,15 +88,6 @@ internal object TerminalSessions {
     var selfRemoving = false
 
     private const val HANGUP_GRACE_MS = 3000L
-
-    @Synchronized
-    fun selected(id: String): Int = entries[id]?.selected ?: 0
-
-    @Synchronized
-    fun setSelected(id: String, index: Int) {
-        val entry = entries[id] ?: return
-        entry.selected = index.coerceIn(0, entry.sessions.size - 1)
-    }
 }
 
 /**
@@ -200,7 +114,7 @@ private fun TerminalSession.hangUp() {
  * don't keep the destroyed pane (and its view tree) reachable until the
  * next reattach. The pty reader threads keep draining output into the
  * transcript regardless of client. If a shell exits while detached,
- * drop its registry entry (tab or pending slot) here — the pane's own
+ * drop its tab here — the pane's own
  * [TerminalPane.onSessionFinished] is gone.
  */
 internal class DetachedTerminalClient(private val id: String) : TerminalSessionClient {
@@ -208,7 +122,6 @@ internal class DetachedTerminalClient(private val id: String) : TerminalSessionC
     override fun onTitleChanged(changedSession: TerminalSession) {}
     override fun onSessionFinished(finishedSession: TerminalSession) {
         TerminalSessions.remove(id, finishedSession)
-        TerminalSessions.clearPending(id, finishedSession)
     }
     override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {}
     override fun onPasteTextFromClipboard(session: TerminalSession?) {}

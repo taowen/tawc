@@ -144,4 +144,6 @@ internal object ManjaroArm : Distro {
 
     override fun installBasePackages(method: InstallationMethod, rootfs: String, log: (String) -> Unit) =
         ArchPacmanCommon.installBasePackages(method, rootfs, basePackages, log)
+
+    override val upgradeCommand: String = ArchPacmanCommon.UPGRADE_COMMAND
 }

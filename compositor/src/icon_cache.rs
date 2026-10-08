@@ -14,7 +14,7 @@
 //! Symbolic icons (`<name>-symbolic.svg`) are a special case: they are
 //! a single near-black colour and would vanish on a dark background, and
 //! a cached PNG can't follow the app theme. They are rendered as a light
-//! glyph on a dark rounded tile, matching `ic_terminal_fallback`.
+//! glyph on a dark rounded tile, matching `ic_app_fallback`.
 //!
 //! The input is guest-controlled, so rendering is fenced: oversized
 //! sources are skipped, parse+render runs under `catch_unwind`, and a
@@ -38,13 +38,13 @@ const RENDER_PX: u32 = 192;
 /// stop being referenced and get pruned.
 const CACHE_FORMAT_VERSION: u32 = 1;
 
-/// Symbolic glyph size as a fraction of the tile, matching the margin
-/// `ic_terminal_fallback` draws its prompt at.
+/// Symbolic glyph size as a fraction of the tile, about the margin the
+/// fallback icons draw their glyphs at.
 const SYMBOLIC_GLYPH_SCALE: f32 = 0.6;
 
 /// Inset and corner radius of the symbolic backing tile, as fractions
-/// of [RENDER_PX]. Same proportions as `ic_terminal_fallback`'s rounded
-/// black square, so a themed symbolic icon and the fallback glyph read
+/// of [RENDER_PX]. Same proportions as `ic_app_fallback`'s rounded
+/// black square, so a themed symbolic icon and the fallback glyphs read
 /// as the same family.
 const SYMBOLIC_TILE_INSET: f32 = 1.0 / 24.0;
 const SYMBOLIC_TILE_RADIUS: f32 = 3.5 / 24.0;

@@ -27,7 +27,6 @@ object Settings {
     private const val KEY_XWAYLAND = "xwayland"
     private const val KEY_GTK3_BROKEN_MENUS_WORKAROUND = "gtk3_broken_menus_workaround"
     private const val KEY_OPEN_DISTRO = "open_distro"
-    private const val KEY_HOME_PANE = "home_pane"
     private const val KEY_REMOTE_RELAY = "remote_relay"
     private const val KEY_REMOTE_IDLE_CLOSE = "remote_idle_close"
     private const val KEY_REMOTE_MODE = "remote_mode"
@@ -60,7 +59,6 @@ object Settings {
         var xwayland: Boolean
         var gtk3BrokenMenusWorkaround: Boolean
         var openDistroId: String?
-        var homePane: HomePane
         var remoteRelay: String
         var remoteIdleClose: Boolean
         var remoteMode: String
@@ -113,12 +111,6 @@ object Settings {
             get() = prefs.getString(KEY_OPEN_DISTRO, null)
             set(value) {
                 prefs.edit { if (value == null) remove(KEY_OPEN_DISTRO) else putString(KEY_OPEN_DISTRO, value) }
-            }
-
-        override var homePane: HomePane
-            get() = HomePane.fromKey(prefs.getString(KEY_HOME_PANE, null))
-            set(value) {
-                prefs.edit { putString(KEY_HOME_PANE, value.key) }
             }
 
         override var remoteRelay: String
@@ -174,7 +166,6 @@ object Settings {
         @Volatile override var xwayland: Boolean = true
         @Volatile override var gtk3BrokenMenusWorkaround: Boolean = true
         @Volatile override var openDistroId: String? = null
-        @Volatile override var homePane: HomePane = HomePane.DEFAULT
         @Volatile override var remoteRelay: String = DEFAULT_REMOTE_RELAY
         @Volatile override var remoteIdleClose: Boolean = true
         @Volatile override var remoteMode: String = REMOTE_MODE_LOCAL
@@ -263,14 +254,6 @@ object Settings {
         get() = requireStore().openDistroId
         set(value) { requireStore().openDistroId = value }
 
-    /**
-     * Which pane a READY tawcroot distro opens on. One global value,
-     * written only by the home screen's FAB and ⋮ Apps/Terminal.
-     */
-    var homePane: HomePane
-        get() = requireStore().homePane
-        set(value) { requireStore().homePane = value }
-
     /** Remote access relay base URL (the start screen's field). */
     var remoteRelay: String
         get() = requireStore().remoteRelay
@@ -331,18 +314,6 @@ object Settings {
 
     private fun Float.toIntWithRound(): Int =
         kotlin.math.floor(this + 0.5f).toInt()
-}
-
-/** Home screen pane for a usable distro (notes/android.md "Home screen"). */
-enum class HomePane(val key: String) {
-    TERMINAL("terminal"),
-    APPS("apps");
-
-    companion object {
-        val DEFAULT = TERMINAL
-
-        fun fromKey(key: String?): HomePane = entries.firstOrNull { it.key == key } ?: DEFAULT
-    }
 }
 
 /**

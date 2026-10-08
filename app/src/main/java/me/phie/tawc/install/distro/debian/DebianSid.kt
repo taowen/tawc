@@ -96,6 +96,8 @@ internal sealed class DebianSid(
     final override fun installBasePackages(method: InstallationMethod, rootfs: String, log: (String) -> Unit) =
         AptCommon.installBasePackages(method, rootfs, basePackages, log)
 
+    final override val upgradeCommand: String = AptCommon.UPGRADE_COMMAND
+
     companion object {
         private const val SUITE = "sid"
         private const val REPO_URL = "http://deb.debian.org/debian"

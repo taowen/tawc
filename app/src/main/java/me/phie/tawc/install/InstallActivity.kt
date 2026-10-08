@@ -5,9 +5,7 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
-import me.phie.tawc.HomePane
 import me.phie.tawc.OpenDistro
-import me.phie.tawc.Settings
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -697,9 +695,8 @@ class InstallActivity : AppCompatActivity() {
                 selectedBootstrap,
             )
             // The new slot becomes the open distro so home shows its
-            // progress rather than the previous one, then its prompt.
+            // progress rather than the previous one, then its apps.
             OpenDistro.set(targetId)
-            Settings.homePane = HomePane.TERMINAL
             startActivity(LogScreenActivity.intentFor(this, "install:$targetId"))
             finish()
         }

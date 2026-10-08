@@ -112,6 +112,42 @@ fn test_hidden_entry_filtering() {
     );
 }
 
+/// Unhides a built-in on drop (hide state is durable).
+struct UnhideBuiltin(&'static str);
+
+impl Drop for UnhideBuiltin {
+    fn drop(&mut self) {
+        let _ = adb::set_entry_hidden(self.0, false);
+    }
+}
+
+/// The app's built-in entries (tawcroot install) are listed and flagged
+/// `builtin`, and hide like any `.desktop` entry.
+#[test]
+fn test_builtin_entries_listed_and_hideable() {
+    tawc_integration::helpers::test_init();
+    let _cleanup = UnhideBuiltin("tawc:term");
+    assert_broker_ok(
+        adb::set_entry_hidden("tawc:term", false).expect("set-entry-hidden"),
+        "set-entry-hidden reset",
+    );
+    let list = adb::launcher_list(false).expect("launcher-list");
+    for id in ["tawc:term", "tawc:update", "tawc:add-entry"] {
+        let obj = entry_object(&list, id).unwrap_or_else(|| panic!("{id} missing from launcher-list: {list}"));
+        assert!(obj.contains("\"builtin\":true"), "{id} not flagged builtin: {obj}");
+    }
+
+    assert_broker_ok(
+        adb::set_entry_hidden("tawc:term", true).expect("set-entry-hidden"),
+        "set-entry-hidden hide",
+    );
+    let list = adb::launcher_list(false).expect("launcher-list");
+    assert!(entry_object(&list, "tawc:term").is_none(), "hidden built-in still listed: {list}");
+    let list = adb::launcher_list(true).expect("launcher-list showHidden");
+    let obj = entry_object(&list, "tawc:term").unwrap_or_else(|| panic!("hidden built-in missing: {list}"));
+    assert!(obj.contains("\"hidden\":true"), "built-in not flagged hidden: {obj}");
+}
+
 // ---- scan directories + precedence ------------------------------------
 
 const USER_ID: &str = "tawc-scan-user";

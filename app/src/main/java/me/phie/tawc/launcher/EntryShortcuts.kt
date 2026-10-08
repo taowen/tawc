@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import androidx.core.content.ContextCompat
@@ -104,6 +105,13 @@ object EntryShortcuts {
     }
 
     private fun pinIcon(context: Context, entry: LauncherEntry): IconCompat {
+        entry.builtin?.let { builtin ->
+            // White on black, like a terminal entry's fallback, and
+            // about its glyph size: a bare glyph at full safe-zone size
+            // reads far heavier than other pins.
+            drawablePinBitmap(context, builtin.iconRes, 0xFF000000.toInt(), Color.WHITE, BUILTIN_GLYPH_SCALE)
+                ?.let { return IconCompat.createWithAdaptiveBitmap(it) }
+        }
         // No usable entry icon → same fallbacks as the launcher list:
         // ">_" badge for terminal entries, the neutral window glyph
         // otherwise. Not the TAWC app icon: a pinned icon-less app would
@@ -133,10 +141,20 @@ object EntryShortcuts {
     }
 
     /** A drawable resource rendered like a decoded entry icon: centered
-     *  in the adaptive-bitmap safe zone on [background]. */
-    private fun drawablePinBitmap(context: Context, resId: Int, background: Int): Bitmap? {
-        val d = ContextCompat.getDrawable(context, resId) ?: return null
+     *  in the adaptive-bitmap safe zone on [background], [tint]ed if set. */
+    private fun drawablePinBitmap(
+        context: Context,
+        resId: Int,
+        background: Int,
+        tint: Int? = null,
+        scale: Float = 1f,
+    ): Bitmap? {
+        val d = ContextCompat.getDrawable(context, resId)?.mutate() ?: return null
+        tint?.let { d.setTint(it) }
         return pinCanvas(background, d.intrinsicWidth, d.intrinsicHeight) { canvas, fit ->
+            val dx = (fit.width() * (1 - scale) / 2).toInt()
+            val dy = (fit.height() * (1 - scale) / 2).toInt()
+            fit.inset(dx, dy)
             d.bounds = fit
             d.draw(canvas)
         }
@@ -177,6 +195,9 @@ object EntryShortcuts {
         val t = (canvasPx - h) / 2
         return intArrayOf(l, t, l + w, t + h)
     }
+
+    /** Built-in glyphs' share of the safe-zone fit rect. */
+    private const val BUILTIN_GLYPH_SCALE = 0.55f
 
     /** Adaptive-bitmap edge: 108 dp at xxhdpi. */
     private const val PIN_BITMAP_PX = 324

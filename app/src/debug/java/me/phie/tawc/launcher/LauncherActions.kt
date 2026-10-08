@@ -21,8 +21,8 @@ import org.json.JSONObject
  *
  * `launcher-list` mirrors what [me.phie.tawc.launcher.AppsPane] renders: hidden
  * entries are filtered out unless `showHidden=true` (the UI's
- * "Show hidden" toggle). Each element is
- * `{id, name, exec, terminal, iconPath, path, hidden}` — `iconPath` is
+ * "Show hidden" toggle), and includes the built-ins. Each element is
+ * `{id, name, exec, terminal, iconPath, path, hidden, builtin}` — `iconPath` is
  * the resolved on-device PNG (empty when nothing resolved), which is
  * how icon-resolution tests see what `launcher.rs` picked.
  */
@@ -47,7 +47,7 @@ internal object LauncherActions {
             val rootfs = store.rootfsDir(id).absolutePath
             val hidden = inst.hiddenDesktopIds.toSet()
             val out = JSONArray()
-            for (e in LauncherEntry.scan(rootfs)) {
+            for (e in LauncherEntry.list(ctx.appContext, inst, rootfs)) {
                 val isHidden = e.id in hidden
                 if (isHidden && !showHidden) continue
                 out.put(JSONObject().apply {
@@ -58,6 +58,7 @@ internal object LauncherActions {
                     put("iconPath", e.iconPath)
                     put("path", e.path)
                     put("hidden", isHidden)
+                    put("builtin", e.builtin != null)
                 })
             }
             ctx.out(out.toString())

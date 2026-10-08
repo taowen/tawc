@@ -96,7 +96,6 @@ internal object DistroExporter {
         RemoteSession.stopFor(id)
         // Tabs close through their normal exit path once the shells die.
         Handler(Looper.getMainLooper()).post {
-            TerminalSessions.killPending(id)
             for (s in TerminalSessions.list(id)) s.kill()
         }
         val installDir = store.installationDir(id)

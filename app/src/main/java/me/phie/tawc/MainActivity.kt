@@ -6,9 +6,15 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.PixelFormat
+import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
+import android.util.TypedValue
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.KeyEvent
@@ -42,13 +48,13 @@ import me.phie.tawc.install.InstallationStore
 import me.phie.tawc.install.TawcrootMethod
 import me.phie.tawc.install.distro.DistroRegistry
 import me.phie.tawc.install.showRunCommandDialog
-import me.phie.tawc.launcher.AppsPane
 import me.phie.tawc.remote.RemoteAccessActivity
 import me.phie.tawc.session.SessionWake
 import me.phie.tawc.session.toggleKeepAwake
 import me.phie.tawc.tasks.TaskManagerActivity
 import me.phie.tawc.terminal.TerminalPane
 import me.phie.tawc.terminal.TerminalSessions
+import me.phie.tawc.terminal.TerminalTabBar
 import me.phie.tawc.ui.DrawerScreen
 import me.phie.tawc.ui.buildDrawerScreen
 import me.phie.tawc.ui.fabLp
@@ -64,12 +70,12 @@ import me.phie.tawc.ui.verticalLp
  *
  * - intro with nothing installed,
  * - distro info ([DistroInfoView]) while it isn't READY,
- * - the terminal ([TerminalPane]) or the app list ([AppsPane]) once it
- *   is, per [Settings.homePane], with a FAB toggling between them.
+ * - once it is, its [DistroHome]: a tab bar with the apps tab first,
+ *   then terminal tabs, and a FAB on the apps tab opening a new one.
  *
  * Each pane supplies its own top row (≡, title or tabs, ⋮);
  * the drawer switches the open distro and starts a new install. The ⋮
- * popup is assembled here from per-distro, pane and app items. The
+ * popup is assembled here from per-distro, tab and app items. The
  * compositor starts lazily when a user launches a rootfs command, so a
  * broken graphics backend doesn't keep the home screen from opening.
  * See notes/android.md "Home screen".
@@ -90,22 +96,18 @@ class MainActivity : AppCompatActivity() {
     /** Drawer item id → install id, rebuilt on every [refresh]. */
     private val drawerIds = mutableMapOf<Int, String>()
 
-    /** Request the IME for the next pane built (cold start, FAB, switch). */
-    private var keyboardOnShow = false
+    /** A terminal launch ([commandIntent]) waiting for its distro's home. */
+    private var queuedCommand: Pair<String, TerminalPane.CommandTab>? = null
 
-    /** Install whose terminal a command launch forced up, regardless
-     *  of [Settings.homePane]; cleared by any explicit pane choice. */
-    private var commandTerminalFor: String? = null
-
-    /** A `Terminal=true` launch waiting for its pane. */
-    private var pendingCommand: Pair<String, TerminalPane.CommandTab>? = null
+    /** Tab to reselect when the next home is built (recreation). */
+    private var restoreTab: Int? = null
 
     private var defaultLightBars = true
 
     private val editEntry = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == RESULT_OK) (pane as? Pane.Apps)?.apps?.rescan()
+        if (result.resultCode == RESULT_OK) (pane as? Pane.Home)?.home?.apps?.rescan()
     }
 
     private sealed interface Pane {
@@ -118,12 +120,9 @@ class MainActivity : AppCompatActivity() {
 
         class Info(override val installId: String, override val view: View, val info: DistroInfoView) : Pane
 
-        class Terminal(override val installId: String, val terminal: TerminalPane) : Pane {
-            override val view: View get() = terminal.view
-        }
-
-        class Apps(override val installId: String, val apps: AppsPane) : Pane {
-            override val view: View get() = apps.view
+        class Home(val home: DistroHome) : Pane {
+            override val installId: String get() = home.installId
+            override val view: View get() = home.view
         }
     }
 
@@ -139,10 +138,11 @@ class MainActivity : AppCompatActivity() {
         // (added later, so consulted first) still closes on Back.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if ((pane as? Pane.Apps)?.apps?.closeSearch() == true) {
+                val home = (pane as? Pane.Home)?.home
+                if (home != null && home.selectedIndex == TerminalTabBar.APPS && home.apps.clearSearch()) {
                     return
                 } else if (open != null) {
-                    // Shells and the app list stay as they are.
+                    // Shells and tabs stay as they are.
                     moveTaskToBack(true)
                 } else {
                     isEnabled = false
@@ -169,7 +169,10 @@ class MainActivity : AppCompatActivity() {
         })
         defaultLightBars = WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars
 
-        fab = tawcFab(R.drawable.ic_terminal, getString(R.string.action_terminal)) { onFabClicked() }
+        fab = tawcFab(R.drawable.ic_terminal, getString(R.string.action_new_terminal)) {
+            (pane as? Pane.Home)?.home?.openTerminal()
+        }
+        fab.visibility = View.GONE
         screen.body.addView(fab, fabLp())
 
         screen.nav.addHeaderView(buildDrawerHeader())
@@ -178,8 +181,6 @@ class MainActivity : AppCompatActivity() {
             if (id != null) {
                 if (id != open?.id) {
                     OpenDistro.set(id)
-                    commandTerminalFor = null
-                    keyboardOnShow = true
                     refresh()
                 }
             } else if (item.itemId == DRAWER_INSTALL) {
@@ -199,14 +200,21 @@ class MainActivity : AppCompatActivity() {
         // survives process death, so its presence means "restore, don't
         // re-run the command".
         if (savedInstanceState == null) {
-            keyboardOnShow = true
             consumeCommand(intent)
+        } else {
+            restoreTab = savedInstanceState.getInt(STATE_TAB, TerminalTabBar.APPS)
         }
     }
 
-    /** Typing with nothing focused opens the apps pane's search. */
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        (pane as? Pane.Home)?.let { outState.putInt(STATE_TAB, it.home.selectedIndex) }
+    }
+
+    /** Typing with nothing focused goes into the apps tab's search. */
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if ((pane as? Pane.Apps)?.apps?.onUnhandledKey(event) == true) return true
+        val home = (pane as? Pane.Home)?.home
+        if (home != null && home.selectedIndex == TerminalTabBar.APPS && home.apps.onUnhandledKey(event)) return true
         return super.onKeyDown(keyCode, event)
     }
 
@@ -228,11 +236,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Recreation reattaches the pending shell; any other destroy
-        // kills it. In-use shells outlive the activity: only a recents
-        // swipe (SessionService.onTaskRemoved) or the notification's
-        // Exit closes them.
-        tearDown(keepPending = isChangingConfigurations)
+        // Shells outlive the activity: only a recents swipe
+        // (SessionService.onTaskRemoved) or the notification's Exit
+        // closes them.
+        tearDown()
     }
 
     // On API 33+ foreground-service notifications (install progress, the
@@ -247,7 +254,7 @@ class MainActivity : AppCompatActivity() {
 
     // ---- panes -------------------------------------------------------------
 
-    private enum class Kind { INTRO, INFO, TERMINAL, APPS }
+    private enum class Kind { INTRO, INFO, HOME }
 
     /** Re-read installs and show the right pane; same pane → just resume it. */
     private fun refresh() {
@@ -255,97 +262,71 @@ class MainActivity : AppCompatActivity() {
         val inst = OpenDistro.resolve(installations)
         open = inst
 
-        val command = pendingCommand?.takeIf { (id, _) -> id == inst?.id && terminalMethod(inst) != null }
-        pendingCommand = null
-        if (command != null) commandTerminalFor = command.first
+        val command = queuedCommand?.takeIf { (id, _) -> id == inst?.id }
+        queuedCommand = null
 
         val kind = when {
             inst == null -> Kind.INTRO
             inst.state != Installation.State.READY -> Kind.INFO
-            terminalMethod(inst) != null &&
-                (Settings.homePane == HomePane.TERMINAL || commandTerminalFor == inst.id) -> Kind.TERMINAL
-            else -> Kind.APPS
+            else -> Kind.HOME
         }
         val current = pane
-        val same = current != null && current.installId == inst?.id && kindOf(current) == kind
-        if (same) {
+        if (current != null && current.installId == inst?.id && kindOf(current) == kind) {
             when (current) {
                 is Pane.Info -> current.info.render(inst!!)
-                is Pane.Apps -> current.apps.onResume()
-                is Pane.Terminal -> {
-                    current.terminal.onResume()
-                    command?.let { current.terminal.openCommandTab(it.second) }
-                }
+                is Pane.Home -> current.home.onResume()
                 is Pane.Intro -> Unit
             }
         } else {
-            tearDown(keepPending = false)
-            val next = buildPane(kind, inst, command?.second)
+            tearDown()
+            val next = buildPane(kind, inst)
             pane = next
             screen.body.addView(next.view, 0, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-            if (keyboardOnShow && next is Pane.Terminal) {
-                next.terminal.showSoftKeyboard()
-            } else {
-                // The removed pane's focused view doesn't take the IME with it.
-                getSystemService(InputMethodManager::class.java)
-                    ?.hideSoftInputFromWindow(screen.drawer.windowToken, 0)
-            }
+            // The removed pane's focused view doesn't take the IME with it.
+            getSystemService(InputMethodManager::class.java)
+                ?.hideSoftInputFromWindow(screen.drawer.windowToken, 0)
+            if (next is Pane.Home) restoreTab?.let { next.home.selectTerminal(it) }
         }
-        keyboardOnShow = false
-        styleForPane()
-        updateFab()
+        restoreTab = null
+        (pane as? Pane.Home)?.home?.let { home -> command?.let { home.openTerminal(it.second) } }
+        onSelectionChanged()
         rebuildDrawerMenu(installations, inst)
     }
 
     private fun kindOf(p: Pane): Kind = when (p) {
         is Pane.Intro -> Kind.INTRO
         is Pane.Info -> Kind.INFO
-        is Pane.Terminal -> Kind.TERMINAL
-        is Pane.Apps -> Kind.APPS
+        is Pane.Home -> Kind.HOME
     }
 
-    private fun buildPane(kind: Kind, inst: Installation?, command: TerminalPane.CommandTab?): Pane =
+    private fun buildPane(kind: Kind, inst: Installation?): Pane =
         when (kind) {
             Kind.INTRO -> Pane.Intro(buildIntro())
             Kind.INFO -> buildInfo(inst!!)
-            Kind.TERMINAL -> {
-                val terminal = TerminalPane(
-                    this, inst!!.id, DistroRegistry.displayLabel(inst), terminalMethod(inst)!!,
-                    object : TerminalPane.Host {
-                        override fun openDrawer() = screen.openDrawer()
-                        override fun showMenu(anchor: View) = showOverflowMenu(anchor)
-                        override fun onTerminalStateChanged() = updateFab()
-                        override fun onLastShellExited() {
-                            if (isFinishing) return
-                            TerminalSessions.selfRemoving = true
-                            finishAndRemoveTask()
-                        }
-                    },
-                )
-                terminal.attach(command)
-                Pane.Terminal(inst.id, terminal)
-            }
-            Kind.APPS -> Pane.Apps(
-                inst!!.id,
-                AppsPane(this, inst, object : AppsPane.Host {
+            Kind.HOME -> Pane.Home(
+                DistroHome(this, inst!!, terminalMethod(inst), object : DistroHome.Host {
                     override fun openDrawer() = screen.openDrawer()
                     override fun showMenu(anchor: View) = showOverflowMenu(anchor)
                     override fun openEditor(intent: Intent) = editEntry.launch(intent)
                     override fun onGridScrolled(down: Boolean) {
-                        // Same condition updateFab shows it under.
-                        if (terminalMethod(open) == null) return
+                        if (!fabWanted) return
                         if (down) fab.hide() else fab.show()
+                    }
+                    override fun onSelectionChanged() = this@MainActivity.onSelectionChanged()
+                    override fun onLastSelectedTerminalClosed() {
+                        if (isFinishing) return
+                        TerminalSessions.selfRemoving = true
+                        finishAndRemoveTask()
                     }
                 }),
             )
         }
 
-    private fun tearDown(keepPending: Boolean) {
+    private fun tearDown() {
         val current = pane ?: return
         pane = null
         when (current) {
-            is Pane.Terminal -> current.terminal.detach(keepPending)
-            is Pane.Apps -> current.apps.destroy()
+            is Pane.Home -> current.home.destroy()
             is Pane.Info -> current.info.stop()
             is Pane.Intro -> Unit
         }
@@ -359,74 +340,64 @@ class MainActivity : AppCompatActivity() {
         return InstallationMethod.forKey(this, inst.method) as? TawcrootMethod
     }
 
-    /** Explicit pane choice (FAB, ⋮ Apps/Terminal). */
-    private fun choosePane(choice: HomePane) {
-        Settings.homePane = choice
-        commandTerminalFor = null
-        keyboardOnShow = true
-        refresh()
+    private fun onSelectionChanged() {
+        styleBars()
+        updateFab()
     }
 
-    /** Terminal pane: black status/nav bands with light icons. */
-    private fun styleForPane() {
-        val dark = pane is Pane.Terminal
-        if (dark) screen.root.setBackgroundColor(Color.BLACK) else screen.root.background = null
+    /**
+     * The home's dark tab bar continues into the status band; the nav
+     * band is black under a terminal, else the window's own. Light bar
+     * icons on dark.
+     */
+    private fun styleBars() {
+        val home = (pane as? Pane.Home)?.home
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
-        WindowCompat.getInsetsController(window, window.decorView).apply {
-            isAppearanceLightStatusBars = !dark && defaultLightBars && !night
-            isAppearanceLightNavigationBars = !dark && defaultLightBars && !night
+        val terminal = home != null && home.selectedIndex != TerminalTabBar.APPS
+        screen.root.background = home?.let {
+            SystemBands(screen.root, TerminalTabBar.BAR_BG, if (terminal) Color.BLACK else windowBackground())
         }
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = home == null && defaultLightBars && !night
+            isAppearanceLightNavigationBars = !terminal && defaultLightBars && !night
+        }
+    }
+
+    private fun windowBackground(): Int {
+        val value = TypedValue()
+        theme.resolveAttribute(android.R.attr.colorBackground, value, true)
+        return value.data
     }
 
     // ---- FAB -----------------------------------------------------------------
 
-    private fun updateFab() {
-        val p = pane
-        when {
-            p is Pane.Apps && terminalMethod(open) != null -> {
-                fab.setImageResource(R.drawable.ic_terminal)
-                fab.contentDescription = getString(R.string.action_terminal)
-                fab.layoutParams = fabLp()
-                fab.visibility = View.VISIBLE
-            }
-            p is Pane.Terminal && p.terminal.isPending -> {
-                fab.setImageResource(R.drawable.ic_apps)
-                fab.contentDescription = getString(R.string.action_apps)
-                // Above the extra-keys row, not on it.
-                fab.layoutParams = fabLp().also { it.bottomMargin += p.terminal.extraKeysHeightPx }
-                fab.visibility = View.VISIBLE
-            }
-            else -> fab.visibility = View.GONE
-        }
-    }
+    /** On the apps tab of a home that can open terminals. */
+    private var fabWanted = false
 
-    private fun onFabClicked() {
-        when (pane) {
-            is Pane.Apps -> choosePane(HomePane.TERMINAL)
-            is Pane.Terminal -> choosePane(HomePane.APPS)
-            else -> Unit
-        }
+    private fun updateFab() {
+        val home = (pane as? Pane.Home)?.home
+        fabWanted = home != null && home.canOpenTerminal && home.selectedIndex == TerminalTabBar.APPS
+        if (fabWanted) fab.show() else fab.visibility = View.GONE
     }
 
     // ---- ⋮ menu --------------------------------------------------------------
 
-    /** The home ⋮: per-distro, pane, then app items. */
+    /** The home ⋮: tab, per-distro, then app items. */
     private fun showOverflowMenu(anchor: View) {
         val popup = PopupMenu(ContextThemeWrapper(this, R.style.ThemeOverlay_Tawc_Surfaces), anchor)
         val menu = popup.menu
-        when (val p = pane) {
-            is Pane.Apps -> p.apps.addMenuItems(menu, ORDER_PANE)
-            // No FAB on an in-use terminal, so the way back lives here.
-            is Pane.Terminal -> if (!p.terminal.isPending) {
-                menu.item(ORDER_PANE, R.string.action_close_all_terminals) { p.terminal.closeAll() }
-                menu.item(ORDER_PANE, R.string.action_apps) { choosePane(HomePane.APPS) }
+        val home = (pane as? Pane.Home)?.home
+        if (home != null) {
+            if (home.selectedIndex == TerminalTabBar.APPS) {
+                home.apps.addMenuItems(menu, ORDER_PANE)
+            } else {
+                menu.item(ORDER_PANE, R.string.action_close_all_terminals) { home.closeAll() }
                 if (SessionWake.available.value) {
                     menu.item(ORDER_PANE, R.string.action_keep_awake) { toggleKeepAwake() }
                         .setCheckable(true).isChecked = SessionWake.held.value
                 }
             }
-            else -> Unit
         }
         val inst = open
         if (inst != null) {
@@ -625,59 +596,78 @@ class MainActivity : AppCompatActivity() {
     // ---- intents ---------------------------------------------------------------
 
     /**
-     * Take a `Terminal=true` launch ([commandIntent]) off [intent]: open that distro and queue the command tab for the
-     * next [refresh]. The extras are removed so a retained intent can't
-     * respawn it. Returns whether there was one.
+     * Take a terminal launch ([commandIntent]) off [intent]: open that
+     * distro and queue the new tab for the next [refresh]. The extras
+     * are removed so a retained intent can't respawn it. Returns
+     * whether there was one.
      */
     private fun consumeCommand(intent: Intent?): Boolean {
-        val exec = intent?.getStringExtra(EXTRA_COMMAND) ?: return false
+        val id = intent?.getStringExtra(EXTRA_DISTRO) ?: return false
         // Other apps can start this exported activity; only the
         // non-exported alias may carry a command.
         if (intent.component?.className != COMMAND_ALIAS) return false
-        val id = intent.getStringExtra(EXTRA_DISTRO)
+        val exec = intent.getStringExtra(EXTRA_COMMAND)
         val label = intent.getStringExtra(EXTRA_LABEL)
         intent.removeExtra(EXTRA_COMMAND)
         intent.removeExtra(EXTRA_LABEL)
         intent.removeExtra(EXTRA_DISTRO)
-        if (id == null || !Installation.isValidId(id)) return false
+        if (!Installation.isValidId(id)) return false
         OpenDistro.set(id)
-        pendingCommand = id to TerminalPane.CommandTab(exec, label)
+        queuedCommand = id to TerminalPane.CommandTab(exec, label)
         return true
     }
 
     // ---- debug broker hooks ------------------------------------------------
 
-    /** Debug broker `home-pane`: show [choice] for [installId] (or the
-     *  open distro) without popping the keyboard. */
-    internal fun showPaneForDev(choice: HomePane, installId: String?) {
-        if (installId != null) OpenDistro.set(installId)
-        Settings.homePane = choice
-        commandTerminalFor = null
+    /**
+     * Debug broker `home-tab`: show [installId]'s (or the open
+     * distro's) home on [tab] — [TerminalTabBar.APPS], a terminal tab
+     * index, or [DEV_NEW_TAB]. False when that tab doesn't exist.
+     */
+    internal fun showTabForDev(tab: Int, installId: String?): Boolean {
+        if (installId != null && installId != open?.id) OpenDistro.set(installId)
         refresh()
+        val home = (pane as? Pane.Home)?.home ?: return tab == TerminalTabBar.APPS
+        return when (tab) {
+            TerminalTabBar.APPS -> { home.selectApps(); true }
+            DEV_NEW_TAB -> home.canOpenTerminal.also { if (it) home.openTerminal() }
+            else -> home.selectTerminal(tab)
+        }
     }
+
+    /** Debug broker `terminal-state`: selected tab of [installId]'s
+     *  home, null when it isn't showing. */
+    internal fun selectedTabForDev(installId: String): Int? =
+        (pane as? Pane.Home)?.home?.takeIf { it.installId == installId }?.selectedIndex
 
     companion object {
         /** Non-exported manifest alias command launches must target
          *  ([commandIntent]). */
         private const val COMMAND_ALIAS = "me.phie.tawc.CommandLaunch"
 
-        /** Open [installId]'s terminal with [exec] in a new tab named [label]. */
-        fun commandIntent(context: Context, installId: String, exec: String, label: String): Intent =
+        /** Open a new terminal tab for [installId] running [exec] (null:
+         *  a plain shell), named [label]. */
+        fun commandIntent(context: Context, installId: String, exec: String?, label: String?): Intent =
             Intent().setClassName(context, COMMAND_ALIAS)
                 .putExtra(EXTRA_DISTRO, installId)
                 .putExtra(EXTRA_COMMAND, exec)
                 .putExtra(EXTRA_LABEL, label)
 
-        /** Install id for [EXTRA_COMMAND]. */
+        /** Install id of a terminal launch. */
         const val EXTRA_DISTRO = "distro"
 
-        /** Shell fragment to run in a new terminal tab (a launcher
+        /** Shell fragment to run in the new terminal tab (a launcher
          *  entry's Exec line; same trust level as EntryLauncher's own
-         *  concatenation). */
+         *  concatenation); absent for a plain shell. */
         const val EXTRA_COMMAND = "command"
 
         /** Tab label for an [EXTRA_COMMAND] session (the entry name). */
         const val EXTRA_LABEL = "label"
+
+        /** [showTabForDev]: open a new terminal tab. */
+        internal const val DEV_NEW_TAB = -2
+
+        private const val STATE_TAB = "home_tab"
 
         private const val REQUEST_NOTIFICATIONS = 1
 
@@ -692,4 +682,29 @@ class MainActivity : AppCompatActivity() {
         private const val DRAWER_INSTALL = 1
         private const val DRAWER_FIRST_DISTRO = 100
     }
+}
+
+/**
+ * Background for the home root's system-bar padding: [top] (status
+ * band) over [bottom] (nav band, side bands, and anything the content
+ * leaves uncovered).
+ */
+private class SystemBands(private val root: View, private val top: Int, private val bottom: Int) : Drawable() {
+    private val paint = Paint()
+
+    override fun draw(canvas: Canvas) {
+        canvas.drawColor(bottom)
+        paint.color = top
+        canvas.drawRect(
+            bounds.left.toFloat(), bounds.top.toFloat(),
+            bounds.right.toFloat(), (bounds.top + root.paddingTop).toFloat(), paint,
+        )
+    }
+
+    override fun setAlpha(alpha: Int) {}
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {}
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.OPAQUE
 }

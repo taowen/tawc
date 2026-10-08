@@ -3,13 +3,12 @@ package me.phie.tawc.dev
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import me.phie.tawc.HomePane
 import me.phie.tawc.MainActivity
 import me.phie.tawc.OpenDistro
-import me.phie.tawc.Settings
 import me.phie.tawc.install.Installation
 import me.phie.tawc.install.InstallationStore
 import me.phie.tawc.terminal.TerminalSessions
+import me.phie.tawc.terminal.TerminalTabBar
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -19,46 +18,49 @@ import java.util.concurrent.TimeUnit
  *
  * | Action | Args | Effect |
  * |--------|------|--------|
- * | `home-pane` | `pane` ∈ get\|terminal\|apps, optional `installId` | set [Settings.homePane] (and the open distro) and re-render a live [MainActivity]; `get` prints the setting |
- * | `terminal-state` | optional `installId` (default: the open distro) | prints `pending`, `inUse:<n>` or `none` |
+ * | `home-tab` | `tab` ∈ apps\|new\|<n>, optional `installId` | show that install's (or the open distro's) home on the apps tab, a new terminal tab, or terminal tab n of a live [MainActivity] |
+ * | `terminal-state` | optional `installId` (default: the open distro) | prints `tabs:<n> selected:<apps\|i\|none>` |
  */
 internal object HomeActions {
     fun registerAll() {
-        ActionRegistry.register("home-pane", HomePaneAction)
+        ActionRegistry.register("home-tab", HomeTabAction)
         ActionRegistry.register("terminal-state", TerminalStateAction)
     }
 
-    /**
-     * Put the home screen on [pane] without the IME. Main thread.
-     * Without a live [MainActivity] only the setting changes; the next
-     * one to open reads it.
-     */
-    fun showPane(pane: HomePane, installId: String?) {
-        val main = DevActivityTracker.liveActivities()
+    private fun liveMain(): MainActivity? =
+        DevActivityTracker.liveActivities()
             .filterIsInstance<MainActivity>()
             .lastOrNull { !it.isFinishing && !it.isDestroyed }
-        if (main != null) {
-            main.showPaneForDev(pane, installId)
-        } else {
+
+    /**
+     * Put a live [MainActivity] on [tab] ([TerminalTabBar.APPS], an
+     * index or [MainActivity.DEV_NEW_TAB]). Main thread. Without one,
+     * only the open distro changes; returns whether the tab exists
+     * (the apps tab always does).
+     */
+    fun showTab(tab: Int, installId: String?): Boolean {
+        val main = liveMain()
+        if (main == null) {
             if (installId != null) OpenDistro.set(installId)
-            Settings.homePane = pane
+            return tab == TerminalTabBar.APPS
         }
+        return main.showTabForDev(tab, installId)
     }
 
-    private object HomePaneAction : BrokerAction {
+    private object HomeTabAction : BrokerAction {
         override fun run(args: Map<String, String>, ctx: ActionContext): Int {
-            val raw = args["pane"] ?: "get"
-            if (raw == "get") {
-                ctx.out(Settings.homePane.key)
-                return 0
-            }
-            val pane = HomePane.entries.firstOrNull { it.key == raw } ?: run {
-                ctx.err("home-pane: --arg pane=get|terminal|apps (got '$raw')")
-                return 2
+            val raw = args["tab"] ?: ""
+            val tab = when (raw) {
+                "apps" -> TerminalTabBar.APPS
+                "new" -> MainActivity.DEV_NEW_TAB
+                else -> raw.toIntOrNull()?.takeIf { it >= 0 } ?: run {
+                    ctx.err("home-tab: --arg tab=apps|new|<n> (got '$raw')")
+                    return 2
+                }
             }
             val installId = args["installId"]?.takeIf { it.isNotBlank() }
             if (installId != null && !Installation.isValidId(installId)) {
-                ctx.err("home-pane: invalid installId '$installId'")
+                ctx.err("home-tab: invalid installId '$installId'")
                 return 2
             }
             // `am start` returns before onCreate; give a just-started
@@ -70,11 +72,16 @@ internal object HomeActions {
                 Thread.sleep(50)
             }
             val latch = CountDownLatch(1)
+            var ok = false
             Handler(Looper.getMainLooper()).post {
-                try { showPane(pane, installId) } finally { latch.countDown() }
+                try { ok = showTab(tab, installId) } finally { latch.countDown() }
             }
             if (!latch.await(5, TimeUnit.SECONDS)) {
-                ctx.err("home-pane: main loop did not run within 5s")
+                ctx.err("home-tab: main loop did not run within 5s")
+                return 1
+            }
+            if (!ok) {
+                ctx.err("home-tab: no tab '$raw'")
                 return 1
             }
             return 0
@@ -86,17 +93,24 @@ internal object HomeActions {
             val id = args["installId"]?.takeIf { it.isNotBlank() }
                 ?: OpenDistro.resolve(InstallationStore(ctx.appContext))?.id
             if (id == null) {
-                ctx.out("none")
+                ctx.out("tabs:0 selected:none")
                 return 0
             }
-            val inUse = TerminalSessions.list(id).size
-            ctx.out(
-                when {
-                    inUse > 0 -> "inUse:$inUse"
-                    TerminalSessions.pending(id)?.let { it.isRunning && it.pid > 0 } == true -> "pending"
-                    else -> "none"
-                },
-            )
+            val latch = CountDownLatch(1)
+            var selected: Int? = null
+            Handler(Looper.getMainLooper()).post {
+                try { selected = liveMain()?.selectedTabForDev(id) } finally { latch.countDown() }
+            }
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                ctx.err("terminal-state: main loop did not run within 5s")
+                return 1
+            }
+            val sel = when (val s = selected) {
+                null -> "none"
+                TerminalTabBar.APPS -> "apps"
+                else -> s.toString()
+            }
+            ctx.out("tabs:${TerminalSessions.list(id).size} selected:$sel")
             return 0
         }
     }

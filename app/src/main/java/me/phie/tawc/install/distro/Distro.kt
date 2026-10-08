@@ -188,6 +188,10 @@ interface Distro {
      * [method].runInside.
      */
     fun installBasePackages(method: InstallationMethod, rootfs: String, log: (String) -> Unit)
+
+    /** Interactive full upgrade for the launcher's Update packages
+     *  entry; prompts are answered in its terminal tab. */
+    val upgradeCommand: String
 }
 
 /**

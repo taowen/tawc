@@ -8,8 +8,8 @@
 use std::time::{Duration, Instant};
 
 use tawc_integration::helpers::{
-    close_home_terminal, show_home_terminal, start_wayland_debug_clipboard_copy, terminal_run,
-    wait_for_rootfs_file, wait_terminal_state, TIMEOUT,
+    close_home_terminal, show_home_tab, show_home_terminal, start_wayland_debug_clipboard_copy,
+    terminal_run, wait_for_rootfs_file, TIMEOUT,
 };
 use tawc_integration::{adb, compositor, GraphicsBackend};
 
@@ -72,9 +72,6 @@ fn test_wl_paste_only_from_focused_terminal() {
     assert_eq!(adb::clipboard_android_fetches_total().expect("clipboard state"), fetches_before);
 
     show_home_terminal();
-    wait_terminal_state("pending");
-    // Let the shell print its first prompt before typing.
-    std::thread::sleep(Duration::from_secs(1));
     terminal_run(
         "wl-paste%s-n>/tmp/tawc-wlp-a;setsid%s-w%swl-paste%s-n>/tmp/tawc-wlp-b;touch%s/tmp/tawc-wlp-1",
     );
@@ -98,7 +95,7 @@ fn test_wl_paste_only_from_focused_terminal() {
     assert_eq!(rootfs("cat /tmp/tawc-wlp-c"), "", "unfocused terminal read the clipboard");
 
     // Focused again: the client-owned selection is readable.
-    show_home_terminal();
+    show_home_tab("0");
     terminal_run("wl-paste%s-n>/tmp/tawc-wlp-d;touch%s/tmp/tawc-wlp-3");
     wait_for_file("/tmp/tawc-wlp-3");
     assert_eq!(rootfs("cat /tmp/tawc-wlp-d"), client_text, "focused terminal was denied");

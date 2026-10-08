@@ -22,6 +22,8 @@ import java.io.IOException
  * so the policy lives here.
  */
 internal object ArchPacmanCommon {
+    /** [me.phie.tawc.install.distro.Distro.upgradeCommand]. */
+    const val UPGRADE_COMMAND = "pacman -Syu"
 
     /**
      * Pacman `Server = <url>` mirrorlist line. Whitespace tolerated

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Launcher-row fallback icon for entries with no usable icon: the same
-     rounded black tile as ic_terminal_fallback, around a generic
+<!-- Launcher-row fallback icon for entries with no usable icon: a
+     rounded black tile (black like ic_terminal_fallback), around a generic
      "window" glyph (title bar + empty body). Fixed colors on purpose —
      it stands in for an app icon, not a themed control. Used instead of
      the TAWC logo so an icon-less app doesn't look like TAWC itself. -->

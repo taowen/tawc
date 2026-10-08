@@ -36,6 +36,8 @@ import java.io.IOException
  * so no external keyring fetch is needed; `-y` auto-accepts.
  */
 internal object VoidCommon {
+    /** [me.phie.tawc.install.distro.Distro.upgradeCommand]. */
+    const val UPGRADE_COMMAND = "xbps-install -Su"
 
     /**
      * `noextract=<glob>` directives appended to

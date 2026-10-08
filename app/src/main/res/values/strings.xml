@@ -21,11 +21,10 @@
     <string name="action_install">Install</string>
     <string name="action_install_new_distro">Install new distro</string>
     <string name="action_manage">Manage</string>
-    <string name="action_terminal">Terminal</string>
+    <string name="action_new_terminal">New terminal</string>
     <string name="action_apps">Apps</string>
     <string name="action_close_all_terminals">Close all</string>
-    <string name="action_search">Search</string>
-    <string name="action_close_search">Close search</string>
+    <string name="action_clear_search">Clear search</string>
     <string name="action_run">Run</string>
     <string name="action_run_command">Run&#8230;</string>
     <string name="action_open_drawer">Open distro list</string>
@@ -35,7 +34,7 @@
     <string name="action_collapse">Collapse</string>
     <string name="action_expand">Expand</string>
 
-    <string name="hint_search_apps">Search apps</string>
+    <string name="hint_search_distro">Search %1$s</string>
     <string name="hint_run_command">e.g. firefox</string>
 
     <string name="home_drawer_item_state">%1$s · %2$s</string>
@@ -159,8 +158,12 @@
     <string name="shortcut_install_not_ready">Installation is %1$s.</string>
     <string name="shortcut_entry_gone">This app is no longer installed in the distro.</string>
     <string name="shortcut_distro_uninstalled">The distro was uninstalled.</string>
+    <string name="launcher_builtin_unavailable">Not available for this install.</string>
     <string name="launcher_method_unavailable">Install method \'%1$s\' is not included in this build.</string>
     <string name="launcher_menu_add_entry">Add entry&#8230;</string>
+    <string name="builtin_term">TAWC Term</string>
+    <string name="builtin_update">Update packages</string>
+    <string name="builtin_add_entry">Add entry</string>
     <string name="editor_title_new">Add entry</string>
     <string name="editor_title_edit">Edit program</string>
     <string name="editor_field_name">Name</string>

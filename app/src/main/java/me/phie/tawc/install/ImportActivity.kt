@@ -22,10 +22,8 @@ import com.google.android.material.color.MaterialColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import me.phie.tawc.HomePane
 import me.phie.tawc.OpenDistro
 import me.phie.tawc.R
-import me.phie.tawc.Settings
 import me.phie.tawc.install.distro.DistroRegistry
 import me.phie.tawc.ops.LogScreenActivity
 import me.phie.tawc.ui.Scaffold
@@ -203,7 +201,6 @@ class ImportActivity : AppCompatActivity() {
             }
             InstallationService.startImport(this, id, labelField.text.toString().trim(), u, null)
             OpenDistro.set(id)
-            Settings.homePane = HomePane.TERMINAL
             startActivity(LogScreenActivity.intentFor(this, "import:$id"))
             // Tells the install form (our caller) to close too.
             setResult(RESULT_OK)
