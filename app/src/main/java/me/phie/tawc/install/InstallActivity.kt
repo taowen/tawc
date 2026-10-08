@@ -104,9 +104,9 @@ class InstallActivity : AppCompatActivity() {
     private var useCacheProxy: Boolean? = null
     private lateinit var cacheProxyCheckbox: CheckBox
 
-    /** ando (notes/ando.md) toggle. Off by default, shown for all
+    /** ando (notes/ando.md) toggle. On by default, shown for all
      *  methods; persisted across rotations. */
-    private var andoEnabled: Boolean = false
+    private var andoEnabled: Boolean = true
 
     private lateinit var formScroll: ScrollView
     private lateinit var formSection: LinearLayout
@@ -144,7 +144,7 @@ class InstallActivity : AppCompatActivity() {
             me.phie.tawc.BuildConfig.DEBUG -> true
             else -> false
         }
-        andoEnabled = savedInstanceState?.getBoolean(KEY_ANDO) == true
+        andoEnabled = savedInstanceState?.getBoolean(KEY_ANDO) ?: true
         pendingBinds.clear()
         savedInstanceState?.getString(KEY_BINDS)?.let { savedBinds ->
             pendingBinds.addAll(
@@ -575,7 +575,7 @@ class InstallActivity : AppCompatActivity() {
     }
 
     /**
-     * ando toggle ([buildAndoToggleRow], notes/ando.md). Off by
+     * ando toggle ([buildAndoToggleRow], notes/ando.md). On by
      * default; drives [andoEnabled], passed to the service by
      * [beginInstall]. Shown for every method and build type — unlike
      * binds, ando applies to all install methods.

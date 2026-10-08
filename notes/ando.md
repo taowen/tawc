@@ -15,10 +15,11 @@ name, install path (`/usr/local/bin/ando`), and flag surface are a
 public CLI contract users script against — treat as frozen post-release
 (see *Frozen identifiers* in notes/installation.md).
 
-**Per-distro, default off.** ando is a per-install setting
-([Installation.andoEnabled], default `false`; absent in legacy metadata
-→ `false`, so upgrades lose ando until re-enabled — opt-in, fail-closed).
-Configurable at install time (the install form checkbox / the
+**Per-distro, on for new installs.** ando is a per-install setting
+([Installation.andoEnabled], field default `false`; absent in legacy
+metadata → `false`, so upgrades lose ando until re-enabled — fail-closed).
+The install form checkbox defaults on. Configurable at install time (the
+install form checkbox / the
 `--arg ando=true` exec-broker install action) and toggled later in the
 open-distro card at the top of Settings. See "The setting" below. When disabled, a guest
 cannot reach ando through *any* path — the CLI stays installed but
@@ -186,7 +187,7 @@ made a chroot `mkdir` of the mount point pollute the shared dir.)
 ### Configuring it
 
 - **Install time:** the install form checkbox ("Allow running Android
-  commands (ando)", default off, all methods) → intent extra →
+  commands (ando)", default on, all methods) → intent extra →
   `InstallationService.startInstall` → `Installer` → initial metadata.
   Exec-broker install action: `--arg ando=true|false` (default false).
 - **Post-install:** a READY/FAILED-gated toggle in `SettingsActivity`'s
