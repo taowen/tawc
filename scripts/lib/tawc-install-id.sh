@@ -2,7 +2,7 @@
 # Resolve the in-app install id. Sets TAWC_INSTALL_ID.
 #
 # Uses the caller's TAWC_INSTALL_ID, or auto-selects when exactly one
-# /data/data/me.phie.tawc/distros/<id>/metadata.json exists.
+# /data/data/$TAWC_PACKAGE/distros/<id>/metadata.json exists.
 
 set -euo pipefail
 
@@ -11,10 +11,12 @@ if [ -n "${TAWC_INSTALL_ID:-}" ]; then
     return 0 2>/dev/null || exit 0
 fi
 
-_pkg=${TAWC_PACKAGE:-me.phie.tawc}
-_distros=/data/data/$_pkg/distros
-
 _lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+# shellcheck source=tawc-package.sh
+source "$_lib_dir/tawc-package.sh"
+_pkg=$TAWC_PACKAGE
+_distros=/data/data/$_pkg/distros
 
 if [ -z "${ANDROID_SERIAL:-}" ]; then
     # shellcheck source=select-device.sh

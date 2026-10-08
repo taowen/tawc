@@ -28,7 +28,9 @@ import kotlin.concurrent.thread
  */
 object ExecBroker {
     const val TAG = "tawc-exec"
-    const val SOCKET_NAME = "me.phie.tawc.exec"
+
+    /** `<applicationId>.exec`, so a dev build and a plain-ID debug build don't collide. */
+    val SOCKET_NAME: String get() = "${appContext.packageName}.exec"
 
     // shell (2000) covers `adb shell` and adbd-forwarded connections;
     // root (0) covers `su -c` and userdebug adbd. Other apps run as

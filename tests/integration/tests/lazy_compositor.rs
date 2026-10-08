@@ -265,7 +265,7 @@ fn test_session_holds_follow_commands_and_exit_kills_everything() {
 fn test_session_holds_ignore_pending_terminal() {
     let _unpinned = Unpinned::new();
     // Visible, so the terminal view lays out and starts the shell.
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::shell(&format!("am start -n {}", tawc_integration::main_activity())).expect("start MainActivity");
     adb::home_pane("terminal").expect("home-pane terminal");
     let wait_state = |want: &str| {
         let deadline = Instant::now() + TIMEOUT;
@@ -310,7 +310,7 @@ fn remove_main_task() {
     for line in list.lines() {
         if let Some(rest) = line.trim().strip_prefix("RootTask id=") {
             root = rest.split_whitespace().next().map(str::to_string);
-        } else if line.contains("me.phie.tawc/me.phie.tawc.MainActivity") {
+        } else if line.contains(&tawc_integration::main_activity()) {
             found = root.clone();
         }
     }
@@ -324,7 +324,7 @@ fn remove_main_task() {
 #[test]
 fn test_swipe_hangs_up_terminals() {
     let _unpinned = Unpinned::new();
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::shell(&format!("am start -n {}", tawc_integration::main_activity())).expect("start MainActivity");
     adb::home_pane("terminal").expect("home-pane terminal");
     let wait_until = |what: &str, f: &mut dyn FnMut() -> bool| {
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -365,7 +365,7 @@ fn test_swipe_hangs_up_terminals() {
 
     // Later tests expect a TAWC activity in front: compositor windows
     // can't launch from the background.
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::shell(&format!("am start -n {}", tawc_integration::main_activity())).expect("start MainActivity");
     adb::home_pane("apps").expect("home-pane apps");
 }
 

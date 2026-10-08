@@ -341,10 +341,15 @@ cmd_start() {
     # TAWC-app-specific runtime setup (no-op if APK isn't installed yet).
     # Grants reset on emulator wipe; setenforce 0 (rooted) resets every boot
     # — re-run `start` after `adb install` to refresh them all.
-    local pkg=me.phie.tawc
-    local uid
-    uid=$("$ADB" -s "$serial" shell "pm list packages -U $pkg" 2>/dev/null | awk -F: '/uid:/ {print $3}' | tr -d '\r')
-    if [ -n "$uid" ]; then
+    # Covers both the dev (debug) and plain app IDs; see notes/building.md.
+    local pkg uid
+    for pkg in me.phie.tawc.dev me.phie.tawc; do
+        uid=$("$ADB" -s "$serial" shell "pm list packages -U $pkg" 2>/dev/null \
+            | tr -d '\r' | awk -v p="package:$pkg" '$1 == p { sub(/^uid:/, "", $2); print $2 }')
+        if [ -z "$uid" ]; then
+            echo "==> $pkg not installed; skipping its grants"
+            continue
+        fi
         if [ "$ROOTED" = "1" ]; then
             echo "==> granting Magisk su + POST_NOTIFICATIONS to $pkg (uid=$uid)"
             "$ADB" -s "$serial" shell "su -c 'magisk --sqlite \"INSERT OR REPLACE INTO policies (uid,policy,until,logging,notification) VALUES($uid,2,0,1,0);\"'" >/dev/null 2>&1 || \
@@ -354,10 +359,7 @@ cmd_start() {
         fi
         "$ADB" -s "$serial" shell "pm grant $pkg android.permission.POST_NOTIFICATIONS" >/dev/null 2>&1 || \
             echo "WARNING: failed to grant POST_NOTIFICATIONS to $pkg" >&2
-    else
-        echo "==> $pkg not installed yet; skipping app-specific grants"
-        echo "    (install the APK then re-run \`start\` to set them up)"
-    fi
+    done
 }
 
 stop_one() {

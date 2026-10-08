@@ -642,7 +642,7 @@ pub fn wait_terminal_state(want: &str) {
 /// Bring the home terminal to the front and wait until MainActivity has
 /// window focus (typed text goes to the focused window).
 pub fn show_home_terminal() {
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::shell(&format!("am start -n {}", crate::main_activity())).expect("start MainActivity");
     adb::home_pane("terminal").expect("home-pane terminal");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -668,7 +668,7 @@ pub fn terminal_run(line: &str) {
 pub fn close_home_terminal() {
     terminal_run("exit");
     wait_terminal_state("none");
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::shell(&format!("am start -n {}", crate::main_activity())).expect("start MainActivity");
     adb::home_pane("apps").expect("home-pane apps");
 }
 

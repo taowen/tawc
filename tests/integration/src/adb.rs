@@ -828,7 +828,10 @@ pub fn json_str(json: &str, key: &str) -> Option<String> {
 
 /// Whether the session foreground service is up.
 pub fn session_service_running() -> io::Result<bool> {
-    let output = shell("dumpsys activity services me.phie.tawc/.session.SessionService")?;
+    let output = shell(&format!(
+        "dumpsys activity services {}/me.phie.tawc.session.SessionService",
+        crate::app_package()
+    ))?;
     Ok(String::from_utf8_lossy(&output.stdout).contains("ServiceRecord"))
 }
 

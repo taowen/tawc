@@ -36,9 +36,9 @@ if [ "$DO_BUILD" -eq 1 ]; then
 fi
 
 APK="$ROOT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-# TAWC_PACKAGE=me.phie.tawc.<x> builds/installs beside the release app
-# (debug applicationIdSuffix; see notes/building.md).
-PKG="${TAWC_PACKAGE:-me.phie.tawc}"
+# shellcheck source=lib/tawc-package.sh
+source "$ROOT_DIR/scripts/lib/tawc-package.sh"
+PKG="$TAWC_PACKAGE"
 [ -f "$APK" ] || { echo "ERROR: missing $APK (drop --no-build?)" >&2; exit 1; }
 
 apk_sha() {

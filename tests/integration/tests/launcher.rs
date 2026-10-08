@@ -12,7 +12,8 @@ const ENTRY_ID: &str = "tawc-hide-test";
 
 fn rootfs() -> String {
     format!(
-        "/data/data/me.phie.tawc/distros/{}/rootfs",
+        "{}/distros/{}/rootfs",
+        tawc_integration::app_data_dir(),
         tawc_integration::install_id()
     )
 }
@@ -239,7 +240,8 @@ fn test_scan_dirs_precedence_and_terminal() {
 /// rootfs, so it belongs to the install and goes away with it.
 fn icon_cache_dir() -> String {
     format!(
-        "/data/data/me.phie.tawc/distros/{}/icon-cache",
+        "{}/distros/{}/icon-cache",
+        tawc_integration::app_data_dir(),
         tawc_integration::install_id()
     )
 }

@@ -73,15 +73,13 @@ GRADLE_ARGS=("-PtawcAbis=$TAWC_ABIS" "-PtawcXwayland=$XWAYLAND")
 if [ -n "$GRAPHICS" ]; then
     GRADLE_ARGS+=("-PtawcGraphics=$GRAPHICS")
 fi
-case "${TAWC_PACKAGE:-me.phie.tawc}" in
-    me.phie.tawc) ;;
-    me.phie.tawc.*) GRADLE_ARGS+=("-PtawcAppIdSuffix=${TAWC_PACKAGE#me.phie.tawc}") ;;
-    *) echo "ERROR: TAWC_PACKAGE must be me.phie.tawc[.<suffix>]" >&2; exit 2 ;;
-esac
+# shellcheck source=lib/tawc-package.sh
+source "$ROOT_DIR/scripts/lib/tawc-package.sh"
+GRADLE_ARGS+=("-PtawcAppIdSuffix=${TAWC_PACKAGE#me.phie.tawc}")
 GRADLE_ARGS+=(assembleDebug)
 if [ "$QUIET" -eq 1 ]; then
     GRADLE_ARGS+=(--quiet)
 fi
 
-echo "=== Building APK ($TAWC_ABIS, xwayland=$XWAYLAND, graphics=${GRAPHICS:-default}) ==="
+echo "=== Building APK ($TAWC_PACKAGE, $TAWC_ABIS, xwayland=$XWAYLAND, graphics=${GRAPHICS:-default}) ==="
 ( cd "$ROOT_DIR" && ./gradlew "${GRADLE_ARGS[@]}" )

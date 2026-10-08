@@ -480,7 +480,7 @@ flicker the screen open hundreds of times per run).
 It:
 
 1. Picks a free TCP port.
-2. Runs `adb forward tcp:<port> localabstract:me.phie.tawc.exec`.
+2. Runs `adb forward tcp:<port> localabstract:<package>.exec` (`me.phie.tawc.dev.exec` by default; see `TAWC_PACKAGE` in [building.md](building.md)).
 3. Connects to `127.0.0.1:<port>`.
 4. Sends the header.
 5. Multiplexes local stdin (frame 0) ↔ socket; demultiplexes socket

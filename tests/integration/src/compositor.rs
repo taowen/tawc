@@ -363,10 +363,8 @@ pub fn is_running() -> io::Result<bool> {
     }
     // The socket file lives in app data, so probe it through the
     // broker (runs as app uid).
-    let exists = adb::rootfs_host_exec(&[
-        "/system/bin/sh", "-c",
-        "test -e /data/data/me.phie.tawc/share/wayland-0",
-    ])?;
+    let probe = format!("test -e {}/share/wayland-0", crate::app_data_dir());
+    let exists = adb::rootfs_host_exec(&["/system/bin/sh", "-c", &probe])?;
     if exists.status.success() {
         let _ = SOCKET_SEEN.set(());
     }

@@ -49,7 +49,7 @@ fn run(line: &str) {
 #[test]
 fn test_terminal_returns_to_pending_when_idle() {
     tawc_integration::helpers::test_init();
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::shell(&format!("am start -n {}", tawc_integration::main_activity())).expect("start MainActivity");
     adb::home_pane("terminal").expect("home-pane terminal");
     wait_state("pending");
     // Let bash print its first prompt before typing.
@@ -81,6 +81,6 @@ fn test_terminal_returns_to_pending_when_idle() {
     wait_state("none");
 
     // Later tests expect a TAWC activity in front.
-    adb::shell("am start -n me.phie.tawc/.MainActivity").expect("start MainActivity");
+    adb::shell(&format!("am start -n {}", tawc_integration::main_activity())).expect("start MainActivity");
     adb::home_pane("apps").expect("home-pane apps");
 }

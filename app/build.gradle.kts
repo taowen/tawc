@@ -98,10 +98,10 @@ val xwaylandPackageAbis: List<String> =
     if (xwaylandRequested) tawcAbis.filter { it in xwaylandScriptAbiFor } else emptyList()
 val xwaylandPackaged: Boolean = xwaylandPackageAbis.isNotEmpty()
 
-// Debug-only applicationId suffix (e.g. `.dev`) so a dev build installs
-// beside a release-signed me.phie.tawc. Host tools follow via
-// TAWC_PACKAGE; see notes/building.md.
-val tawcAppIdSuffix: String = (project.findProperty("tawcAppIdSuffix") as String?) ?: ""
+// Debug builds are me.phie.tawc.dev so they install beside a
+// release-signed me.phie.tawc; `-PtawcAppIdSuffix=` (empty) restores the
+// plain ID. Host tools follow via TAWC_PACKAGE; see notes/building.md.
+val tawcAppIdSuffix: String = (project.findProperty("tawcAppIdSuffix") as String?) ?: ".dev"
 
 android {
     namespace = "me.phie.tawc"

@@ -3,6 +3,7 @@ Tess's Android Wayland Compositor (TAWC) is an Android app plus rootfs/build scr
 ## Quick Reference
 - Build APK: `scripts/build-app.sh`
 - Build/install/launch: `scripts/app-build-install.sh` (`--no-build`, `--no-launch` supported)
+- App IDs: debug/dev iteration uses `me.phie.tawc.dev` ("TAWC (dev)", purple icon), the default for every build/test script; release builds the user signs are `me.phie.tawc`. Don't override with `TAWC_PACKAGE=me.phie.tawc` unless asked. See [notes/building.md](notes/building.md) ("App IDs").
 - Compositor Rust check: use the Android build path (`scripts/build-app.sh` or Gradle app tasks). Do **not** run host `cargo check --manifest-path compositor/Cargo.toml`; `ndk-sys` only compiles for Android.
 - Run in rootfs: `scripts/rootfs-run.sh '<command>'` or interactive with no command
 - Run Firefox: `scripts/rootfs-run.sh 'firefox --no-remote'`
@@ -56,9 +57,9 @@ Tess's Android Wayland Compositor (TAWC) is an Android app plus rootfs/build scr
 - If `su` is available on a phone, prefer it over `adb root`.
 
 ## On-Device Files
-- Rootfs installs live under `/data/data/me.phie.tawc/distros/<id>/rootfs/`.
+- Rootfs installs live under `/data/data/<app-id>/distros/<id>/rootfs/` (`me.phie.tawc.dev` for dev builds).
 - Test/debug scratch outside app-private data may only use `/data/local/tmp/tawc-dev/`, exposed by `scripts/lib/tawc-scratch.sh` and the Rust integration crate. Delete screenshots/debug artifacts when done.
-- Production code must not write `/data/local/...` or `/sdcard/...`; app-owned runtime state should live under `/data/data/me.phie.tawc/` so uninstall removes it.
+- Production code must not write `/data/local/...` or `/sdcard/...`; app-owned runtime state should live under the app data dir (`/data/data/<app-id>/`) so uninstall removes it.
 - Do not clone external repos into `$HOME`. Use `deps/` for vendored/tooling checkouts, and delete temporary checkouts before finishing.
 
 ## Vendored Deps

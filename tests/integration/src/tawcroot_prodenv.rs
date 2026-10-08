@@ -11,7 +11,7 @@
 //! are pure data that tawcroot's manual ELF loader mmaps.
 //!
 //! The fake rootfs is staged into app-private cache
-//! (`/data/data/me.phie.tawc/cache/tawcroot-prodtest/`) through the
+//! (`/data/data/<package>/cache/tawcroot-prodtest/`) through the
 //! broker (`sh -c 'cat > …'` per file, app-owned), so uninstall — or
 //! Android clearing the cache — removes it. Staging re-runs from
 //! scratch once per test-binary invocation.
@@ -29,7 +29,9 @@ use std::sync::OnceLock;
 use crate::exec_broker::{self, Invocation, Request};
 
 /// Device-side staging root. App cache: app-owned, uninstall-cleaned.
-const STAGE_DIR: &str = "/data/data/me.phie.tawc/cache/tawcroot-prodtest";
+fn stage_dir() -> String {
+    format!("{}/cache/tawcroot-prodtest", crate::app_data_dir())
+}
 
 /// Guest programs staged into the fake rootfs at `/bin/<name>`.
 /// All are freestanding static fixtures except `dynamic_exit42`,
@@ -214,9 +216,10 @@ fn stage_rootfs() -> io::Result<String> {
         )));
     }
 
-    let rootfs = format!("{STAGE_DIR}/rootfs");
+    let stage_dir = stage_dir();
+    let rootfs = format!("{stage_dir}/rootfs");
     let output = app_sh_raw(&format!(
-        "rm -rf '{STAGE_DIR}' && mkdir -p '{rootfs}/bin' '{rootfs}/etc' '{rootfs}/run'"
+        "rm -rf '{stage_dir}' && mkdir -p '{rootfs}/bin' '{rootfs}/etc' '{rootfs}/run'"
     ))?;
     if !output.status.success() {
         return Err(io::Error::other(format!(

@@ -59,14 +59,23 @@ impl GraphicsBackend {
     }
 }
 
-/// App package under test: `TAWC_PACKAGE`, else `me.phie.tawc`. A
-/// `-PtawcAppIdSuffix` debug build (e.g. `me.phie.tawc.dev`) installs
-/// beside a release-signed app; see notes/building.md.
+/// App package under test: `TAWC_PACKAGE`, else `me.phie.tawc.dev` (the
+/// default debug applicationId; see notes/building.md).
 pub fn app_package() -> String {
     std::env::var("TAWC_PACKAGE")
         .ok()
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "me.phie.tawc".to_string())
+        .unwrap_or_else(|| "me.phie.tawc.dev".to_string())
+}
+
+/// `am start -n` component for the app's MainActivity.
+pub fn main_activity() -> String {
+    format!("{}/me.phie.tawc.MainActivity", app_package())
+}
+
+/// The app's private data dir, `/data/data/<package>`.
+pub fn app_data_dir() -> String {
+    format!("/data/data/{}", app_package())
 }
 
 fn resolve_install_id() -> String {

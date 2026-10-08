@@ -19,7 +19,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-const SOCKET_NAME: &str = "me.phie.tawc.exec";
+/// Broker socket: `<app package>.exec`, matching the app's ExecBroker.
+fn socket_name() -> String {
+    format!("{}.exec", crate::app_package())
+}
 
 const STREAM_STDIN: u8 = 0;
 const STREAM_STDOUT: u8 = 1;
@@ -507,8 +510,7 @@ fn start_main_activity(serial: Option<&str>) -> io::Result<()> {
         if let Some(s) = serial {
             start.args(["-s", s]);
         }
-        let component = format!("{}/me.phie.tawc.MainActivity", crate::app_package());
-        start.args(["shell", "am", "start", "-n", &component]);
+        start.args(["shell", "am", "start", "-n", &crate::main_activity()]);
         let out = start.output()?;
         // `am start` exits 0 but prints `Error:` for some failures
         // (e.g. unresolvable intent); treat those as failures too.
@@ -942,7 +944,7 @@ impl AdbForward {
         cmd.args([
             "forward",
             &format!("tcp:{port}"),
-            &format!("localabstract:{SOCKET_NAME}"),
+            &format!("localabstract:{}", socket_name()),
         ]);
         cmd.stdout(Stdio::null()).stderr(Stdio::piped());
         let out = cmd.output()?;
