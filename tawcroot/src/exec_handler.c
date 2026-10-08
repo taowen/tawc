@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/stat.h>
 
 #include "errno_neg.h"
 #include "exec_handler.h"
@@ -31,17 +32,16 @@
  * files and directories, and by the time the loader discovers the
  * problem (post-execveat) the calling program is already gone — `bash
  * -c /etc` must get a clean error, not a destroyed shell. */
-static long probe_check_executable(int fd)
+static long probe_check_executable(int fd, unsigned *mode)
 {
-	struct statx stx;
-	long sr = TAWC_RAW(TAWC_SYS_statx, fd, (long)"",
-	                   AT_EMPTY_PATH, STATX_TYPE | STATX_MODE,
-	                   (long)&stx, 0);
+	struct stat st;
+	long sr = TAWC_RAW(TAWC_SYS_fstat, fd, (long)&st, 0, 0, 0, 0);
 	if (sr < 0) return sr;
-	if (S_ISDIR(stx.stx_mode)) return TAWC_EISDIR;
-	if (!S_ISREG(stx.stx_mode)) return TAWC_EACCES;
-	if ((stx.stx_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0)
+	if (S_ISDIR(st.st_mode)) return TAWC_EISDIR;
+	if (!S_ISREG(st.st_mode)) return TAWC_EACCES;
+	if ((st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0)
 		return TAWC_EACCES;
+	if (mode) *mode = st.st_mode;
 	return 0;
 }
 
@@ -109,7 +109,7 @@ static long classify_loadable(int fd, int depth, size_t *title_extra)
 
 	long ifd = tawcroot_open_in_view(interp);
 	if (ifd < 0) return ifd;  /* missing interpreter → ENOENT, etc. */
-	long ck = probe_check_executable((int)ifd);
+	long ck = probe_check_executable((int)ifd, NULL);
 	if (ck == 0) ck = classify_loadable((int)ifd, depth + 1, title_extra);
 	tawc_close((int)ifd);
 	return ck;
@@ -142,20 +142,18 @@ static long prepare(const char *path, int argc,
 	{
 		long probe = tawcroot_open_in_view(path);
 		if (probe < 0) return probe;
-		long ck = probe_check_executable((int)probe);
+		unsigned mode = 0;
+		long ck = probe_check_executable((int)probe, &mode);
 		/* Classify the binary (ELF / shebang chain) before the commit
 		 * so a non-ELF non-script, a missing shebang interpreter, or a
 		 * wrong-arch ELF returns a clean errno to the guest instead of
 		 * killing it with a loader exit code post-execveat. */
 		if (ck == 0) ck = classify_loadable((int)probe, 0, &title_extra);
 		if (ck == 0) {
-			struct statx stx;
 			unsigned char magic[4];
-			if (TAWC_RAW(TAWC_SYS_statx, probe, (long)"", AT_EMPTY_PATH,
-				STATX_MODE, (long)&stx, 0) == 0 &&
-			    TAWC_RAW(TAWC_SYS_pread64, probe, (long)magic, 4, 0, 0, 0) == 4 &&
+			if (TAWC_RAW(TAWC_SYS_pread64, probe, (long)magic, 4, 0, 0, 0) == 4 &&
 			    magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F')
-				setid_mode = stx.stx_mode & 06000;
+				setid_mode = mode & 06000;
 		}
 		if (ck < 0) { tawc_close((int)probe); return ck; }
 		/* Pin the executable across our internal exec, even when the
@@ -376,13 +374,9 @@ long tawcroot_exec_handler_prepare(const char *path, int argc,
 
 static long commit(int mfd)
 {
-	/* (4) Open /proc/self/exe so we can execveat ourselves with
-	 * AT_EMPTY_PATH. Going through the path namespace would require
-	 * us to know our own filesystem path, which depends on how
-	 * tawcroot was invoked (in production, the APK's nativeLibraryDir
-	 * libtawcroot.so; under tawcroot/test.sh --device, the test scratch
-	 * dir). /proc/self/exe is always a working symlink to the
-	 * current executable. */
+	/* Pin ourselves for re-exec. execve through /proc/self/fd keeps the
+	 * pinned inode semantics without execveat, which older Android app
+	 * seccomp policies trap even from our raw syscall stub. */
 	long exe_fd = tawc_openat(AT_FDCWD, "/proc/self/exe",
 	                          O_RDONLY | O_CLOEXEC, 0);
 	if (exe_fd < 0) {
@@ -493,9 +487,12 @@ static long commit(int mfd)
 	new_argv[2] = fdstr;
 	new_argv[3] = (char *)0;
 
-	long er = tawc_execveat((int)exe_fd, "", new_argv, envp_for_self,
-	                        AT_EMPTY_PATH);
-	/* On success execveat does not return. On failure er is -errno. */
+	char self_path[64];
+	long er = tawc_proc_fd_path(self_path, sizeof self_path, (int)exe_fd, 0);
+	if (er >= 0)
+		er = TAWC_RAW(TAWC_SYS_execve, (long)self_path, (long)new_argv,
+		              (long)envp_for_self, 0, 0, 0);
+	/* On success execve does not return. On failure er is -errno. */
 	if (env_arr_rv >= 0)
 		(void)tawc_munmap((void *)(uintptr_t)env_arr_rv, env_arr_len);
 	if (map_rv >= 0)

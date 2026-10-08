@@ -22,6 +22,19 @@
 	.globl _start
 	.type  _start, @function
 _start:
+#ifdef TEST_HOST_STATX_TRAP
+	mov $-100, %rdi
+	movabs $path, %rsi
+	xor %edx, %edx
+	mov $0x7ff, %r10
+	sub $256, %rsp
+	mov %rsp, %r8
+	mov $332, %eax
+	syscall
+	add $256, %rsp
+	cmp $-38, %rax
+	jne .Lpolicy_fail
+#endif
 	movabs  $path, %rdi
 	movabs  $argv, %rsi
 	movabs  $envp, %rdx
@@ -40,6 +53,13 @@ _start:
 	mov     $231, %rax              /* exit_group */
 	syscall
 	ud2
+#ifdef TEST_HOST_STATX_TRAP
+.Lpolicy_fail:
+	mov $99, %edi
+	mov $231, %eax
+	syscall
+	ud2
+#endif
 
 	.section .rodata
 	/* argv is { path, NULL }. envp is { NULL }. We use a non-NULL

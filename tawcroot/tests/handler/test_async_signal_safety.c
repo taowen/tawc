@@ -203,9 +203,13 @@ test(handler_c_pinned_import_list)
 		 * it (rescue.c). ASS — raw syscalls, fixed static storage,
 		 * lock-free atomics for the slot claim, no allocation. */
 		"tawcroot_dispatch_call",
+		/* Shared-root refresh uses atomics, runtime scratch and raw syscalls. */
+		"tawcroot_fs_sync",
 		/* The raw-syscall stub. ASS by construction (single SYSCALL/SVC
 		 * with the inline-asm contract documented in raw_sys.h). */
 		"tawcroot_raw_syscall",
+		/* Assembly label address only; identifies a nested host-policy trap. */
+		"tawcroot_raw_syscall_ret",
 		/* Sigreturn trampoline (asm). ASS — it just loads ucontext and
 		 * returns to the kernel via rt_sigreturn. */
 		"tawcroot_sigreturn_trampoline",

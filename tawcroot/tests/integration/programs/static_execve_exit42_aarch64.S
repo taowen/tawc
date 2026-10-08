@@ -17,6 +17,19 @@
 	.globl _start
 	.type  _start, %function
 _start:
+#ifdef TEST_HOST_STATX_TRAP
+	mov x0, #-100
+	ldr x1, =path
+	mov x2, #0
+	mov x3, #0x7ff
+	sub sp, sp, #256
+	mov x4, sp
+	mov x8, #291
+	svc #0
+	add sp, sp, #256
+	cmn x0, #38
+	b.ne .Lpolicy_fail
+#endif
 	ldr     x0, =path                /* path */
 	ldr     x1, =argv                /* argv */
 	ldr     x2, =envp                /* envp */
@@ -34,6 +47,13 @@ _start:
 	mov     x8, #94                  /* __NR_exit_group */
 	svc     #0
 	brk     #0
+#ifdef TEST_HOST_STATX_TRAP
+.Lpolicy_fail:
+	mov x0, #99
+	mov x8, #94
+	svc #0
+	brk #0
+#endif
 	.size _start, .-_start
 
 	.section .rodata

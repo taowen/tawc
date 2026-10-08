@@ -232,6 +232,24 @@ test(prod_rootfs_nonexistent_guest_returns_loader_code)
  * from the loader is disjoint from 42 so the test pinpoints which
  * link in the chain broke.
  */
+test(prod_rootfs_old_android_host_policy)
+{
+	rh_rmrf(FAKE_ROOTFS);
+	test_true(build_rootfs());
+	test_true(rh_copy_file(TAWCROOT_STATIC_HOST_POLICY_BIN,
+		FAKE_ROOTFS "/bin/static_host_policy", 0755));
+	VecStr cmd = c_init(vec_str, {TAWCROOT_ANDROID_FILTER_WRAP,
+		"--old-app-policy", "--", TAWCROOT_PROD_BIN,
+		"-r", FAKE_ROOTFS, "--", "/bin/static_host_policy"});
+	int rc = -1;
+	FailableResult res = run_subproc((SubprocArgs){
+		.vec_cmd = cmd, .exit_code = &rc
+	});
+	failable_result_drop(&res);
+	test_int_eq(rc, 42);
+	rh_rmrf(FAKE_ROOTFS);
+}
+
 test(prod_rootfs_guest_does_execve)
 {
 	rh_rmrf(FAKE_ROOTFS);

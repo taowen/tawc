@@ -15,6 +15,7 @@
 static_exit42
 static_argc_random
 static_execve_exit42
+static_host_policy
 static_execve_proc_self_exe
 static_open_creat_argv1
 static_open_rdonly_argv1

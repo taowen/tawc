@@ -36,6 +36,8 @@
 #include "rescue.h"
 #include "usercopy.h"
 
+extern const char tawcroot_raw_syscall_ret[];
+
 /* Match kernel `struct sigaction` layout — bionic's struct is the same
  * on both arches we care about, but we avoid <signal.h>'s sigaction
  * alias to be explicit about where each field comes from. */
@@ -99,6 +101,13 @@ static void sigsys_handler(int sig, siginfo_t *info, void *ucontext)
 	}
 
 	ucontext_t *uc = (ucontext_t *)ucontext;
+	/* Our filter allows this stub. A trap here comes from an inherited
+	 * host policy: report the unavailable syscall without redispatching
+	 * into the same host call (which would recurse indefinitely). */
+	if (tawcroot_arch_resume_pc(uc) == (uintptr_t)tawcroot_raw_syscall_ret) {
+		tawcroot_arch_write_return(uc, TAWC_ENOSYS);
+		return;
+	}
 	tawcroot_syscall_args args;
 	tawcroot_arch_read_args(uc, &args);
 
@@ -188,21 +197,12 @@ long tawcroot_install_handler(void)
 	 * lets small-stack runtimes work at all — Go issues syscalls from
 	 * 2 KiB goroutine stacks and installs a 32 KiB altstack per M.
 	 * handle_sigaltstack keeps guest altstacks big enough for us. */
-	sa.sa_flags     = SA_SIGINFO | SA_RESTORER | SA_ONSTACK;
+	sa.sa_flags     = SA_SIGINFO | SA_RESTORER | SA_ONSTACK | SA_NODEFER;
 	sa.sa_restorer  = tawcroot_sigreturn_trampoline;
-	/* Mask every catchable signal for the handler's duration. The
-	 * kernel auto-masks the trapping signal (SIGSYS) while we run,
-	 * but other queued signals stay deliverable — and a nested
-	 * signal handler that issues a seccomp-trapped syscall produces
-	 * a SIGSYS that's *blocked* (because our outer SIGSYS handler is
-	 * still in flight). RET_TRAP on a blocked-and-pending SIGSYS
-	 * has only one outcome: the kernel kills the process with
-	 * default-action SIGSYS, no handler dispatch. Repro: pacman-key
-	 * `gpg --import manjaro-arm.gpg` reaps a child via SIGCHLD that
-	 * fires inside our rt_sigprocmask handler; bash's SIGCHLD code
-	 * then calls rt_sigprocmask, RET_TRAP, kill. SIGKILL/SIGSTOP
-	 * can't be masked; the kernel silently drops those bits. */
-	sa.sa_mask      = ~(uint64_t)0;
+	/* Allow inherited host-policy traps from the raw syscall stub to
+	 * return ENOSYS. Keep other signals blocked: a guest SIGCHLD handler,
+	 * for example, must not re-enter translation while it is in progress. */
+	sa.sa_mask      = ~(uint64_t)0 & ~((uint64_t)1 << (SIGSYS - 1));
 
 	/* sigsetsize = 8 (size of kernel sigset_t on lp64). */
 	return tawc_rt_sigaction(SIGSYS, &sa, NULL, 8);

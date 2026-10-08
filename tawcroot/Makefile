@@ -338,6 +338,10 @@ $(OUT)/programs/dynamic_legacy_nr_probe: $(SRC_TS)/integration/programs/dynamic_
 # intercepts the execve, re-execs tawcroot with --exec-child, and the
 # new process re-establishes rootfs view before manual-loading the
 # target binary.
+$(OUT)/programs/static_host_policy: $(SRC_TS)/integration/programs/static_host_policy_x86_64.S $(SRC_TS)/integration/programs/static_execve_exit42_x86_64.S | $(OUT)
+	@mkdir -p $(dir $@)
+	$(CC) -static -nostdlib -O2 -Wl,--build-id=none $< -o $@
+
 $(OUT)/programs/static_execve_exit42: $(SRC_TS)/integration/programs/static_execve_exit42_x86_64.S | $(OUT)
 	@mkdir -p $(dir $@)
 	$(CC) -static -nostdlib -O2 -Wl,--build-id=none $< -o $@

@@ -54,12 +54,9 @@
  *
  * Deliberately NOT trapped:
  *
- *   - execve / execveat: the wrapper itself uses execve to launch the
- *     child. Trapping would SIGSYS the wrapper (no handler installed) and
- *     kill it before exec. tawcroot's handler internally uses execveat
- *     to re-exec self for the --exec-child handoff; trapping that would
- *     re-enter the SIGSYS handler, which the design explicitly avoids
- *     (see "faccessat2 recursive SIGSYS" in notes/tawcroot/phasing.md).
+ *   - execve: the wrapper itself uses it to launch the child, before a
+ *     handler is installed. --old-app-policy traps execveat and statx
+ *     to exercise runtime startup and guest exec on older app policies.
  *   - Any syscall the wrapper itself uses during init (read, write,
  *     mmap, prctl, seccomp). Same reason — kills the wrapper.
  *
@@ -93,6 +90,8 @@
 # define WRAP_NR_faccessat2   439
 # define WRAP_NR_clone3       435
 # define WRAP_NR_close_range  436
+# define WRAP_NR_execveat     281
+# define WRAP_NR_statx       291
 # define WRAP_NR_ioctl         29
 #elif defined(__x86_64__)
 # define WRAP_AUDIT_ARCH      AUDIT_ARCH_X86_64
@@ -100,6 +99,8 @@
 # define WRAP_NR_faccessat2   439
 # define WRAP_NR_clone3       435
 # define WRAP_NR_close_range  436
+# define WRAP_NR_execveat     322
+# define WRAP_NR_statx       332
 # define WRAP_NR_ioctl         16
 /* Legacy lp64-x86_64 RET_TRAP set (Android allows these only for lp32).
  * This is a MODELED SUBSET, not the full list — the authoritative set
@@ -141,7 +142,7 @@ static long sys_seccomp(unsigned int op, unsigned int flags, void *args)
 #define WRAP_TCSETSF2  0x402C542DU
 
 static bool install_filter(bool include_legacy_x86_64,
-                           bool xperm_tcgets2)
+                           bool xperm_tcgets2, bool old_app_policy)
 {
 	/* Cap mirrors the production trap_nrs[256] in main.c. The current
 	 * trap set fits comfortably in 64 slots, but the array+guard pair
@@ -165,6 +166,10 @@ static bool install_filter(bool include_legacy_x86_64,
 	WRAP_PUSH(WRAP_NR_faccessat2);
 	WRAP_PUSH(WRAP_NR_clone3);
 	WRAP_PUSH(WRAP_NR_close_range);
+	if (old_app_policy) {
+		WRAP_PUSH(WRAP_NR_execveat);
+		WRAP_PUSH(WRAP_NR_statx);
+	}
 
 #if defined(__x86_64__)
 	if (include_legacy_x86_64) {
@@ -304,12 +309,15 @@ int main(int argc, char **argv)
 {
 	bool include_legacy = false;
 	bool xperm_tcgets2 = false;
+	bool old_app_policy = false;
 	int i = 1;
 	for (; i < argc; i++) {
 		if (strcmp(argv[i], "--include-legacy-x86_64") == 0) {
 			include_legacy = true;
 		} else if (strcmp(argv[i], "--xperm-tcgets2") == 0) {
 			xperm_tcgets2 = true;
+		} else if (strcmp(argv[i], "--old-app-policy") == 0) {
+			old_app_policy = true;
 		} else if (strcmp(argv[i], "--") == 0) {
 			i++;
 			break;
@@ -320,7 +328,7 @@ int main(int argc, char **argv)
 	if (i >= argc) {
 		fprintf(stderr,
 		        "usage: wrap [--include-legacy-x86_64] "
-		        "[--xperm-tcgets2] [--] <child> [args...]\n");
+		        "[--xperm-tcgets2] [--old-app-policy] [--] <child> [args...]\n");
 		return 2;
 	}
 
@@ -329,7 +337,7 @@ int main(int argc, char **argv)
 		        strerror(errno));
 		return 2;
 	}
-	if (!install_filter(include_legacy, xperm_tcgets2)) return 2;
+	if (!install_filter(include_legacy, xperm_tcgets2, old_app_policy)) return 2;
 
 	execv(argv[i], &argv[i]);
 	/* execv only returns on failure. */
