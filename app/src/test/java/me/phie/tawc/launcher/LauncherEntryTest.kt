@@ -61,6 +61,28 @@ class LauncherEntryTest {
     }
 
     @Test
+    fun searchFallsBackToHiddenWhenNothingElseMatches() {
+        val entries = LauncherEntry.withBuiltins(
+            listOf(entry("firefox", "Firefox"), entry("fireworks", "Fireworks")), builtins,
+        )
+        val hidden = setOf("firefox")
+        assertEquals(
+            listOf("fireworks"),
+            LauncherEntry.filter(entries, hidden, showHidden = false, query = "fire").map { it.id },
+        )
+        assertEquals(
+            listOf("firefox"),
+            LauncherEntry.filter(entries, hidden, showHidden = false, query = "firefox").map { it.id },
+        )
+        // Add entry matching doesn't count as a visible match.
+        val adder = LauncherEntry.withBuiltins(listOf(entry("adder", "Adder")), builtins)
+        assertEquals(
+            listOf("adder", "tawc:add-entry"),
+            LauncherEntry.filter(adder, setOf("adder"), showHidden = false, query = "add").map { it.id },
+        )
+    }
+
+    @Test
     fun filterRanksNamePrefixMatchesFirst() {
         // Pre-sorted by name like scanner output; the substring match
         // sorts first alphabetically but must rank below the prefix match.

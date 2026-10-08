@@ -112,7 +112,8 @@ data class LauncherEntry(
         /**
          * Hidden-state + search filtering, the pure core of the launcher's
          * list state. Entries with an id in [hiddenIds] are dropped unless
-         * [showHidden]. [query] is a case-insensitive substring match
+         * [showHidden], or a query matches only hidden apps (so searching
+         * a hidden app still finds it). [query] is a case-insensitive substring match
          * against name + id + comment; name-prefix matches sort first (so
          * typing "fire" surfaces Firefox above "WireFire"), everything
          * else keeps the scanner's name order. Add entry always goes
@@ -124,9 +125,14 @@ data class LauncherEntry(
             showHidden: Boolean,
             query: String,
         ): List<LauncherEntry> {
-            val visible = if (showHidden) entries else entries.filter { it.id !in hiddenIds }
             val q = query.trim().lowercase()
-            val matches = if (q.isEmpty()) visible else match(visible, q)
+            val all = if (q.isEmpty()) entries else match(entries, q)
+            val unhidden = all.filter { it.id !in hiddenIds }
+            val matches = when {
+                showHidden -> all
+                q.isNotEmpty() && unhidden.all { it.builtin == Builtin.ADD_ENTRY } -> all
+                else -> unhidden
+            }
             val (add, rest) = matches.partition { it.builtin == Builtin.ADD_ENTRY }
             return rest + add
         }

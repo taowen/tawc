@@ -104,7 +104,9 @@ actual entries; omitted when N is 0) and, on editable methods, **"Add
 entry…"** (the editor). Show-hidden is transient
 per-pane state, not persisted.
 With it on, hidden entries render dimmed (alpha 0.5) in their normal
-sort position and launch normally on tap. If every entry is hidden,
+sort position and launch normally on tap. With it off, a search whose
+only app matches are hidden shows those (dimmed) instead of nothing.
+If every entry is hidden,
 the empty-list message appends a "(N hidden)" hint.
 
 Debug broker actions (notes/exec-broker.md): `launcher-list` returns
