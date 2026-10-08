@@ -192,6 +192,10 @@ class OperationLogPanel(private val activity: Activity) {
         cancelButton.visibility = if (running) View.VISIBLE else View.GONE
         closeButton.visibility =
             if (p.stage.isTerminal && onCloseClicked != null) View.VISIBLE else View.GONE
+        // Accent on success (the natural next step); tonal on failure.
+        closeButton.backgroundTintList = ColorStateList.valueOf(activity.getColor(
+            if (p.stage == OperationStage.DONE) R.color.tawc_accent else R.color.tawc_tonal_bg
+        ))
     }
 
     /**
