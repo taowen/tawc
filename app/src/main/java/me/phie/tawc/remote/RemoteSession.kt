@@ -215,6 +215,7 @@ object RemoteSession {
                 JSONObject()
                     .put("argv", JSONArray(env.argv))
                     .put("shell", env.shell)
+                    .put("command_shell", env.commandShell)
                     .put("host_env", JSONArray(env.hostEnv))
                     .put("cwd", env.cwd)
                     .put("rootfs", rootfs),

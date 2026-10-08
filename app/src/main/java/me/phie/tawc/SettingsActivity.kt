@@ -126,6 +126,7 @@ class SettingsActivity : AppCompatActivity() {
         // Distro line only when the label doesn't already say it, as
         // on the home screen.
         val displayName = DistroRegistry.forInstallation(inst)?.displayName
+            ?: inst.osName
             ?: "${inst.distro.replaceFirstChar { it.titlecase() }} (${inst.arch})"
         if (title != displayName) {
             body.addView(TextView(this).apply {

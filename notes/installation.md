@@ -261,7 +261,8 @@ The package is split into three layers:
 | `InstallProgress.kt`           | Stage enum + progress event used by the service. The pkg-manager-bootstrap stages are `PKG_KEYRING` and `PKG_INSTALL` (distro-agnostic names). |
 | `InstallationService.kt`       | The state-machine gate. Foreground service that consults [InstallationStore], resolves the right [Distro] from [DistroRegistry], and exposes `progress` (StateFlow) + `log` (SharedFlow). |
 | `InstallProgress.kt`'s `toOperationProgress` | Maps the install-specific `InstallStage` enum onto the generic `OperationStage`. Used by [InstallationService.publishProgress] when calling `op.publish(...)` on the per-job [me.phie.tawc.ops.MutableOperation]. |
-| `DistroArchive.kt` / `DistroExporter.kt` / `DistroImporter.kt` | Distro export/import: format + path rules, quiesce + walk + tar writer, header/allowlist/trailer reader + import job. See *Export / import*. |
+| `DistroArchive.kt` / `DistroExporter.kt` / `DistroImporter.kt` | Distro export/import: format + path rules, quiesce + walk + tar writer, header/allowlist/trailer reader + import job (incl. custom distros). See *Export / import*. |
+| `ArchiveFormat.kt` / `ArchiveLayout.kt` / `RootfsFacts.kt` | Custom-distro import: compression by magic, guest-root detection + name mapping, os-release/arch/libc probe. See *Custom distros*. |
 | `DistroBusy.kt`                | In-memory set of ids whose spawns are refused (export in progress); checked in `TawcrootMethod.prepareSpawn`. |
 | `ExportActivity.kt` / `ImportActivity.kt` | SAF save-picker trampoline for an export; import form. |
 | `LabelValidation.kt`           | Label → slug → free id check shared by the install and import forms. |
@@ -522,6 +523,8 @@ or into another build (a different application id). Tawcroot only —
 the one release method; chroot rootfses are root-owned and proot isn't
 worth the matrix. UI: **Export** on distro info (READY tawcroot only),
 **Import from tarball** at the top of the install form. Broker: `export` / `import` actions (notes/exec-broker.md).
+The same import also takes any plain Linux rootfs tarball (*Custom
+distros* below).
 
 **Format** (`DistroArchive.kt`): a zstd-compressed POSIX/PAX tar,
 inspectable with `tar --zstd -tf`. Suggested name
@@ -578,9 +581,10 @@ pass.
 
 **Import job** (`JobKind.IMPORT`) is an install variant: same empty-slot
 gate, INSTALLING → READY | FAILED, cancel → FAILED → auto-uninstall.
-`DistroImporter` reads the manifest + metadata (refusing a non-export,
-a too-new format/schema, a non-tawcroot method, or a `(distro, arch)`
-not installable here), writes the rewritten record (`rewrite`: new
+For a well-framed export `DistroImporter` reads the manifest + metadata
+(refusing a non-tawcroot method or an arch other than this phone's; an
+unknown distro key — a newer app's distro, or `custom` — just logs),
+writes the rewritten record (`rewrite`: new
 id/label, `tawcStamp` null to force a `TawcInstaller` refresh against
 the old `tawcInstalls` dests, binds/ando/hidden entries/
 `installedAtAppVersionCode` kept, `importedAtMillis` /
@@ -594,6 +598,76 @@ the old `tawcInstalls` dests, binds/ando/hidden entries/
 refresh, READY, `AndoBrokers.refresh`. A newer link-store `version`
 just logs (tawcroot degrades to read-only hardlinks). Pinned launcher
 shortcuts don't travel.
+
+### Custom distros
+
+"Import from tarball" also turns an arbitrary rootfs tarball
+(`docker export`, `mmdebstrap`, an LXC or minirootfs image) into an
+**unsupported** tawcroot distro, best effort. Format by magic bytes
+(`ArchiveFormat`: zstd, gzip, xz, bzip2, plain tar). `DistroImporter`
+sorts every archive into one of:
+
+| kind | detected by | import |
+|---|---|---|
+| export | `tawc-export.json` first and `metadata.json` second, both valid | as above, trailer required |
+| damaged export | TAWC layout (`<base>rootfs/` as the guest root) with framing entries at `<base>` but not the above (re-tarred, bad manifest, …) | amber warning listing the problems; `rootfs/` + `tawcroot/` mapped, settings from `metadata.json` if it parses (as its distro if this build knows it, else custom), no trailer |
+| plain rootfs | a guest root found, no framing | custom distro, no trailer |
+| unrecognized | no guest root, or a `docker save`/OCI layout | refused ("export a container instead" for OCI) |
+
+Without a trailer a truncated copy is caught only when the tar/xz/zstd
+stream itself breaks; the form says so.
+
+**Guest root** (`ArchiveLayout.Detector`): the shallowest prefix (≤ 2
+dirs deep) holding `etc` plus `usr` or `bin`, after stripping leading
+`/` and `./` — covers top-level, `./`-prefixed and single-wrapper-dir
+trees. A root ending in `rootfs/` is mapped as the TAWC layout (a
+plain tarball wrapped in a `rootfs/` dir maps the same). Entries
+outside are skipped and counted; mapped names (and hardlink targets)
+still pass `importRejection` + `roots` containment.
+
+**Form scan** (`DistroImporter.scan`): an export is classified from its
+first two entries; anything else gets one cancellable headers-only
+pass (decompressed, not written) collecting kind, root, size and
+`RootfsFacts`: os-release name/id (default label), architecture
+(`e_machine` of the first ELF in `bin/` / `usr/bin/`; a mismatch is
+refused, no emulation), libc (`ld-linux-*` glibc / `ld-musl-*`),
+bash, `/bin/sh`, `/usr/bin/env` (no env or no shell at all is
+refused). The decompression dominates; a 90 MB xz Debian rootfs takes
+about as long to scan as to extract.
+
+**Import job, loose path**: the broker can't rescan stdin, so the job
+re-classifies from a lookahead (≤ 4096 entries / 16 MiB held in memory,
+replayed into the extractor). Lacking a qualifying prefix there, it
+guesses from the top-level dirs (one non-FHS dir = a wrapper). The
+extracted tree is authoritative: `etc` plus `usr`/`bin` must exist, and
+`RootfsFacts.probe` re-checks arch / env / shell. Metadata met later in
+the stream still applies.
+
+**Record**: `distro = "custom"` (frozen key), `arch` = this phone's
+ABI, `method = tawcroot`, `sourceUrl` = the picked file's name
+(`stdin` from the broker), `bootstrapFlavor = "imported"`, this app's
+`installedAtAppVersionCode`, `importedAtMillis`, plus optional `osName`
+/ `osId` / `libc` for display (additive, no schema bump). Re-exporting
+gives a normal export that re-imports as custom.
+`DistroRegistry.forInstallation` stays null; display falls back to the
+label / `osName`, and distro info shows "(unsupported)" and the musl
+GPU warning.
+
+**Setup** (`DistroImporter.setupCustom`, custom only, idempotent; a
+stand-in for `Distro.configure`): `/etc/resolv.conf` if missing or a
+dangling symlink (`docker export` of a systemd image), `/tmp` (01777),
+`/root` (0700), the `ShellDefaults` stubs only if bash exists and they
+don't, a log line if `/etc/passwd` has no root. Nothing
+package-manager specific.
+
+**Runtime fallbacks** (all distros): tawcroot spawns no longer use GNU
+`env -C /root`; the tawcroot process starts with host cwd
+`<rootfs>/root` (`TawcrootMethod.homeCwd`; `<rootfs>/tmp` if that's
+missing or a symlink), which tawcroot maps to guest `/root`, so BusyBox
+env works. Command spawns run `RootShell.command`: `/bin/bash`, or
+`/bin/sh` in a rootfs without bash (also the passwd-shell fallback and
+the remote agent's `command_shell`). musl can't use libhybris
+(distro-options.md): warned, not refused; pick the CPU backend.
 
 **Trust model:** the archive is untrusted filesystem input even when
 the user made it — containment, allowlist and the trailer apply to
@@ -1480,7 +1554,8 @@ migration can fully repair it:
 - **Distro keys** `"arch"` / `"manjaro"` / `"void"` / `"debian-sid"`
   (`metadata.distro`, matched exactly in
   [DistroRegistry.forInstallation] together with the ABI in
-  `metadata.arch`).
+  `metadata.arch`), plus `"custom"` for imported rootfses (never in
+  the registry) and the `"imported"` `bootstrapFlavor`.
 - **Pinned-shortcut format**: shortcut id `"<installId>/<desktopId>"`
   and the intent extras keys `"installId"` / `"desktopId"` /
   `"label"` ([EntryShortcuts], [ShortcutLaunchActivity]). Persisted

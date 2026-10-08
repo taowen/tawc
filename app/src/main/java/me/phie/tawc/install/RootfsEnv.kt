@@ -192,10 +192,11 @@ internal object RootfsEnv {
      *
      * `-C /root` chdir's to root's home before exec'ing the shell, so
      * an interactive `bash -l` lands in `/root` instead of wherever the
-     * host-side cwd happened to translate to (`/tmp` for tawcroot's
-     * `$rootfs/tmp` cwd; `/` for chroot's post-chroot cwd). Matches
-     * `HOME=/root` set above. Requires GNU env (coreutils ≥ 9.0); both
-     * Arch and Void ship 9.x.
+     * host-side cwd happened to translate to (`/` for chroot's
+     * post-chroot cwd). Matches `HOME=/root` set above. Requires GNU
+     * env (coreutils ≥ 9.0). Tawcroot passes [chdir] false and starts
+     * in `<rootfs>/root` instead, which tawcroot reads as guest `/root`,
+     * so BusyBox and older coreutils env work in custom imports.
      */
     fun envArgv(method: Method): List<String> = envArgv(method, Settings.graphicsBackend)
 
@@ -203,12 +204,15 @@ internal object RootfsEnv {
         method: Method,
         backend: GraphicsBackend,
         shell: String = RootShell.DEFAULT,
+        chdir: Boolean = true,
     ): List<String> {
         val out = ArrayList<String>(4 + 16)
         out += "/usr/bin/env"
         out += "-i"
-        out += "-C"
-        out += "/root"
+        if (chdir) {
+            out += "-C"
+            out += GUEST_HOME
+        }
         for ((k, v) in build(method, backend, shell)) out += "$k=$v"
         return out
     }

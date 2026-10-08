@@ -58,19 +58,26 @@ impl Launcher for HostShell {
 }
 
 /// The tawcroot spawn envelope from `TawcrootMethod.spawnEnvelope`:
-/// `argv` ends with the guest env (`… env -i -C /root K=V …`), so extra
+/// `argv` ends with the guest env (`… env -i K=V …`), so extra
 /// variables and then the program are appended. Shells are login
-/// shells (`<shell> -l`, commands `/bin/bash -lc`, like every other
-/// command spawn); sftp runs [`SFTP_SERVERS`]' first hit.
+/// shells (`<shell> -l`, commands `<command_shell> -lc`, like every
+/// other command spawn); sftp runs [`SFTP_SERVERS`]' first hit.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Envelope {
     pub argv: Vec<String>,
     pub shell: String,
+    /// What `-lc` commands run: bash, or `/bin/sh` in a rootfs without it.
+    #[serde(default = "default_command_shell")]
+    pub command_shell: String,
     #[serde(default)]
     pub host_env: Vec<String>,
     pub cwd: String,
     /// Host path of the rootfs, to look for `sftp-server`.
     pub rootfs: String,
+}
+
+fn default_command_shell() -> String {
+    "/bin/bash".into()
 }
 
 /// TAWC's own static sftp-server (SftpServerInstallProvider), then where
@@ -93,7 +100,7 @@ impl Launcher for Envelope {
                 c.args([self.shell.as_str(), "-l"]);
             }
             What::Exec(cmd) => {
-                c.args(["/bin/bash", "-lc", cmd.as_str()]);
+                c.args([self.command_shell.as_str(), "-lc", cmd.as_str()]);
             }
             What::Subsystem(name) if name == "sftp" => {
                 // symlink_metadata: an absolute symlink in the rootfs
@@ -343,6 +350,7 @@ mod tests {
         let e = Envelope {
             argv: vec!["/t/tawcroot".into(), "-r".into(), "/r".into(), "--".into(), "/usr/bin/env".into(), "-i".into(), "A=1".into()],
             shell: "/usr/bin/zsh".into(),
+            command_shell: "/bin/sh".into(),
             host_env: vec!["TMPDIR=/r/tmp".into()],
             cwd: "/tmp".into(),
             rootfs: dir.to_string_lossy().into(),
@@ -354,7 +362,7 @@ mod tests {
         assert_eq!(args(&c)[5..], ["A=1", "TERM=xterm", "/usr/bin/zsh", "-l"]);
         assert_eq!(c.get_envs().collect::<Vec<_>>(), [(std::ffi::OsStr::new("TMPDIR"), Some(std::ffi::OsStr::new("/r/tmp")))]);
         let c = e.command(&What::Exec("echo 'a b'".into()), &[]).unwrap().unwrap();
-        assert_eq!(args(&c)[6..], ["/bin/bash", "-lc", "echo 'a b'"]);
+        assert_eq!(args(&c)[6..], ["/bin/sh", "-lc", "echo 'a b'"]);
         let c = e.command(&What::Subsystem("sftp".into()), &[]).unwrap().unwrap();
         assert_eq!(args(&c).last().unwrap(), "/usr/lib/openssh/sftp-server");
         std::fs::remove_dir_all(&dir).unwrap();

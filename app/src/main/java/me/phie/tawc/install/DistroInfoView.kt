@@ -81,12 +81,26 @@ class DistroInfoView(private val activity: AppCompatActivity) {
             infoRow(getString(R.string.distro_info_row_label), DistroRegistry.displayLabel(installation)),
             rowLp(pad),
         )
+        // Anything this build doesn't know (custom imports, a newer
+        // app's distro) is flagged; a CORRUPT marker's "?" isn't a distro.
+        val distroName = resolvedDistro?.displayName ?: if (installation.state == Installation.State.CORRUPT) {
+            installation.distro
+        } else {
+            getString(R.string.distro_info_unsupported, installation.osName ?: installation.distro)
+        }
+        content.addView(infoRow(getString(R.string.distro_info_row_distro), distroName), rowLp(pad))
+        if (installation.libc == RootfsFacts.LIBC_MUSL) {
+            content.addView(TextView(activity).apply {
+                text = getString(R.string.import_warn_musl)
+                textSize = 13f
+                setTextColor(androidx.core.content.ContextCompat.getColor(activity, R.color.tawc_warning))
+            }, rowLp(pad))
+        }
         content.addView(
-            infoRow(getString(R.string.distro_info_row_distro), resolvedDistro?.displayName ?: installation.distro),
-            rowLp(pad),
-        )
-        content.addView(
-            infoRow(getString(R.string.distro_info_row_architecture), resolvedDistro?.linuxArch ?: installation.arch),
+            infoRow(
+                getString(R.string.distro_info_row_architecture),
+                resolvedDistro?.linuxArch ?: RootfsFacts.linuxArch(installation.arch),
+            ),
             rowLp(pad),
         )
         content.addView(infoRow(getString(R.string.distro_info_row_method), installation.method), rowLp(pad))

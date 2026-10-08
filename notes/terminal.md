@@ -80,8 +80,8 @@ line of `<rootfs>/etc/passwd`, so `chsh -s /usr/bin/zsh` inside the
 rootfs is honoured (wmww/tawc#7). The rootfs is app-uid-owned under
 tawcroot, so that's a plain host-side read; symlinks are followed
 *within* the rootfs (an absolute `/usr/bin/zsh -> /usr/bin/zsh-5.9`
-must not be read against the host's `/`). It falls back to `/bin/bash`
-whenever the answer isn't usable — no passwd file or `root` line,
+must not be read against the host's `/`). It falls back to the command
+shell (below) whenever the answer isn't usable — no passwd file or `root` line,
 empty field, or a shell that isn't an existing executable in the
 rootfs (`chsh` to a since-uninstalled shell). `-l` is accepted by
 bash, zsh, fish, dash and ksh alike. There is deliberately no app-side
@@ -91,7 +91,9 @@ Only interactive tabs switch shells. Every command spawn — command
 sessions below, launcher Exec lines, install steps, `RunCommandOp`,
 the exec broker, `rootfs-run.sh` — stays on `/bin/bash -lc`, because
 Exec lines, the hold-open trailer and the install scripts all assume
-POSIX-or-better syntax that fish doesn't speak. `SHELL` in the
+POSIX-or-better syntax that fish doesn't speak. `RootShell.command`
+picks `/bin/sh` instead in a rootfs without bash (custom imports such
+as Alpine; installation.md "Custom distros"). `SHELL` in the
 `RootfsEnv` map *is* the resolved shell on every tawcroot spawn, so
 scripts and GUI terminals launched from the desktop open the same one.
 

@@ -49,6 +49,18 @@ class RootShellTest {
     }
 
     @Test
+    fun noBashFallsBackToSh() {
+        // Alpine-style: /bin/sh -> busybox, no bash.
+        shellBin("/bin/busybox")
+        link("/bin/sh", "/bin/busybox")
+        passwd("root:x:0:0:root:/root:/bin/bash")
+        assertEquals("/bin/sh", resolve())
+        assertEquals("/bin/sh", RootShell.command(rootfs))
+        shellBin("/bin/bash")
+        assertEquals("/bin/bash", RootShell.command(rootfs))
+    }
+
+    @Test
     fun customShellHonoured() {
         shellBin("/usr/bin/zsh")
         passwd(

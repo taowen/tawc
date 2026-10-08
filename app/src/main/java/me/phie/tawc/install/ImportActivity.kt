@@ -5,6 +5,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.os.StatFs
+import android.provider.OpenableColumns
 import android.text.Editable
 import android.text.TextWatcher
 import android.text.format.Formatter
@@ -16,30 +17,36 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.color.MaterialColors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 import me.phie.tawc.OpenDistro
 import me.phie.tawc.R
 import me.phie.tawc.install.distro.DistroRegistry
+import me.phie.tawc.install.util.HostArch
 import me.phie.tawc.ops.LogScreenActivity
 import me.phie.tawc.ui.Scaffold
 import me.phie.tawc.ui.buildChildScreen
 import me.phie.tawc.ui.primaryButton
+import me.phie.tawc.ui.tonalButton
 import me.phie.tawc.ui.verticalLp
 import java.text.DateFormat
 import java.util.Date
 
 /**
- * Import form: picks an export archive (SAF `OPEN_DOCUMENT`), reads
- * just its two header entries, and shows what's in it plus a Label
- * field. Import → [InstallationService.startImport]. Opened from the
- * install form's "Import from tarball". Settings carried in the archive
- * (ando, binds, hidden entries) aren't listed; binds that would fail
- * here get a warning.
+ * Import form: picks an archive (SAF `OPEN_DOCUMENT`), classifies it
+ * with [DistroImporter.scan] — an export from its two header entries,
+ * anything else with one cancellable headers-only pass — and shows
+ * what's in it, a kind banner, warnings, and a Label field. Import →
+ * [InstallationService.startImport]. Opened from the install form's
+ * "Import from tarball". Settings carried in an export (ando, binds,
+ * hidden entries) aren't listed; binds that would fail here get a
+ * warning. Unimportable archives replace the form with the reason.
  */
 class ImportActivity : AppCompatActivity() {
 
@@ -47,6 +54,9 @@ class ImportActivity : AppCompatActivity() {
     private lateinit var scaffold: Scaffold
     private var uri: Uri? = null
     private var labelText: String? = null
+    /** Scan progress posts are dropped once this is false: the last
+     *  one can land after the result. Main thread only. */
+    private var scanning = false
 
     private val open = registerForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
         if (picked == null) {
@@ -76,20 +86,36 @@ class ImportActivity : AppCompatActivity() {
         labelText?.let { outState.putString(KEY_LABEL, it) }
     }
 
+    /** Scan [u] off the main thread; leaving the screen cancels it. */
     private fun load(u: Uri) {
-        showMessage(getString(R.string.import_reading))
+        scanning = true
+        showScanning(null)
         lifecycleScope.launch {
-            val header = withContext(Dispatchers.IO) {
-                runCatching {
-                    contentResolver.openInputStream(u)?.use { DistroImporter.Reader(it).readHeader() }
-                        ?: throw java.io.IOException("can't open the file")
+            val scan = runCatching {
+                runInterruptible(Dispatchers.IO) {
+                    contentResolver.openInputStream(u)?.use { input ->
+                        DistroImporter.scan(input, HostArch.primaryAbi()) { done ->
+                            runOnUiThread { if (scanning) showScanning(done) }
+                        }
+                    } ?: throw java.io.IOException("can't open the file")
                 }
             }
-            header.fold(
+            scanning = false
+            if (!isActive) return@launch
+            scan.fold(
                 onSuccess = { showForm(u, it) },
                 onFailure = { showMessage(getString(R.string.import_unreadable, it.message ?: it.javaClass.simpleName)) },
             )
         }
+    }
+
+    private fun showScanning(done: Long?) {
+        showMessage(
+            if (done == null) getString(R.string.import_reading)
+            else getString(R.string.import_scanning, Formatter.formatFileSize(this, done)),
+        )
+        scaffold.content.addView(tonalButton(getString(R.string.action_cancel)) { finish() },
+            verticalLp(WRAP_CONTENT, WRAP_CONTENT))
     }
 
     private fun showMessage(text: String) {
@@ -102,12 +128,22 @@ class ImportActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
     }
 
-    private fun showForm(u: Uri, h: DistroImporter.Header) {
-        val m = h.manifest
-        val meta = h.metadata
+    /** The picked document's name, for the default label. */
+    private fun displayName(u: Uri): String? = runCatching {
+        contentResolver.query(u, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    }.getOrNull()
+
+    private fun showForm(u: Uri, scan: DistroImporter.Scan) {
+        val hostAbi = HostArch.primaryAbi()
+        val header = scan.header
+        // The settings that travel: an export's, or a damaged one's if
+        // its metadata parsed.
+        val meta = header?.metadata ?: scan.metadata?.takeIf { it.method == TawcrootMethod.KEY }
+        val facts = scan.facts
+        val known = meta != null && DistroImporter.knownDistro(meta.distro, hostAbi)
         val pad = pad()
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val distro = DistroRegistry.forInstallation(meta)
 
         fun row(label: String, value: String) {
             val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -122,35 +158,61 @@ class ImportActivity : AppCompatActivity() {
             form.addView(r, verticalLp(MATCH_PARENT, WRAP_CONTENT, bottomMargin = pad / 2))
         }
 
-        fun note(text: String, error: Boolean = false) {
+        fun note(text: String, error: Boolean = false, warning: Boolean = false) {
             form.addView(TextView(this).apply {
                 this.text = text
                 textSize = 13f
-                if (error) {
-                    setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorError))
-                } else {
-                    alpha = 0.75f
+                when {
+                    error -> setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorError))
+                    warning -> setTextColor(ContextCompat.getColor(context, R.color.tawc_warning))
+                    else -> alpha = 0.75f
                 }
             }, verticalLp(MATCH_PARENT, WRAP_CONTENT, bottomMargin = pad / 2))
         }
 
-        row(getString(R.string.import_row_distro),
-            "${distro?.displayName ?: meta.distro} (${distro?.linuxArch ?: meta.arch})")
-        row(getString(R.string.import_row_original_label), DistroRegistry.displayLabel(meta))
-        if (m.createdAtMillis > 0) {
+        // Kind banner: only a damaged export gets one; "unsupported"
+        // shows in the Distro row.
+        val osName = facts?.osName ?: getString(R.string.import_unknown_distro)
+        val customName = if (meta != null && !known) {
+            DistroRegistry.forInstallation(meta)?.displayName ?: meta.osName ?: meta.distro
+        } else osName
+        if (scan.kind == DistroImporter.Kind.DAMAGED_EXPORT) {
+            note(getString(R.string.import_banner_damaged, scan.problems.joinToString("; ")), warning = true)
+        }
+
+        val arch = RootfsFacts.linuxArch(facts?.abi ?: meta?.arch ?: hostAbi)
+        val distroValue = if (known) {
+            val name = DistroRegistry.forInstallation(meta!!.copy(arch = hostAbi))?.displayName ?: meta.distro
+            getString(R.string.import_value_distro, name, arch)
+        } else getString(R.string.import_value_unsupported, customName, arch)
+        row(getString(R.string.import_row_distro), distroValue)
+        if (meta != null) row(getString(R.string.import_row_original_label), DistroRegistry.displayLabel(meta))
+        val m = header?.manifest ?: scan.manifest
+        if (m != null && m.createdAtMillis > 0) {
             row(getString(R.string.import_row_exported), DateFormat.getDateTimeInstance().format(Date(m.createdAtMillis)))
         }
-        row(getString(R.string.import_row_from_app), "${m.sourcePackage} v${m.appVersionName}")
-        row(getString(R.string.import_row_size), Formatter.formatFileSize(this, m.uncompressedBytes))
+        if (m != null) row(getString(R.string.import_row_from_app), "${m.sourcePackage} v${m.appVersionName}")
+        facts?.libc?.let { row(getString(R.string.import_row_libc), it) }
+        row(getString(R.string.import_row_size), Formatter.formatFileSize(this, scan.uncompressedBytes))
 
-        val problem = DistroImporter.incompatibility(h, DistroImporter::hostRunnable)
+        val problem = header?.let { DistroImporter.incompatibility(it, hostAbi) }
+
+        // What probably won't work.
+        if (facts != null) {
+            if (facts.libc == RootfsFacts.LIBC_MUSL) note(getString(R.string.import_warn_musl), warning = true)
+            if (!facts.hasBash) note(getString(R.string.import_warn_no_bash), warning = true)
+            if (facts.abi == null) note(getString(R.string.import_warn_no_arch), warning = true)
+        }
+        if (scan.kind != DistroImporter.Kind.EXPORT) note(getString(R.string.import_warn_no_end_marker))
 
         // Label → id, validated like the install form.
         form.addView(TextView(this).apply { text = getString(R.string.install_label_label); textSize = 14f },
             verticalLp(MATCH_PARENT, WRAP_CONTENT))
         val labelField = EditText(this).apply {
             isSingleLine = true
-            setText(labelText ?: DistroRegistry.displayLabel(meta))
+            setText(labelText ?: meta?.let { DistroRegistry.displayLabel(it) } ?: facts?.osName
+                ?: displayName(u)?.substringBefore('.')?.takeIf { it.isNotBlank() }
+                ?: getString(R.string.import_default_label))
         }
         form.addView(labelField, verticalLp(MATCH_PARENT, WRAP_CONTENT))
         val location = TextView(this).apply {
@@ -161,21 +223,23 @@ class ImportActivity : AppCompatActivity() {
 
         // Carried settings aren't listed; only binds that won't work here
         // get a warning.
-        val carried = DistroImporter.rewrite(
-            meta, "x", null, m.sourcePackage, 0L, AllFilesAccess.declared(this),
-        )
-        val dropped = meta.externalBinds.size - carried.externalBinds.size
-        if (dropped > 0) note(getString(R.string.import_binds_dropped, dropped))
-        if (AllFilesAccess.requiresGrant(carried.externalBinds) && !AllFilesAccess.granted()) {
-            note(getString(R.string.import_binds_grant), error = true)
-        }
-        carried.externalBinds.firstOrNull { AllFilesAccess.hostDirVerifiablyMissing(it.hostPath) }?.let {
-            note(getString(R.string.import_binds_missing, it.hostPath), error = true)
+        if (meta != null) {
+            val carried = DistroImporter.rewrite(
+                meta, "x", null, "", 0L, AllFilesAccess.declared(this),
+            )
+            val dropped = meta.externalBinds.size - carried.externalBinds.size
+            if (dropped > 0) note(getString(R.string.import_binds_dropped, dropped))
+            if (AllFilesAccess.requiresGrant(carried.externalBinds) && !AllFilesAccess.granted()) {
+                note(getString(R.string.import_binds_grant), error = true)
+            }
+            carried.externalBinds.firstOrNull { AllFilesAccess.hostDirVerifiablyMissing(it.hostPath) }?.let {
+                note(getString(R.string.import_binds_missing, it.hostPath), error = true)
+            }
         }
 
-        // Advisory: the size comes from the exporter's pre-walk.
+        // Advisory: an export's size comes from the exporter's pre-walk.
         val free = runCatching { StatFs(store.baseDir.apply { mkdirs() }.path).availableBytes }.getOrNull()
-        val need = m.uncompressedBytes + m.uncompressedBytes / 10
+        val need = scan.uncompressedBytes + scan.uncompressedBytes / 10
         if (free != null && free < need) {
             note(getString(R.string.import_space_warning,
                 Formatter.formatFileSize(this, free), Formatter.formatFileSize(this, need)), error = true)

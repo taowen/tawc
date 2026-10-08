@@ -734,7 +734,9 @@ class InstallationService : Service() {
             try {
                 runInterruptible(Dispatchers.IO) {
                     publishProgress(InstallProgress(InstallStage.IMPORTING, getString(R.string.import_progress_reading)))
-                    DistroImporter.import(applicationContext, store, id, label, openInput(io), ::appendLog) { msg, pct ->
+                    DistroImporter.import(
+                        applicationContext, store, id, label, sourceName(io), openInput(io), ::appendLog,
+                    ) { msg, pct ->
                         publishProgress(InstallProgress(InstallStage.IMPORTING, msg, pct))
                     }
                 }
@@ -783,6 +785,16 @@ class InstallationService : Service() {
         is ArchiveIo.Document -> contentResolver.openOutputStream(io.uri, "wt")
             ?: throw IOException("cannot open ${io.uri} for writing")
         is ArchiveIo.Stream -> io.stream as? OutputStream ?: throw IOException("export target is not writable")
+    }
+
+    /** The picked file's display name (recorded as a custom distro's
+     *  source), or `stdin` for a broker stream. */
+    private fun sourceName(io: ArchiveIo): String = when (io) {
+        is ArchiveIo.Stream -> "stdin"
+        is ArchiveIo.Document -> runCatching {
+            contentResolver.query(io.uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        }.getOrNull() ?: io.uri.toString()
     }
 
     private fun openInput(io: ArchiveIo): InputStream = when (io) {

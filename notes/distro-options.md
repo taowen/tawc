@@ -228,7 +228,7 @@ glue we'd just have to disable.
 ### Alpine Linux
 
 - musl → libhybris doesn't work → no GPU on real devices → defeats the
-  point.
+  point. Users can still bring it as a custom import (below).
 - Could in principle be the emulator-only chroot (libhybris is disabled
   there), but maintaining two toolchains for that isn't worth it.
 - postmarketOS proves Alpine works fine for desktop Wayland in
@@ -287,6 +287,20 @@ ruled out for the same reason as Alpine.
 
 Either x86_64-only, ARMv7-focused (not aarch64), or too small a team
 to rely on. Mentioned only because people ask.
+
+## Custom imports (unsupported)
+
+Any rootfs tarball can be imported as a `custom` distro
+([installation.md](installation.md) "Custom distros"). What works:
+tawcroot spawns, the terminal (bash, else `/bin/sh`), export, and the
+files `TawcInstaller` drops into every rootfs (ando, sftp-server,
+libhybris). What doesn't: no `configure` step (only DNS,
+`/tmp`, `/root` and shell stubs), no package-manager setup, and the
+graphics backend is whatever the global setting says. glibc rootfses
+can use libhybris like any distro (if their Mesa/glvnd layout fits);
+musl ones (Alpine, Void-musl, Chimera) can't — the form and distro
+info warn to use the CPU backend. A per-distro backend override would
+be the real fix. Foreign-arch rootfses are refused.
 
 ## Summary
 

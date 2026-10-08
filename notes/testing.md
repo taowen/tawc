@@ -56,7 +56,7 @@ prerequisites are. As of writing the modules are:
 | `settings`      | `cpu`       | Runtime settings coverage: output scale, configure-state policy, and GTK3 broken menus workaround. |
 | `tawcroot`      | n/a         | tawcroot device-side smokes (wraps the cleat-driven suite). |
 | `remote`        | n/a         | Remote access ([remote-access.md](remote-access.md)): inert before any start; the live-relay test (`ssh -J sshyeet.com` from the host, Stop hangs up) runs only with `TAWC_LIVE_RELAY=1` (`--cfg tawc_live_relay`, needs network on target and host). |
-| `distro_export` | n/a         | Distro export/import ([installation.md](installation.md) "Export / import"): link-store round trip, carried settings, quiesce, truncated archive, delete-after-export; a cross-package half imports into a side-by-side peer app id. Real proxy installs, so opt-in only: `TAWC_EXPORT_TESTS=1` (`--cfg tawc_export_tests`), plus `TAWC_EXPORT_PEER_PACKAGE=<id>` for the peer half (`--cfg tawc_export_peer`). |
+| `distro_export` | n/a         | Distro export/import ([installation.md](installation.md) "Export / import"): link-store round trip, carried settings, quiesce, truncated archive, delete-after-export; custom distros (Alpine minirootfs + Debian LXC rootfs fetched through the proxy, re-export, re-packed export); a cross-package half imports into a side-by-side peer app id. Real proxy installs, so opt-in only: `TAWC_EXPORT_TESTS=1` (`--cfg tawc_export_tests`), plus `TAWC_EXPORT_PEER_PACKAGE=<id>` for the peer half (`--cfg tawc_export_peer`). |
 | `uninstall_wipe` | n/a        | Wipe-engine edge cases against a *fabricated* KB-scale slot (mount gate, su-retry ladder). Rooted target only. |
 
 **Persistent-state policy.** Integration tests must not mutate state

@@ -84,7 +84,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
      *       -b /apex:/apex:ro [-b /vendor:/vendor:ro ...] \
      *       [-b <filesDir>/libhybris:/usr/lib/hybris:ro ...] \
      *       -b <appData>/share:/usr/share/tawc \
-     *       -- /bin/bash -lc <command>
+     *       -- /usr/bin/env -i K=V… /bin/bash -lc <command>
      *
      * Bind set mirrors [ProotMethod] minus the proot-only tweaks
      * (`/dev/shm`, link2symlink, kill-on-exit), plus `:ro` on the
@@ -104,7 +104,8 @@ class TawcrootMethod(context: Context) : InstallationMethod {
      * nothing the host JVM (or Android's launcher chain) inherited
      * leaks through — the bash sees exactly [RootfsEnv]'s map. `bash
      * -lc` still runs the distro-shipped /etc/profile + profile.d so
-     * locale and package PATH additions still apply.
+     * locale and package PATH additions still apply. A rootfs without
+     * bash gets `/bin/sh` ([RootShell.command]).
      */
     override fun startInside(rootfs: String, command: String?, graphics: GraphicsBackend?): Process {
         val externalBinds = externalBindsFor(rootfs)
@@ -117,7 +118,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
                 rootfs, graphics, assetBinds, externalBinds, andoHostDir,
                 RootShell.resolve(File(rootfs)),
             ))
-            add(RootShell.DEFAULT)
+            add(RootShell.command(File(rootfs)))
             if (command != null) {
                 add("-lc"); add(command)
             } else {
@@ -125,7 +126,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
             }
         }
         return ProcessBuilder(argv)
-            .directory(File(tmpdir))
+            .directory(File(homeCwd(rootfs, tmpdir)))
             .also {
                 it.environment().clear()
                 it.environment()["TMPDIR"] = tmpdir
@@ -174,7 +175,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
      * control works. TERM/COLORTERM ride after [RootfsEnv]'s map
      * because the pipe-stdio paths share that map and aren't ttys.
      *
-     * [hostEnv] / [cwd] carry the same TMPDIR/tmpdir [startInside]
+     * [hostEnv] / [cwd] carry the same TMPDIR and cwd [startInside]
      * sets on the host-side tawcroot process (see [prepareSpawn]) —
      * though unlike [startInside]'s cleared ProcessBuilder env, the
      * termux JNI putenv()s entries over the inherited app environment.
@@ -193,7 +194,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
      * bash/zsh/fish/dash/ksh alike. Command sessions stay on bash: the
      * Exec line, the caller's hold-open trailer and the profile
      * scripts all assume POSIX-or-better shell syntax that fish
-     * doesn't speak.
+     * doesn't speak; a rootfs without bash gets `/bin/sh`.
      */
     fun ptyShellExec(
         rootfs: String,
@@ -206,7 +207,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
             add("TERM=xterm-256color")
             add("COLORTERM=truecolor")
             if (command != null) {
-                add(RootShell.DEFAULT)
+                add(env.commandShell)
                 add("-lc"); add(command)
             } else {
                 add(env.shell)
@@ -218,11 +219,12 @@ class TawcrootMethod(context: Context) : InstallationMethod {
 
     /**
      * The tawcroot spawn envelope with no program baked in: [argv] runs up
-     * to and including the rootfs env (`… -- /usr/bin/env -i -C /root
-     * K=V …`), so callers append more `K=V` args and then the program.
-     * [shell] is root's resolved passwd shell ([RootShell.resolve]);
+     * to and including the rootfs env (`… -- /usr/bin/env -i K=V …`),
+     * so callers append more `K=V` args and then the program. [shell]
+     * is root's resolved passwd shell ([RootShell.resolve]),
+     * [commandShell] what `-lc` commands run ([RootShell.command]);
      * [hostEnv]/[cwd] are for the host-side tawcroot process (see
-     * [prepareSpawn]). The in-app terminal and remote access
+     * [prepareSpawn] and [homeCwd]). The in-app terminal and remote access
      * (me.phie.tawc.remote, which hands this to native as JSON) spawn
      * from it; the caller owns setsid.
      */
@@ -231,6 +233,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
         val shell: String,
         val hostEnv: List<String>,
         val cwd: String,
+        val commandShell: String,
     )
 
     fun spawnEnvelope(rootfs: String, graphics: GraphicsBackend? = null): SpawnEnvelope {
@@ -240,7 +243,9 @@ class TawcrootMethod(context: Context) : InstallationMethod {
         val tmpdir = prepareSpawn(rootfs, assetBinds, externalBinds)
         val shell = RootShell.resolve(File(rootfs))
         val argv = rootfsArgv(rootfs, graphics, assetBinds, externalBinds, andoHostDir, shell)
-        return SpawnEnvelope(argv, shell, listOf("TMPDIR=$tmpdir"), tmpdir)
+        return SpawnEnvelope(
+            argv, shell, listOf("TMPDIR=$tmpdir"), homeCwd(rootfs, tmpdir), RootShell.command(File(rootfs)),
+        )
     }
 
     /**
@@ -296,7 +301,21 @@ class TawcrootMethod(context: Context) : InstallationMethod {
         return tmpdir
     }
 
-    /** `<tawcroot> -r <rootfs> -b … -- /usr/bin/env -i -C /root K=V …`
+    /**
+     * Host cwd for a guest that should start in `/root`: tawcroot maps
+     * the kernel cwd `<rootfs>/root` to guest `/root`, which replaces
+     * `env -C /root` (GNU-only). Falls back to [tmpdir] (guest `/tmp`)
+     * when `/root` is missing and can't be made, or is a symlink (an
+     * absolute one would land outside the rootfs).
+     */
+    private fun homeCwd(rootfs: String, tmpdir: String): String {
+        val home = File(rootfs, RootfsEnv.GUEST_HOME.removePrefix("/"))
+        val path = home.toPath()
+        if (!java.nio.file.Files.exists(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) home.mkdirs()
+        return if (java.nio.file.Files.isDirectory(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) home.path else tmpdir
+    }
+
+    /** `<tawcroot> -r <rootfs> -b … -- /usr/bin/env -i K=V …`
      * — the shared spawn prefix up to (and including) the rootfs env;
      * callers append the program to run. `SHELL` in that env is root's
      * passwd shell even on the bash-only command paths, so scripts and
@@ -319,6 +338,7 @@ class TawcrootMethod(context: Context) : InstallationMethod {
             RootfsEnv.Method.TAWCROOT,
             graphics ?: Settings.graphicsBackend,
             shell,
+            chdir = false,
         ))
     }
 

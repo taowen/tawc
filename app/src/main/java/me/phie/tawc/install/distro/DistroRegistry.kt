@@ -41,12 +41,13 @@ object DistroRegistry {
      * User-facing name for an installation: the user's label if set,
      * else the distro's default label (what the install form would
      * have pre-filled, e.g. "Arch") for legacy records that predate
-     * the label field, else a raw "<distro> (<arch>)" fall-back for
-     * unknown-distro records.
+     * the label field, else a custom import's os-release name, else a
+     * raw "<distro> (<arch>)" fall-back for unknown-distro records.
      */
     fun displayLabel(inst: Installation): String =
         inst.label
             ?: forInstallation(inst)?.defaultLabel
+            ?: inst.osName
             ?: "${inst.distro.replaceFirstChar { it.titlecase() }} (${inst.arch})"
 
     /**

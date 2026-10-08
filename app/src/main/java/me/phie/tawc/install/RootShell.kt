@@ -10,23 +10,34 @@ import java.nio.file.Files
  * terminal (wmww/tawc#7). The rootfs is app-uid-owned under tawcroot,
  * so this is a plain host-side file read — no rootfs entry needed.
  *
- * Falls back to [DEFAULT] whenever the answer isn't a usable shell:
+ * Falls back to [command] whenever the answer isn't a usable shell:
  * missing/unreadable passwd, no `root` line, empty shell field, or a
  * shell that doesn't resolve to an existing executable inside the
  * rootfs (`chsh` to a shell later uninstalled is the common case).
  * Only interactive terminal tabs use the result; every command spawn
- * stays on bash (notes/terminal.md).
+ * stays on [command] (notes/terminal.md).
  */
 internal object RootShell {
     const val DEFAULT = "/bin/bash"
+    const val FALLBACK = "/bin/sh"
 
     /** Symlink hops before we call it a loop. */
     private const val MAX_HOPS = 40
 
     fun resolve(rootfs: File): String {
-        val shell = passwdShell(rootfs) ?: return DEFAULT
-        val target = resolveInRootfs(rootfs, shell) ?: return DEFAULT
-        return if (target.isFile && target.canExecute()) shell else DEFAULT
+        val shell = passwdShell(rootfs) ?: return command(rootfs)
+        return if (executable(rootfs, shell)) shell else command(rootfs)
+    }
+
+    /** The shell command spawns run (`-lc`): [DEFAULT] (bash), or
+     *  [FALLBACK] in a rootfs without bash (custom imports, e.g.
+     *  Alpine). Both take `-l` / `-c`. */
+    fun command(rootfs: File): String =
+        if (!executable(rootfs, DEFAULT) && executable(rootfs, FALLBACK)) FALLBACK else DEFAULT
+
+    private fun executable(rootfs: File, path: String): Boolean {
+        val target = resolveInRootfs(rootfs, path) ?: return false
+        return target.isFile && target.canExecute()
     }
 
     /** Field 7 of the first `root` line of `<rootfs>/etc/passwd`, or
@@ -58,7 +69,7 @@ internal object RootShell {
      * symlink loop; a path that simply doesn't exist comes back as a
      * non-existent File for the caller to test.
      */
-    private fun resolveInRootfs(rootfs: File, path: String): File? {
+    fun resolveInRootfs(rootfs: File, path: String): File? {
         val remaining = ArrayDeque(path.split('/').filter { it.isNotEmpty() })
         var resolved = ""
         var hops = 0

@@ -106,12 +106,12 @@ catches the rest and reports `failed`).
 ### Spawning
 
 `TawcrootMethod.spawnEnvelope` returns the tawcroot argv up to and
-including the guest env (`… -- /usr/bin/env -i -C /root K=V …`), the
+including the guest env (`… -- /usr/bin/env -i K=V …`), the
 resolved root shell, and the host-side `TMPDIR`/cwd; the terminal's
 `ptyShellExec` is built on it too. Native appends `TERM`, `SSH_CLIENT`,
 `SSH_CONNECTION` and any client `env` requests (well-formed names only),
-then `<shell> -l`, `/bin/bash -lc <cmd>` (like every command spawn, see
-[terminal.md](terminal.md)), or `/usr/lib/tawc/sftp-server` (below;
+then `<shell> -l`, `<command_shell> -lc <cmd>` (bash, or `/bin/sh` in a
+rootfs without it; like every command spawn, see [terminal.md](terminal.md)), or `/usr/lib/tawc/sftp-server` (below;
 falling back to a distro OpenSSH's for a rootfs not yet refreshed). The
 envelope is built at Start, so bind edits apply from the next Start.
 

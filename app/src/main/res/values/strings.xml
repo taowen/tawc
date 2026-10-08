@@ -260,6 +260,7 @@
     <string name="export_progress_done_deleting">Exported; deleting the distro&#8230;</string>
     <string name="import_progress_reading">Reading archive&#8230;</string>
     <string name="import_progress_extracting">Importing: %1$s / %2$s</string>
+    <string name="import_progress_extracting_unknown">Importing: %1$s</string>
     <string name="import_progress_done">Imported</string>
     <string name="import_cancel_title">Cancel import of \'%1$s\'?</string>
     <string name="import_cancel_message">Cancelling will stop the import and remove the partly imported files at\n%1$s.\nThe archive itself is not touched.</string>
@@ -276,6 +277,18 @@
     <string name="export_dialog_export_delete">Export &amp; delete</string>
     <string name="title_import_distro">Import distro</string>
     <string name="import_reading">Reading archive&#8230;</string>
+    <string name="import_scanning">Scanning archive&#8230; %1$s read</string>
+    <string name="import_unknown_distro">unknown distro</string>
+    <string name="import_default_label">Custom</string>
+    <string name="import_banner_damaged">Damaged TAWC export: %1$s. It will be imported as-is.</string>
+    <string name="import_value_distro">%1$s (%2$s)</string>
+    <string name="import_value_unsupported">%1$s (%2$s, unsupported)</string>
+    <string name="distro_info_unsupported">%1$s (unsupported)</string>
+    <string name="import_row_libc">libc</string>
+    <string name="import_warn_musl">musl libc: GPU acceleration is unavailable; use the CPU graphics backend.</string>
+    <string name="import_warn_no_bash">No bash: terminals and commands use /bin/sh.</string>
+    <string name="import_warn_no_arch">Couldn\'t tell the CPU architecture (no programs in /bin or /usr/bin).</string>
+    <string name="import_warn_no_end_marker">This archive has no end marker, so a cut-off copy is only caught if the archive stream itself breaks.</string>
     <string name="import_unreadable">Can\'t import this file: %1$s</string>
     <string name="import_row_distro">Distro</string>
     <string name="import_row_original_label">Exported as</string>

@@ -265,9 +265,12 @@ class DistroArchiveTest {
     @Test
     fun incompatibilityChecks() {
         val h = DistroImporter.Header(manifest(), meta)
-        assertNull(DistroImporter.incompatibility(h) { _, _ -> true })
-        assertNotNull(DistroImporter.incompatibility(h) { _, _ -> false })
-        assertNotNull(DistroImporter.incompatibility(h.copy(metadata = meta.copy(method = "proot"))) { _, _ -> true })
+        assertNull(DistroImporter.incompatibility(h, "arm64-v8a"))
+        assertNotNull(DistroImporter.incompatibility(h, "x86_64"))
+        assertNotNull(DistroImporter.incompatibility(h.copy(metadata = meta.copy(method = "proot")), "arm64-v8a"))
+        // A distro this build doesn't know (newer app, custom) passes on arch alone.
+        assertNull(DistroImporter.incompatibility(h.copy(metadata = meta.copy(distro = "fedora")), "arm64-v8a"))
+        assertNull(DistroImporter.incompatibility(h.copy(metadata = meta.copy(distro = "custom")), "arm64-v8a"))
     }
 
     @Test

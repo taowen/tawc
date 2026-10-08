@@ -343,3 +343,144 @@ fn test_distro_export_import_cross_package() {
     assert!(out.status.success(), "peer uninstall failed:\n{}", text(&out));
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// Fetch `url` through the dev mirror proxy (`https://h/p` →
+/// `…/proxy/https/h/p`) to `dest` on the host.
+fn fetch(url: &str, dest: &std::path::Path) {
+    let (scheme, rest) = url.split_once("://").unwrap();
+    let proxied = format!("http://127.0.0.1:8080/proxy/{scheme}/{rest}");
+    let st = std::process::Command::new("curl")
+        .args(["-sfL", "-o"])
+        .arg(dest)
+        .arg(&proxied)
+        .status()
+        .expect("run curl");
+    assert!(st.success(), "fetch {proxied} failed (is scripts/cache-proxy.sh running?)");
+}
+
+fn fetch_text(url: &str, tmp: &std::path::Path) -> String {
+    let p = tmp.join("index.txt");
+    fetch(url, &p);
+    std::fs::read_to_string(&p).unwrap()
+}
+
+fn host_sh_ok(script: &str) {
+    let st = std::process::Command::new("sh").args(["-c", script]).status().expect("run sh");
+    assert!(st.success(), "host `{script}` failed");
+}
+
+/// Plain rootfs tarballs as custom distros (notes/installation.md
+/// "Custom distros"): an Alpine minirootfs (musl, BusyBox, no bash, a
+/// `./` prefix) and a Debian LXC rootfs (glibc, xz), each run as a
+/// command and as a login shell fed on stdin; then an exported custom
+/// distro re-imports as custom, and the same export re-packed with
+/// `tar` imports as a damaged export.
+#[test]
+#[cfg_attr(not(tawc_export_tests), ignore = "downloads rootfs tarballs: TAWC_EXPORT_TESTS=1")]
+fn test_custom_distro_import() {
+    const ALP: &str = "custtest-alpine";
+    const DEB: &str = "custtest-debian";
+    const REX: &str = "custtest-reexport";
+    const RTR: &str = "custtest-retar";
+    let tmp = std::env::temp_dir().join(format!("tawc-custtest-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    for id in [ALP, DEB, REX, RTR] {
+        uninstall(id);
+    }
+    let abi = String::from_utf8(adb::shell("getprop ro.product.cpu.abi").unwrap().stdout).unwrap();
+    let (alpine_arch, lxc_arch) = if abi.trim() == "x86_64" { ("x86_64", "amd64") } else { ("aarch64", "arm64") };
+
+    // --- downloads -------------------------------------------------------
+    let alp_base = format!("https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/{alpine_arch}/");
+    let yaml = fetch_text(&format!("{alp_base}latest-releases.yaml"), &tmp);
+    let alp_file = yaml
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("file: "))
+        .find(|f| f.starts_with("alpine-minirootfs-"))
+        .expect("no minirootfs in latest-releases.yaml")
+        .to_string();
+    let alp_tar = tmp.join("alpine.tar.gz");
+    fetch(&format!("{alp_base}{alp_file}"), &alp_tar);
+    let lxc_base = format!("https://images.linuxcontainers.org/images/debian/trixie/{lxc_arch}/default/");
+    let index = fetch_text(&lxc_base, &tmp);
+    let build = index
+        .split("href=\"")
+        .skip(1)
+        .filter_map(|s| s.split('"').next())
+        .filter(|h| h.starts_with("20") && h.ends_with('/'))
+        .last()
+        .expect("no build in the LXC index")
+        .to_string();
+    let deb_tar = tmp.join("debian.tar.xz");
+    fetch(&format!("{lxc_base}{build}rootfs.tar.xz"), &deb_tar);
+
+    // --- Alpine: musl, no bash -------------------------------------------
+    let (code, log) = import(ALP, "Custtest Alpine", &alp_tar);
+    assert_eq!(code, 0, "alpine import failed:\n{log}");
+    assert!(log.contains("musl"), "no musl note:\n{log}");
+    let meta = metadata(ALP);
+    for want in ["\"distro\": \"custom\"", "\"bootstrapFlavor\": \"imported\"", "\"libc\": \"musl\"", "\"osId\": \"alpine\""] {
+        assert!(meta.contains(want), "{want} missing:\n{meta}");
+    }
+    assert_eq!(run_ok(ALP, "pwd; echo $0").split_whitespace().collect::<Vec<_>>(), ["/root", "/bin/sh"]);
+    assert!(run_ok(ALP, "cat /etc/resolv.conf").contains("nameserver"));
+    assert_eq!(run_ok(ALP, "stat -c %a /tmp /root").split_whitespace().collect::<Vec<_>>(), ["1777", "700"]);
+    let login = |id: &str| {
+        let out = exec_broker::run_capture_with_input(
+            Invocation {
+                foreground_app: false,
+                request: Request::RunInside {
+                    install_id: id.to_string(),
+                    cmd: String::new(),
+                    op_title: None,
+                    graphics: None,
+                },
+            },
+            b"echo \"login:$(pwd)\"; exit\n",
+        )
+        .expect("login shell");
+        text(&out)
+    };
+    assert!(login(ALP).contains("login:/root"), "alpine login shell:\n{}", login(ALP));
+
+    // --- Debian: glibc, bash ----------------------------------------------
+    let (code, log) = import(DEB, "Custtest Debian", &deb_tar);
+    assert_eq!(code, 0, "debian import failed:\n{log}");
+    let meta = metadata(DEB);
+    assert!(meta.contains("\"libc\": \"glibc\"") && meta.contains("\"osId\": \"debian\""), "{meta}");
+    assert_eq!(run_ok(DEB, "pwd; echo $0").split_whitespace().collect::<Vec<_>>(), ["/root", "/bin/bash"]);
+    assert!(run_ok(DEB, "cat /etc/resolv.conf").contains("nameserver"));
+    run_ok(DEB, "test -f /root/.bash_profile && dpkg -s bash >/dev/null");
+    assert!(login(DEB).contains("login:/root"), "debian login shell:\n{}", login(DEB));
+    uninstall(DEB);
+
+    // --- an exported custom distro stays custom ---------------------------
+    let archive = tmp.join("alpine.tawc.tar.zst");
+    let (code, log) = export(ALP, &[], Some(&archive), || {});
+    assert_eq!(code, 0, "export failed:\n{log}");
+    let (code, log) = import(REX, "Custtest Reexport", &archive);
+    assert_eq!(code, 0, "re-import failed:\n{log}");
+    assert!(metadata(REX).contains("\"distro\": \"custom\""), "{}", metadata(REX));
+    assert_eq!(run_ok(REX, "echo ok").trim(), "ok");
+    uninstall(REX);
+
+    // --- re-packed export: damaged, imported as-is ------------------------
+    let unpacked = tmp.join("unpacked");
+    std::fs::create_dir_all(&unpacked).unwrap();
+    let retar = tmp.join("retar.tar.gz");
+    host_sh_ok(&format!(
+        "tar --zstd -xf '{}' -C '{}' && tar -C '{}' -czf '{}' .",
+        archive.display(),
+        unpacked.display(),
+        unpacked.display(),
+        retar.display()
+    ));
+    let (code, log) = import(RTR, "Custtest Retar", &retar);
+    assert_eq!(code, 0, "re-packed import failed:\n{log}");
+    assert!(log.contains("damaged TAWC export"), "no damaged-export note:\n{log}");
+    assert_eq!(run_ok(RTR, "pwd").trim(), "/root");
+    uninstall(RTR);
+
+    uninstall(ALP);
+    let _ = host_sh_ok(&format!("chmod -R u+rwX '{}' && rm -rf '{}'", tmp.display(), tmp.display()));
+}
