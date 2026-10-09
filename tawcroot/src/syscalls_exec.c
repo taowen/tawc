@@ -1,8 +1,8 @@
 /* SIGSYS dispatch handlers for `execve` / `execveat`.
  *
  * Wires the guest's exec syscalls into exec_handler.h's prepare
- * (build an exec_state memfd, under exec_lock) + commit (re-exec
- * tawcroot with --exec-child, after unlock) pair.
+ * (build an exec_state memfd) + commit (re-exec tawcroot with
+ * --exec-child) pair. Each call owns its staging buffers.
  *
  * The handlers themselves are small adapters: they pull pointers and
  * argv/envp arrays out of the guest's saved registers, copy strings
@@ -105,43 +105,22 @@ static long collect_array(char *const *guest_arr,
 	}
 }
 
-/* Path buffers, pointer arrays, and prepare's metadata staging remain
- * static to fit the handler stack; string storage is mapped per exec.
- * SIGSYS handlers run concurrently on
- * multiple guest threads (sa_mask only masks the trapping thread), and
- * a CLONE_VM child exec'ing while a sibling execs shares this address
- * space, so two concurrent execs could interleave writes into these
- * buffers. Serialize the collect→serialize phase with a spinlock.
- *
- * The lock MUST be released before the execveat commit point — hence
- * the prepare/commit split in exec_handler.h. An earlier revision held
- * it across the execveat ("the winner never unlocks, the address space
- * is replaced anyway"), which is wrong for posix_spawn children:
- * CLONE_VM|CLONE_VFORK shares the parent's memory, so the lock the
- * exec'ing child left set persisted in the parent — and in every later
- * fork snapshot — wedging the family's next exec in this spin forever
- * (Firefox: glxtest posix_spawn leaked the lock, the startup-crash
- * relaunch fork+execve then hung). commit() touches no shared statics,
- * so running it unlocked is safe. */
-static volatile int g_exec_lock;
-
-static void exec_lock(void)
-{
-	while (__atomic_test_and_set(&g_exec_lock, __ATOMIC_ACQUIRE)) {
-		/* spin — exec is rare and terminal */
-	}
-}
-
-static void exec_unlock(void)
-{
-	__atomic_clear(&g_exec_lock, __ATOMIC_RELEASE);
-}
+/* Private mappings keep the signal stack small without a global lock
+ * that a concurrent fork could inherit permanently locked. They also
+ * isolate staging for CLONE_VM / posix_spawn children. */
+struct exec_scratch {
+	char path[EXEC_PATH_CAP];
+	char resolved[EXEC_PATH_CAP];
+	char suffix[EXEC_PATH_CAP];
+	const char *argv[MAX_ARGS + 1];
+	const char *envp[MAX_ENV + 1];
+};
 
 /* Common path: parse arg0 = path pointer, arg1 = argv, arg2 = envp;
  * collect strings; call prepare. Returns the serialized exec_state
- * memfd (>= 0) for the caller to commit after unlocking, or -errno
+ * memfd (>= 0) for the caller to commit after freeing staging, or -errno
  * to write back to the guest as the syscall return. */
-static long do_exec_path(const char *path,
+static long do_exec_path(struct exec_scratch *scratch, const char *path,
                          char *const *guest_argv, char *const *guest_envp)
 {
 	if (!path) return TAWC_EFAULT;
@@ -163,8 +142,8 @@ static long do_exec_path(const char *path,
 	if (tawc_loader_mmap_is_err((uintptr_t)mapping)) return mapping;
 	char *strings = (char *)(uintptr_t)mapping;
 	size_t argv_bytes = 0, env_bytes = 0;
-	static const char *argv_ptrs[MAX_ARGS + 1];
-	static const char *envp_ptrs[MAX_ENV + 1];
+	const char **argv_ptrs = scratch->argv;
+	const char **envp_ptrs = scratch->envp;
 	long argc = collect_array(guest_argv, strings, budget,
 	                          argv_ptrs, MAX_ARGS, max_string, &argv_bytes);
 	if (argc < 0) { rc = argc; goto done; }
@@ -185,16 +164,16 @@ done:
 	return rc;
 }
 
-static long do_exec(const void *guest_path,
+static long do_exec(struct exec_scratch *scratch, const void *guest_path,
                     char *const *guest_argv, char *const *guest_envp)
 {
 	if (!guest_path) return TAWC_EFAULT;
 
-	static char path_buf[EXEC_PATH_CAP];
-	long pn = tawc_copy_string_from_guest(path_buf, sizeof path_buf,
+	char *path_buf = scratch->path;
+	long pn = tawc_copy_string_from_guest(path_buf, sizeof scratch->path,
 	                                      (const char *)guest_path);
 	if (pn < 0) return pn;
-	return do_exec_path(path_buf, guest_argv, guest_envp);
+	return do_exec_path(scratch, path_buf, guest_argv, guest_envp);
 }
 
 /* execve(path, argv, envp). Both x86_64 (NR 59) and aarch64 (NR 221)
@@ -208,10 +187,14 @@ static long do_exec(const void *guest_path,
 static long handle_execve(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
-	exec_lock();
-	long r = do_exec((const void *)args->a, (char *const *)args->b,
+	long mapping = tawc_mmap(0, sizeof(struct exec_scratch),
+		TAWC_MM_PROT_READ | TAWC_MM_PROT_WRITE,
+		TAWC_MM_MAP_PRIVATE | TAWC_MM_MAP_ANON, -1, 0);
+	if (tawc_loader_mmap_is_err((uintptr_t)mapping)) return mapping;
+	struct exec_scratch *scratch = (void *)(uintptr_t)mapping;
+	long r = do_exec(scratch, (const void *)args->a, (char *const *)args->b,
 	                 (char *const *)args->c);
-	exec_unlock();
+	tawc_munmap(scratch, sizeof *scratch);
 	if (r < 0) return r;
 	/* commit() returns only on failure; on success it execveats away —
 	 * past the rescue wrapper, which would then never put back a mode
@@ -224,42 +207,42 @@ static long handle_execve(const tawcroot_syscall_args *args, ucontext_t *uc)
 /* execveat(dirfd, path, argv, envp, flags). Handles the common fexecve(3)
  * shape: execveat(fd, "", argv, envp, AT_EMPTY_PATH), plus dirfd-relative
  * non-empty paths that can be reverse-translated into the rootfs view. */
-static long execveat_path(const char *path, const tawcroot_syscall_args *args)
+static long execveat_path(struct exec_scratch *scratch, const char *path, const tawcroot_syscall_args *args)
 {
 	if ((int)args->e & AT_SYMLINK_NOFOLLOW) {
-		static char suffix[EXEC_PATH_CAP];
+		char *suffix = scratch->suffix;
 		tawcroot_path_result r = tawcroot_path_translate(path, suffix,
-			sizeof suffix, TAWCROOT_PATH_NOFOLLOW, TAWCROOT_PATH_INTENT_READ);
+			sizeof scratch->suffix, TAWCROOT_PATH_NOFOLLOW, TAWCROOT_PATH_INTENT_READ);
 		if (r.err) return r.err;
 		char target;
 		long n = tawc_readlinkat(r.base_fd, suffix[0] ? suffix : ".", &target, 1);
 		if (n >= 0) return TAWC_ELOOP;
 		if (n != TAWC_EINVAL) return n;
 	}
-	return do_exec_path(path, (char *const *)args->c, (char *const *)args->d);
+	return do_exec_path(scratch, path, (char *const *)args->c, (char *const *)args->d);
 }
 
-static long execveat_locked(const tawcroot_syscall_args *args)
+static long do_execveat(struct exec_scratch *scratch, const tawcroot_syscall_args *args)
 {
 	int dirfd = (int)args->a;
 	int flags = (int)args->e;
 
 	if (flags & ~(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)) return TAWC_EINVAL;
 
-	static char guest_path[EXEC_PATH_CAP];
-	long pn = tawc_copy_string_from_guest(guest_path, sizeof guest_path,
+	char *guest_path = scratch->path;
+	long pn = tawc_copy_string_from_guest(guest_path, sizeof scratch->path,
 	                                      (const char *)args->b);
 	if (pn < 0) return pn;
 
 	if (guest_path[0] == '/' || (dirfd == AT_FDCWD && guest_path[0])) {
-		return execveat_path(guest_path, args);
+		return execveat_path(scratch, guest_path, args);
 	}
 
 	if (guest_path[0] == 0 && !(flags & AT_EMPTY_PATH))
 		return TAWC_ENOENT;
 
-	static char resolved[EXEC_PATH_CAP];
-	long rn = tawcroot_fd_to_guest_abs(dirfd, resolved, sizeof resolved);
+	char *resolved = scratch->resolved;
+	long rn = tawcroot_fd_to_guest_abs(dirfd, resolved, sizeof scratch->resolved);
 	if (rn < 0) return rn;
 
 	if (guest_path[0] != 0) {
@@ -267,22 +250,26 @@ static long execveat_locked(const tawcroot_syscall_args *args)
 		long ar = 0;
 		if (len == 0) return TAWC_EINVAL;
 		if (resolved[len - 1] != '/')
-			ar = tawc_str_append(resolved, sizeof resolved,
+			ar = tawc_str_append(resolved, sizeof scratch->resolved,
 			                     &len, "/");
-		if (!ar) ar = tawc_str_append(resolved, sizeof resolved,
+		if (!ar) ar = tawc_str_append(resolved, sizeof scratch->resolved,
 		                              &len, guest_path);
 		if (ar < 0) return ar;
 	}
 
-	return execveat_path(resolved, args);
+	return execveat_path(scratch, resolved, args);
 }
 
 static long handle_execveat(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	(void)uc;
-	exec_lock();
-	long r = execveat_locked(args);
-	exec_unlock();
+	long mapping = tawc_mmap(0, sizeof(struct exec_scratch),
+		TAWC_MM_PROT_READ | TAWC_MM_PROT_WRITE,
+		TAWC_MM_MAP_PRIVATE | TAWC_MM_MAP_ANON, -1, 0);
+	if (tawc_loader_mmap_is_err((uintptr_t)mapping)) return mapping;
+	struct exec_scratch *scratch = (void *)(uintptr_t)mapping;
+	long r = do_execveat(scratch, args);
+	tawc_munmap(scratch, sizeof *scratch);
 	if (r < 0) return r;
 	/* See handle_execve. */
 	tawcroot_rescue_restore();

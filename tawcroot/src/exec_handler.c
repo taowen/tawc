@@ -26,6 +26,18 @@
  * shebang-expansion slack. Matches proctitle.c's bounce sizing. */
 #define EXEC_TITLE_BUF_SIZE  ((16 + 64 + 4) * 1024)
 
+struct prepare_scratch {
+	struct tawc_loader_image image;
+	const char *bind_src[TAWCROOT_EXEC_STATE_MAX_BINDS];
+	const char *bind_dst[TAWCROOT_EXEC_STATE_MAX_BINDS];
+	unsigned char bind_ro[TAWCROOT_EXEC_STATE_MAX_BINDS];
+	char shm_names[TAWCROOT_EXEC_STATE_MAX_SHM][TAWCROOT_SHM_NAME_MAX + 1];
+	const char *shm_name[TAWCROOT_EXEC_STATE_MAX_SHM];
+	int shm_fd[TAWCROOT_EXEC_STATE_MAX_SHM];
+	char executable_path[16 * 1024];
+	char title[EXEC_TITLE_BUF_SIZE];
+};
+
 /* Validate an exec-probe fd the way execve(2) would validate the file:
  * directories are EISDIR, non-regular files and files with no execute
  * bit at all are EACCES. The O_RDONLY open alone passes for mode-644
@@ -50,23 +62,20 @@ static long probe_check_executable(int fd, unsigned *mode)
  * machine. A wrong-arch / malformed / too-short file is -ENOEXEC, which
  * is what the kernel returns and what makes a shell fall back to `sh
  * file`. */
-static long classify_elf(int fd)
+static long classify_elf(int fd, struct tawc_loader_image *img)
 {
 	uint8_t ebuf[sizeof(tawc_elf64_ehdr)];
 	long n = tawc_pread64(fd, ebuf, sizeof ebuf, 0);
 	if (n != (long)sizeof ebuf) return TAWC_ENOEXEC;
-	/* Static: ~900 bytes, and this sits at the bottom of the recursive
-	 * shebang chain on the guest stack. Caller holds exec_lock. */
-	static struct tawc_loader_image img;
-	if (tawc_loader_parse_ehdr(ebuf, sizeof ebuf, &img) != 0)
+	if (tawc_loader_parse_ehdr(ebuf, sizeof ebuf, img) != 0)
 		return TAWC_ENOEXEC;  /* bad magic / class / unknown machine */
 	/* The parser accepts both supported machines (its unit tests are
 	 * cross-arch); the RUN decision is ours. Without this, an x86_64
 	 * binary in an aarch64 rootfs passes the probe and the loader
 	 * jumps into foreign code post-commit — SIGILL instead of the
 	 * kernel-shaped ENOEXEC a shell needs for its fallback. */
-	if (img.e_machine != TAWC_EM_HOST) return TAWC_ENOEXEC;
-	if (img.e_type != TAWC_ET_EXEC && img.e_type != TAWC_ET_DYN)
+	if (img->e_machine != TAWC_EM_HOST) return TAWC_ENOEXEC;
+	if (img->e_type != TAWC_ET_EXEC && img->e_type != TAWC_ET_DYN)
 		return TAWC_ENOEXEC;
 	return 0;
 }
@@ -87,7 +96,8 @@ static long classify_elf(int fd)
  * `title_extra` accumulates the bytes the loader's shebang resolution
  * will PREPEND to argv (interpreter path + optional shebang arg, per
  * level), so the proctitle can reserve arg-region space for them. */
-static long classify_loadable(int fd, int depth, size_t *title_extra)
+static long classify_loadable(int fd, int depth, size_t *title_extra,
+                             struct tawc_loader_image *img)
 {
 	if (depth > TAWC_SHEBANG_MAX_DEPTH) return TAWC_ELOOP;
 
@@ -95,7 +105,7 @@ static long classify_loadable(int fd, int depth, size_t *title_extra)
 	long n = tawc_pread64(fd, magic, 2, 0);
 	if (n < 0) return n;
 	if (n < 2 || !(magic[0] == '#' && magic[1] == '!'))
-		return classify_elf(fd);
+		return classify_elf(fd, img);
 
 	/* Shebang: parse the line, open the interpreter through the view,
 	 * require it executable, and recurse. */
@@ -110,14 +120,15 @@ static long classify_loadable(int fd, int depth, size_t *title_extra)
 	long ifd = tawcroot_open_in_view(interp);
 	if (ifd < 0) return ifd;  /* missing interpreter → ENOENT, etc. */
 	long ck = probe_check_executable((int)ifd, NULL);
-	if (ck == 0) ck = classify_loadable((int)ifd, depth + 1, title_extra);
+	if (ck == 0) ck = classify_loadable((int)ifd, depth + 1, title_extra, img);
 	tawc_close((int)ifd);
 	return ck;
 }
 
 static long prepare(const char *path, int argc,
                                    const char *const *argv,
-                                   const char *const *envp, int *executable_fd)
+	                                   const char *const *envp, int *executable_fd,
+                                       struct prepare_scratch *scratch)
 {
 	if (!path || !argv || !envp || argc < 0) return TAWC_EINVAL;
 
@@ -148,7 +159,7 @@ static long prepare(const char *path, int argc,
 		 * so a non-ELF non-script, a missing shebang interpreter, or a
 		 * wrong-arch ELF returns a clean errno to the guest instead of
 		 * killing it with a loader exit code post-execveat. */
-		if (ck == 0) ck = classify_loadable((int)probe, 0, &title_extra);
+		if (ck == 0) ck = classify_loadable((int)probe, 0, &title_extra, &scratch->image);
 		if (ck == 0) {
 			unsigned char magic[4];
 			if (TAWC_RAW(TAWC_SYS_pread64, probe, (long)magic, 4, 0, 0, 0) == 4 &&
@@ -175,17 +186,12 @@ static long prepare(const char *path, int argc,
 	 * handler-less and against the host filesystem — guest's
 	 * post-exec syscalls would either crash (no SIGSYS handler) or
 	 * route to host paths (no rootfs_fd). */
-	/* Static: over a kilobyte of pointer/name staging would bust the
-	 * handler frame cap (stack_budget.h). Exec stages through static
-	 * buffers — callers hold exec_lock (thread-safety note in
-	 * exec_handler.h). */
-	static const char *bind_src_arr[TAWCROOT_EXEC_STATE_MAX_BINDS];
-	static const char *bind_dst_arr[TAWCROOT_EXEC_STATE_MAX_BINDS];
-	static unsigned char bind_ro_arr[TAWCROOT_EXEC_STATE_MAX_BINDS];
-	static char shm_name_buf[TAWCROOT_EXEC_STATE_MAX_SHM]
-	                        [TAWCROOT_SHM_NAME_MAX + 1];
-	static const char *shm_name_arr[TAWCROOT_EXEC_STATE_MAX_SHM];
-	static int         shm_fd_arr[TAWCROOT_EXEC_STATE_MAX_SHM];
+	const char **bind_src_arr = scratch->bind_src;
+	const char **bind_dst_arr = scratch->bind_dst;
+	unsigned char *bind_ro_arr = scratch->bind_ro;
+	char (*shm_name_buf)[TAWCROOT_SHM_NAME_MAX + 1] = scratch->shm_names;
+	const char **shm_name_arr = scratch->shm_name;
+	int *shm_fd_arr = scratch->shm_fd;
 	tawcroot_exec_state_extras extras = { 0 };
 	extras.executable_fd_plus_one = (uint32_t)*executable_fd + 1;
 
@@ -207,9 +213,9 @@ static long prepare(const char *path, int argc,
 		extras.rootfs_host = tawcroot_rootfs_host_path;
 		/* /proc/self/exe names the opened file, not the source fd path
 		 * that may disappear at exec. AT_EXECFN still uses `path`. */
-		static char executable_path[16 * 1024];
+		char *executable_path = scratch->executable_path;
 		long resolved = tawcroot_fd_to_guest_abs(*executable_fd,
-			executable_path, sizeof executable_path);
+			executable_path, sizeof scratch->executable_path);
 		extras.guest_exe = resolved >= 0 ? executable_path : path;
 		/* Hardlink-emulation store: ferry the ORIGINAL store path.
 		 * Deriving from rootfs_host in the child would be wrong
@@ -290,9 +296,8 @@ static long prepare(const char *path, int argc,
 	 * Only the LENGTH matters; the content (space-joined guest argv,
 	 * truncated or space-padded to length) is visible only in the µs
 	 * between the execveat and the loader's rewrite, or if the loader
-	 * dies mid-bootstrap. Static: caller holds exec_lock
-	 * (thread-safety note in exec_handler.h). */
-	static char title_buf[EXEC_TITLE_BUF_SIZE];
+	 * dies mid-bootstrap. */
+	char *title_buf = scratch->title;
 	{
 		char fdtmp[24];
 		int fdlen = tawc_int_to_str(fdtmp, sizeof fdtmp, (int)mfd);
@@ -308,7 +313,7 @@ static long prepare(const char *path, int argc,
 			want += (argc > 0 ? tawc_strlen(argv[0]) : 0) + 1;
 
 		size_t tlen = want > overhead + 1 ? want - 1 - overhead : 0;
-		if (tlen > sizeof title_buf - 1) tlen = sizeof title_buf - 1;
+		if (tlen > sizeof scratch->title - 1) tlen = sizeof scratch->title - 1;
 
 		size_t pos = 0;
 		for (int i = 0; i < argc && argv[i] && pos < tlen; i++) {
@@ -366,8 +371,14 @@ long tawcroot_exec_handler_prepare(const char *path, int argc,
                                    const char *const *argv,
                                    const char *const *envp)
 {
+	long mapping = tawc_mmap(0, sizeof(struct prepare_scratch),
+		TAWC_MM_PROT_READ | TAWC_MM_PROT_WRITE,
+		TAWC_MM_MAP_PRIVATE | TAWC_MM_MAP_ANON, -1, 0);
+	if (tawc_loader_mmap_is_err((uintptr_t)mapping)) return mapping;
+	struct prepare_scratch *scratch = (void *)(uintptr_t)mapping;
 	int executable_fd = -1;
-	long result = prepare(path, argc, argv, envp, &executable_fd);
+	long result = prepare(path, argc, argv, envp, &executable_fd, scratch);
+	tawc_munmap(scratch, sizeof *scratch);
 	if (result < 0 && executable_fd >= 0) tawc_close(executable_fd);
 	return result;
 }
@@ -393,7 +404,7 @@ static long commit(int mfd)
 	 * at "tawcroot --exec-child <fd>" (see proctitle.h). Entry
 	 * classification only looks at argv[1] and argv[2], so argv[0] is
 	 * free payload. The pointer targets the mmap'd state (NOT a shared
-	 * static — commit runs without exec_lock; see header note); the
+	 * static); the
 	 * kernel copies argv strings before the old mm goes away. */
 	char fdstr[24];
 	if (tawc_int_to_str(fdstr, sizeof fdstr, (int)mfd) <= 0) {
@@ -443,9 +454,7 @@ static long commit(int mfd)
 					while (q < end && *q) q++;
 					if (q < end) arg0 = p;
 				}
-				/* Pointer array in a private anon mapping —
-				 * commit runs unlocked and may touch no shared
-				 * statics (see header note). */
+				/* Each commit owns its environment pointer array. */
 				if (h->envc <= TAWCROOT_EXEC_STATE_MAX_ENV) {
 					size_t need = ((size_t)h->envc + 1) *
 					              sizeof(char *);

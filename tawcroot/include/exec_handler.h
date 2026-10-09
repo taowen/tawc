@@ -27,33 +27,23 @@
  *     - Validates the target like execve would (openable, regular
  *       file, some execute bit; directories are -EISDIR).
  *     - Creates non-CLOEXEC memfd, writes exec_state, rewinds.
- *     - Returns the memfd (>= 0) or -errno. Stages through static
- *       buffers — callers hold syscalls_exec.c's exec_lock.
+ *     - Returns the memfd (>= 0) or -errno. Owns temporary mappings
+ *       for staging, released before returning.
  *
  *   `tawcroot_exec_handler_commit(mfd)`
  *     - Opens /proc/self/exe, execveat-s self with
- *       `--exec-child <fdstr>`. Touches no shared statics — callers
- *       must have RELEASED exec_lock first (see below).
+ *       `--exec-child <fdstr>`. Touches no shared staging buffers.
  *     - On success: never returns (control transfers to the new
  *       tawcroot incarnation).
  *     - On failure: closes mfd and returns -errno. Caller (the SIGSYS
  *       handler) surfaces this back to the guest as the result of its
  *       `execve` syscall.
  *
- * The handler uses raw_sys.h for every syscall. The exec path stages
- * paths, pointer arrays and metadata in static buffers; argument strings
- * and serialized state use temporary mappings released before commit;
- * a process-global spinlock in syscalls_exec.c (exec_lock) serializes
- * the static-buffer phase so two concurrent execs — or a CLONE_VM
- * child exec'ing while the parent execs — can't interleave.
- *
- * The phase split exists because the lock must be RELEASED before the
- * execveat commit point. A posix_spawn child (CLONE_VM|CLONE_VFORK)
- * shares the parent's address space; a lock still held when the child
- * execveats away is leaked set in the PARENT's memory (and via fork
- * snapshots into every later child), so the next exec anywhere in the
- * family spins forever. Firefox hit exactly this: glxtest is
- * posix_spawn'd, then the startup-crash relaunch fork+execve hung.
+ * The handler uses raw_sys.h for every syscall. Paths, pointer arrays,
+ * metadata and strings live in per-call mappings, not shared statics.
+ * No staging lock can leak across posix_spawn or be inherited locked
+ * by a fork concurrent with another thread's exec. The phase split
+ * lets callers release temporary mappings before the terminal exec.
  */
 
 #pragma once
