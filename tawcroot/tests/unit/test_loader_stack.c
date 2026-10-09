@@ -73,6 +73,7 @@ static struct tawc_loader_stack_input make_input(int argc,
 		.at_clktck   = 100,
 		.at_hwcap    = 0xbfebfbff,
 		.at_hwcap2   = 0x2,
+		.at_minsigstksz = 20480,
 		.at_sysinfo_ehdr = 0x7ffff7ffd000ull,
 		.at_flags    = 0,
 	};
@@ -187,6 +188,8 @@ test(stack_auxv_required_entries_present)
 	test_true(aux_find(auxv, TAWC_AT_HWCAP2, &v));
 	test_true(aux_find(auxv, TAWC_AT_CLKTCK, &v));
 	test_true(aux_find(auxv, TAWC_AT_SYSINFO_EHDR, &v));
+	test_true(aux_find(auxv, TAWC_AT_MINSIGSTKSZ, &v));
+	test_int_eq((int)v, 20480);
 
 	munmap(region, 8 * 1024);
 }
@@ -200,6 +203,7 @@ test(stack_auxv_optional_omitted_when_zero)
 	in.at_hwcap  = 0;
 	in.at_hwcap2 = 0;
 	in.at_sysinfo_ehdr = 0;
+	in.at_minsigstksz = 0;
 
 	uint8_t *region = alloc_region(8 * 1024);
 	struct tawc_loader_stack_out out;
@@ -212,6 +216,7 @@ test(stack_auxv_optional_omitted_when_zero)
 	test_false(aux_find(auxv, TAWC_AT_HWCAP, NULL));
 	test_false(aux_find(auxv, TAWC_AT_HWCAP2, NULL));
 	test_false(aux_find(auxv, TAWC_AT_SYSINFO_EHDR, NULL));
+	test_false(aux_find(auxv, TAWC_AT_MINSIGSTKSZ, NULL));
 
 	munmap(region, 8 * 1024);
 }

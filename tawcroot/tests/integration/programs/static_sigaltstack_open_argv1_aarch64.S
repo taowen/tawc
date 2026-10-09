@@ -17,6 +17,25 @@ _start:
 	cmp     x0, #2
 	b.lt    .Lfail_argc
 	ldr     x19, [sp, #16]
+	mov     x21, #ALT_SIZE
+#ifdef USE_AUX_ALT_SIZE
+	add     x9, sp, #16
+	add     x9, x9, x0, lsl #3
+5:	ldr     x10, [x9], #8
+	cbnz    x10, 5b
+6:	ldr     x10, [x9]
+	cbz     x10, .Lfail_sas
+	cmp     x10, #51
+	b.eq    7f
+	add     x9, x9, #16
+	b       6b
+7:	ldr     x21, [x9, #8]
+	cmp     x21, #16384
+	b.lo    .Lfail_sas
+	mov     x10, #(STACK_LO-ALT_OFF)
+	cmp     x21, x10
+	b.hi    .Lfail_sas
+#endif
 
 	/* mmap(NULL, REGION, PROT_READ|PROT_WRITE,
 	 *      MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) */
@@ -32,13 +51,12 @@ _start:
 	b.hi    .Lfail_mmap
 	mov     x20, x0
 
-	/* sigaltstack({R+ALT_OFF, 0, ALT_SIZE}, NULL) — itself trapped, so
-	 * it runs on the original stack, before the poisoning. */
+	/* Install the application's native alternate stack before poisoning. */
 	ldr     x0, =ss
 	add     x9, x20, #ALT_OFF
 	str     x9, [x0]
 	str     xzr, [x0, #8]
-	mov     x9, #ALT_SIZE
+	mov     x9, x21
 	str     x9, [x0, #16]
 	mov     x1, #0
 	mov     x8, #132
@@ -81,7 +99,7 @@ _start:
 	ldr     w9, [x1, #8]
 	cbnz    w9, .Lfail_readback
 	ldr     x9, [x1, #16]
-	mov     x10, #ALT_SIZE
+	mov     x10, x21
 	cmp     x9, x10
 	b.ne    .Lfail_readback
 

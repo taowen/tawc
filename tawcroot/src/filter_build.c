@@ -83,6 +83,11 @@ long tawcroot_build_filter(struct sock_filter *prog, size_t prog_cap,
 	 * floor → traps → handler forwards the real close → kernel EBADF,
 	 * which is correct). */
 	EMIT_OR_FAIL(TAWC_BPF_S(BPF_LD | BPF_W | BPF_ABS, 0));
+	/* Guest signal handlers can edit ucontext directly, bypassing
+	 * sigprocmask. Sanitize their restored mask; our own returns use the
+	 * allowlisted raw stub and do not recursively trap. */
+	EMIT_OR_FAIL(TAWC_BPF_J(BPF_JMP | BPF_JEQ | BPF_K, TAWC_SYS_rt_sigreturn, 0, 1));
+	EMIT_OR_FAIL(TAWC_BPF_S(BPF_RET | BPF_K, SECCOMP_RET_TRAP));
 
 	for (size_t t = 0; t < n_traps; t++) {
 		/* Never route shared-VM thread stack switches through a C handler. */

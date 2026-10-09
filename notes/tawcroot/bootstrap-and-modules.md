@@ -161,7 +161,6 @@ tawcroot/                            # everything tawcroot-specific lives here
 │   ├── raw_sys.h       # tawc_<syscall> wrappers
 │   ├── shm.h           # /dev/shm emulation (memfd-backed name table)
 │   ├── signal_shadow.h # guest SIGSYS sigaction/sigmask virtualization
-│   ├── sigalt.h        # guest sigaltstack floor (SA_ONSTACK handler)
 │   ├── supervisor.h    # shared per-process bootstrap (prod + --exec-child)
 │   ├── syscalls_{control,exec,fs,socket}.h # handler registration entries
 │   ├── sysnr.h         # per-arch syscall numbers
@@ -193,7 +192,6 @@ tawcroot/                            # everything tawcroot-specific lives here
 │   ├── proc_shadow.c   # /proc shadow memfds + stat/statx/access, one classifier
 │   ├── shm.c           # /dev/shm emulation
 │   ├── signal_shadow.c # SIGSYS sigaction/sigmask shadow state
-│   ├── sigalt.c        # undersized-altstack substitution slab
 │   ├── supervisor.c    # shared bootstrap: rootfs fd, binds, handler, masks
 │   ├── loader_elf.c    # ELF phdr parsing
 │   ├── loader_map.c    # PT_LOAD mmap/mprotect, AT_PHDR computation
@@ -249,4 +247,3 @@ Build artifacts (per `tawcroot/build.sh`):
   variant is what `tawcroot/test.sh --device` pushes and runs as adb
   shell; same four-layer suite, same filter syntax, same exit code as
   host mode — only the orchestrator binary changes.
-

@@ -10,10 +10,35 @@
 #include <cleat/test.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "exec_state.h"
+
+test(exec_state_all_runtime_binds_roundtrip)
+{
+    const char *argv[] = { "/bin/true", NULL }, *envp[] = { NULL };
+    const char *sources[TAWCROOT_MAX_BINDS], *destinations[TAWCROOT_MAX_BINDS];
+    char names[TAWCROOT_MAX_BINDS][32];
+    for (size_t i = 0; i < TAWCROOT_MAX_BINDS; ++i) {
+        snprintf(names[i], sizeof names[i], "/mount-%zu", i);
+        sources[i] = destinations[i] = names[i];
+    }
+    tawcroot_exec_state_extras ex = { .n_binds = TAWCROOT_MAX_BINDS,
+        .bind_src = sources, .bind_dst = destinations };
+    size_t need = tawcroot_exec_state_estimate_bytes(argv[0], 1, argv, envp, &ex);
+    void *buf = malloc(need);
+    test_nonnull(buf);
+    test_int_eq(tawcroot_exec_state_write(buf, need, argv[0], 1, argv, envp, &ex), need);
+    const char *ab[TAWCROOT_EXEC_STATE_MAX_ARGS + 1], *eb[TAWCROOT_EXEC_STATE_MAX_ENV + 1];
+    tawcroot_exec_state out;
+    test_int_eq(tawcroot_exec_state_read(buf, need, ab, eb, &out), 0);
+    test_int_eq(out.n_binds, TAWCROOT_MAX_BINDS);
+    for (size_t i = 0; i < TAWCROOT_MAX_BINDS; ++i)
+        test_str_eq(out.bind_dst[i], names[i]);
+    free(buf);
+}
 
 test(exec_state_basic_roundtrip)
 {

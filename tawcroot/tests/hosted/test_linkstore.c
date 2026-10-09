@@ -1281,6 +1281,51 @@ test(linkstore_shm_bind_publish_keeps_inode)
 	th_teardown(&v);
 }
 
+test(linkstore_private_bind_names_share_inode_and_survive_cleanup)
+{
+	th_view v;
+	th_setup(&v, "ls-private");
+	/* Keep the production instance layout, with a separate guest-data
+	 * directory next to the store. The broad bind aliases that data. */
+	char data[4300];
+	snprintf(data, sizeof data, "%s/private", v.root);
+	test_int_eq(mkdir(data, 0700), 0);
+	snprintf(g_store, sizeof g_store, "%s/private/tawcroot", v.root);
+	tawcroot_linkstore_configure(g_store);
+	test_int_eq(tawcroot_path_add_bind(data, "/private", 0), 0);
+	write_file(test_ctx, "/private/source", "original");
+	make_pair(test_ctx, "/private/source", "/private/copy");
+	struct stat a, b;
+	test_int_eq(lstat_guest("/private/source", &a), 0);
+	test_int_eq(lstat_guest("/private/copy", &b), 0);
+	test_true(a.st_ino == b.st_ino);
+	test_int_eq((long)a.st_nlink, 2);
+	write_file(test_ctx, "/private/copy", "shared");
+	check_content(test_ctx, "/private/source", "shared");
+	char guest_name[256];
+	test_true(tawcroot_path_guest_name("/private/source", guest_name, sizeof guest_name) >= 0);
+	test_str_eq(guest_name, "/private/source");
+	test_int_eq(th_sys(TAWC_SYS_symlinkat, "source", AT_FDCWD, "/private/alias", 0, 0, 0), 0);
+	test_true(tawcroot_path_guest_name("/private/alias", guest_name, sizeof guest_name) >= 0);
+	test_str_eq(guest_name, "/private/source");
+	test_int_eq(tawcroot_path_add_bind("/proc", "/proc", 0), 0);
+	int directory = open(data, O_RDONLY | O_DIRECTORY);
+	test_true(directory >= 0);
+	char fdpath[128];
+	snprintf(fdpath, sizeof fdpath, "/proc/self/fd/%d/source", directory);
+	check_content(test_ctx, fdpath, "shared");
+	close(directory);
+	make_pair(test_ctx, "/private/copy", "/private/third");
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD, "/private/copy", 0, 0, 0, 0), 0);
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD, "/private/source", 0, 0, 0, 0), 0);
+	check_content(test_ctx, "/private/third", "shared");
+	test_int_eq(lstat_guest("/private/third", &a), 0);
+	test_int_eq((long)a.st_nlink, 1);
+	test_int_eq(th_sys(TAWC_SYS_unlinkat, AT_FDCWD, "/private/third", 0, 0, 0, 0), 0);
+	store_teardown();
+	th_teardown(&v);
+}
+
 test(linkstore_bind_operands_degrade)
 {
 	th_view v;

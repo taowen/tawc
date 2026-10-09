@@ -216,6 +216,13 @@ static long prepare(const char *path, int argc,
 		char *executable_path = scratch->executable_path;
 		long resolved = tawcroot_fd_to_guest_abs(*executable_fd,
 			executable_path, sizeof scratch->executable_path);
+		/* $ORIGIN belongs to the executable's guest name, not the
+		 * directory containing the emulated hardlink's backing inode. */
+		char token[TAWCROOT_LINK_TOKEN_MAX];
+		long host = tawcroot_proc_fd_to_host_path(*executable_fd,
+			scratch->title, sizeof scratch->title);
+		if (host > 0 && tawcroot_link_host_path_token(scratch->title, token, sizeof token))
+			resolved = tawcroot_path_guest_name(path, executable_path, sizeof scratch->executable_path);
 		extras.guest_exe = resolved >= 0 ? executable_path : path;
 		/* Hardlink-emulation store: ferry the ORIGINAL store path.
 		 * Deriving from rootfs_host in the child would be wrong
@@ -249,8 +256,7 @@ static long prepare(const char *path, int argc,
 		 * to ""; passing them to --exec-child would trip
 		 * tawcroot_path_add_bind's empty-dst -EINVAL. */
 		uint32_t nb = 0;
-		for (size_t i = 0; i < tawcroot_n_binds &&
-				   nb < TAWCROOT_EXEC_STATE_MAX_BINDS; i++) {
+		for (size_t i = 0; i < tawcroot_n_binds; i++) {
 			if (!tawcroot_binds[i].active) continue;
 			bind_src_arr[nb] = tawcroot_binds[i].src;
 			bind_dst_arr[nb] = tawcroot_binds[i].dst;

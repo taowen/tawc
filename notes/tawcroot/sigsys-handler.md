@@ -393,8 +393,8 @@ hardening:
   to other signals. There is no per-thread mask shadow or TID table.
   Programs requiring a blockable SIGSYS are not supported; pretending it
   was blocked cannot provide that behavior.
-- `sigaltstack`: keep guest altstacks big enough for our `SA_ONSTACK`
-  frame. See §"Handler stack budget".
+- `sigaltstack`: native; the loader advertises the signal-stack budget.
+
 - `seccomp(SECCOMP_SET_MODE_FILTER)` and
   `prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, ...)`: accept without
   installing a filter. Check nonempty length (maximum 4096 instructions)
@@ -489,36 +489,14 @@ mid-region, one syscall, scan for the lowest clobbered word): a trapped
 ~6.2 KiB — about 4.5 KiB of kernel `rt_sigframe` plus ~1.4 KiB of
 handler chain. The kernel half grows with SVE (and xsave on x86_64).
 
-Because of that cost, guest altstacks get a floor (`src/sigalt.c`).
-`sigaltstack` is trapped, and a guest stack under `TAWC_SIGALT_MIN`
-(12 KiB aarch64, 8 KiB x86_64 — chosen so the common `SIGSTKSZ` values
-pass untouched) is swapped for a tawcroot-owned 16 KiB slot from a
-256-slot BSS slab; `sigaltstack(NULL, &old)` still reports the guest's
-own `ss_sp`/`ss_size`. On slab exhaustion the guest's stack is installed
-as-is. A slot given up on `SS_DISABLE` or replacement by a big stack
-still holds the handler's own frame, so it is retired under the tid
-and freed at that thread's next `sigaltstack` or `exit(2)`; `exit(2)`
-also frees the live slot.
-
-The handler can't forward `sigaltstack` verbatim: it runs on the
-altstack, so the kernel returns `-EPERM`. Leaving the change in
-`uc->uc_stack` for sigreturn's `restore_altstack` doesn't work either:
-x86_64 kernels (host 7.2, emulator 6.6) silently drop that edit when
-the handler ran on the altstack, though arm64 applies it. Firefox hit
-this: each thread's altstack is disabled and unmapped at thread exit,
-the disable was dropped, and the next trapped syscall's SIGSYS frame
-hit unmapped memory (forced SIGSEGV, no guest handler).
-So `handle_sigaltstack` replicates `do_sigaltstack`'s validation
-(`EPERM`/`EINVAL`/`ENOMEM`, judging on-stack-ness by the guest's SP),
-then issues the real call through `tawcroot_raw_syscall_off_stack`:
-the stub's own `syscall`/`svc` (so the filter's single IP allowlist
-entry covers it), with SP pointed at a static slot off any altstack.
-Nothing is written there — x86_64's `ret` only pops a pre-stored
-continuation, arm64's uses x30 — and the handler masks all signals.
-`uc_stack` is set to the same value so the restore is a no-op.
-Pinned by `static_sigaltstack{,_small}_open_argv1`,
-`static_sigaltstack_swap_argv1` (replace, then disable + munmap) and
-`tests/unit/test_sigalt.c`.
+`sigaltstack` runs natively. The loader advertises the kernel's
+`AT_MINSIGSTKSZ` plus 16 KiB of handler budget (a 16 KiB kernel-frame
+allowance is used when older kernels omit that auxiliary value). Applications
+must provide enough stack space; fixed undersized stacks are not substituted.
+This preserves stack addresses and metadata and lets callers disable a stack
+immediately after unmapping it without a SIGSYS frame landing on freed memory.
+Pinned by `static_sigaltstack{,_small}_open_argv1` and
+`static_sigaltstack_swap_argv1` (replace, then disable + munmap).
 
 The budget is enforced mechanically, not by convention: every
 production object compiles with `-Wframe-larger-than=1024 -Werror`

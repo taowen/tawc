@@ -18,13 +18,6 @@ extern long tawcroot_raw_syscall(long nr, long a, long b, long c,
 
 #define TAWC_RAW(nr, ...) tawcroot_raw_syscall((nr), ##__VA_ARGS__)
 
-/* Same syscall site, issued with SP pointed at a static slot instead of
- * the current stack — for calls the kernel judges by SP, i.e.
- * sigaltstack from a handler running on the altstack. Touches no stack
- * memory; caller must have all signals blocked (the SIGSYS handler
- * does). */
-extern long tawcroot_raw_syscall_off_stack(long nr, long a, long b);
-
 static inline long tawc_write(int fd, const void *buf, size_t n)
 { return TAWC_RAW(TAWC_SYS_write, fd, (long)buf, (long)n, 0, 0, 0); }
 

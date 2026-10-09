@@ -6,8 +6,8 @@
  * SP must stay untouched (exit 50 otherwise) — that is what keeps Go's
  * 2 KiB goroutine stacks alive. The default 32 KiB altstack must be
  * written to (exit 51); static_sigaltstack_small_open_argv1 includes
- * this file with an undersized ALT_SIZE, which tawcroot must swap for
- * its own stack, leaving the guest buffer clean. Either way
+ * this file using the advertised AT_MINSIGSTKSZ. Both preserve the
+ * application's stack address and use its buffer directly.
  * sigaltstack(NULL, &old) reads back the guest's values (exit 52).
  */
 
@@ -29,6 +29,24 @@ _start:
 	jl      .Lfail_argc
 	mov     16(%rsp), %r12
 
+	mov     $ALT_SIZE, %r15
+#ifdef USE_AUX_ALT_SIZE
+	lea     16(%rsp,%rax,8), %rdi
+5:	cmpq    $0, (%rdi)
+	lea     8(%rdi), %rdi
+	jne     5b
+6:	cmpq    $0, (%rdi)
+	je      .Lfail_sas
+	cmpq    $51, (%rdi)
+	je      7f
+	add     $16, %rdi
+	jmp     6b
+7:	mov     8(%rdi), %r15
+	cmp     $16384, %r15
+	jb      .Lfail_sas
+	cmp     $(STACK_LO-ALT_OFF), %r15
+	ja      .Lfail_sas
+#endif
 	/* mmap(NULL, REGION, PROT_READ|PROT_WRITE,
 	 *      MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) */
 	xor     %rdi, %rdi
@@ -48,7 +66,7 @@ _start:
 	lea     ALT_OFF(%r13), %rax
 	mov     %rax, ss(%rip)
 	movq    $0, ss+8(%rip)
-	movq    $ALT_SIZE, ss+16(%rip)
+	mov     %r15, ss+16(%rip)
 	lea     ss(%rip), %rdi
 	xor     %rsi, %rsi
 	mov     $131, %rax
@@ -91,7 +109,7 @@ _start:
 	jne     .Lfail_readback
 	cmpl    $0, oss+8(%rip)
 	jne     .Lfail_readback
-	cmpq    $ALT_SIZE, oss+16(%rip)
+	cmp     %r15, oss+16(%rip)
 	jne     .Lfail_readback
 
 	/* thread stack must be untouched */

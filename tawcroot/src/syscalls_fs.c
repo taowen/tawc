@@ -1935,20 +1935,53 @@ static long link_fallback_v1(int src_fd, const char *src_suf,
 	return orig_rv;
 }
 
-/* True when a translate result landed inside the guest view but NOT
- * the rootfs — i.e. on a bind src dirfd. Emulated names must not be
- * planted there: the orchestrator skips the symlink resolver for
- * bind-routed paths, so a token symlink inside a bind is unresolvable
- * on FOLLOW opens (the data would be marooned in the store while
- * lstat claims a regular file). linkat instead returns EXDEV after
- * a denied host link, letting tools copy without changing the source.
- * Guest-supplied dirfd passthroughs are
- * not reserved and fall through unchanged. */
-static int fs_path_in_bind(const struct fs_path *t)
+/* Bind aliases within the instance can use its link store: the bind
+ * oracle resolves tokens just like rootfs paths. External/shared binds
+ * must not acquire tokens belonging to one instance. Resolve the parent
+ * directory through the kernel so spelling aliases cannot widen ownership.
+ * The production store layout is <instance>/tawcroot. */
+static int link_path_in_instance(int fd, const char *path)
+{
+	TAWCROOT_PATH_SCRATCH_AUTO(private_scratch);
+	char *parent = private_scratch->buf[0];
+	char *host = private_scratch->buf[1];
+	char *instance = private_scratch->buf[2];
+	size_t n = tawcroot_store_host_path_len;
+	const char *store = tawcroot_store_host_path;
+	if (n < 10 || !tawc_streq(store + n - 9, "/tawcroot")) return 0;
+	memcpy(parent, store, n - 9);
+	parent[n - 9] = 0;
+	long pfd = tawc_openat(AT_FDCWD, parent, O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+	if (pfd < 0) return 0;
+	long in = tawcroot_proc_fd_to_host_path((int)pfd, instance, TAWCROOT_PATH_SCRATCH_SIZE);
+	tawc_close((int)pfd);
+	if (in <= 1) return 0;
+	if (tawc_str_copy(parent, TAWCROOT_PATH_SCRATCH_SIZE, path) < 0) return 0;
+	n = tawc_strlen(parent);
+	while (n && parent[n - 1] != '/') --n;
+	if (n) parent[n] = 0;
+	else { parent[0] = '.'; parent[1] = 0; }
+	pfd = tawc_openat(fd, parent, O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+	if (pfd < 0) return 0;
+	long hn = tawcroot_proc_fd_to_host_path((int)pfd, host, TAWCROOT_PATH_SCRATCH_SIZE);
+	tawc_close((int)pfd);
+	if (hn < in || memcmp(host, instance, (size_t)in) ||
+	    (host[in] && host[in] != '/')) return 0;
+	/* Never manufacture guest names inside the store itself. */
+	return !tawc_starts_with(host + in, "/tawcroot/") &&
+	       !tawc_streq(host + in, "/tawcroot");
+}
+
+static int fs_path_is_bound(const struct fs_path *t)
 {
 	return t->fd != tawcroot_rootfs_fd &&
 	       t->fd != tawcroot_store_link_fd &&
 	       tawcroot_fd_is_reserved(t->fd);
+}
+
+static int fs_path_in_external_bind(const struct fs_path *t)
+{
+	return fs_path_is_bound(t) && !link_path_in_instance(t->fd, t->path);
 }
 
 /* True when a translate result landed in the explicit `/dev/shm` bind.
@@ -2043,8 +2076,8 @@ static long linkat_empty_path(struct tawcroot_path_scratch *scratch,
 	if (tawcroot_link_host_path_token(hostp, tok, sizeof tok)) {
 		if (tawcroot_linkstore_state() != TAWCROOT_STORE_READY)
 			return TAWC_EPERM;
-		/* Emulated names never land in binds (fs_path_in_bind). */
-		if (fs_path_in_bind(&tnew)) return TAWC_EXDEV;
+		/* Store tokens never land in external/shared binds. */
+		if (fs_path_in_external_bind(&tnew)) return TAWC_EXDEV;
 		return tawcroot_link_add(tok, tnew.fd, tnew.path);
 	}
 	/* Linkable O_TMPFILE fd: publish (the idiom this flag exists
@@ -2080,16 +2113,16 @@ static long linkat_empty_path(struct tawcroot_path_scratch *scratch,
 					    TAWCROOT_PATH_SCRATCH_SIZE) <= 0)
 		return TAWC_EXDEV;
 
-	/* Either name landing in a bind: no token symlinks
-	 * (fs_path_in_bind). The source side is judged by host path —
-	 * in-view but not under the rootfs prefix means a bind. */
+	/* Bind names may use the store only inside this instance. The
+	 * fd-only source is checked by its canonical host path. */
 	int src_in_bind =
 		!(hn >= (long)tawcroot_rootfs_host_path_len &&
 		  memcmp(hostp, tawcroot_rootfs_host_path,
 			 tawcroot_rootfs_host_path_len) == 0 &&
 		  ((size_t)hn == tawcroot_rootfs_host_path_len ||
 		   hostp[tawcroot_rootfs_host_path_len] == '/'));
-	if (fs_path_in_bind(&tnew) || src_in_bind)
+	if (fs_path_in_external_bind(&tnew) ||
+	    (src_in_bind && !link_path_in_instance(AT_FDCWD, hostp)))
 		return TAWC_EXDEV;
 
 	switch (tawcroot_linkstore_state()) {
@@ -2100,6 +2133,8 @@ static long linkat_empty_path(struct tawcroot_path_scratch *scratch,
 		if (nrv == TAWC_EPERM &&
 		    tawcroot_linkstore_state() == TAWCROOT_STORE_DEGRADED)
 			return rv;
+		if ((nrv == TAWC_EXDEV || nrv == TAWC_EPERM) &&
+		    (src_in_bind || fs_path_is_bound(&tnew))) return nrv;
 		if (nrv == TAWC_EXDEV || nrv == TAWC_EPERM)
 			return link_fallback_v1(AT_FDCWD, hostp,
 						tnew.fd, tnew.path, rv);
@@ -2108,6 +2143,7 @@ static long linkat_empty_path(struct tawcroot_path_scratch *scratch,
 	case TAWCROOT_STORE_DEGRADED:
 		return rv;
 	default:
+		if (src_in_bind || fs_path_is_bound(&tnew)) return TAWC_EXDEV;
 		return link_fallback_v1(AT_FDCWD, hostp,
 					tnew.fd, tnew.path, rv);
 	}
@@ -2247,9 +2283,8 @@ static long handle_linkat(const tawcroot_syscall_args *args, ucontext_t *uc)
 		if (add_tok) {
 			/* Degraded store: mutations refuse; raw EPERM. */
 			if (!ready) return TAWC_EPERM;
-			/* Emulated names never land in binds (see
-			 * fs_path_in_bind). */
-			if (fs_path_in_bind(&tnew)) return TAWC_EXDEV;
+			/* Store tokens never land in external/shared binds. */
+			if (fs_path_in_external_bind(&tnew)) return TAWC_EXDEV;
 			return tawcroot_link_add(add_tok, tnew.fd, tnew.path);
 		}
 	}
@@ -2276,14 +2311,13 @@ static long handle_linkat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	 * semantics, relative targets resolving against each NAME's
 	 * directory. */
 
-	/* Bind paths are also consumed by the Android host. Token links
-	 * cannot live there, and a rename/back-symlink is not a hardlink:
-	 * deleting dst would destroy src (Gradle's NDK library clean).
-	 * Report EXDEV so ordinary hardlink-or-copy callers safely copy.
+	/* Shared/host binds cannot contain instance-owned tokens. A legacy
+	 * rename/back-symlink is not a hardlink: deleting dst destroys src.
+	 * Keep EXDEV for those paths so hardlink-or-copy callers safely copy.
 	 * Within /dev/shm, only the rename keeps sem_open working. */
 	if (fs_path_in_shm_bind(&told) && fs_path_in_shm_bind(&tnew))
 		return link_shm_bind(&told, &tnew, rv);
-	if (fs_path_in_bind(&told) || fs_path_in_bind(&tnew))
+	if (fs_path_in_external_bind(&told) || fs_path_in_external_bind(&tnew))
 		return TAWC_EXDEV;
 
 	switch (tawcroot_linkstore_state()) {
@@ -2300,6 +2334,8 @@ static long handle_linkat(const tawcroot_syscall_args *args, ucontext_t *uc)
 		if (nrv == TAWC_EPERM &&
 		    tawcroot_linkstore_state() == TAWCROOT_STORE_DEGRADED)
 			return rv;
+		if ((nrv == TAWC_EXDEV || nrv == TAWC_EPERM) &&
+		    (fs_path_is_bound(&told) || fs_path_is_bound(&tnew))) return nrv;
 		if (nrv == TAWC_EXDEV || nrv == TAWC_EPERM)
 			return link_fallback_v1(told.fd, told.path,
 						tnew.fd, tnew.path, rv);
@@ -2308,6 +2344,7 @@ static long handle_linkat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	case TAWCROOT_STORE_DEGRADED:
 		return rv;  /* newer store: raw EPERM, zero corruption */
 	default:
+		if (fs_path_is_bound(&told) || fs_path_is_bound(&tnew)) return TAWC_EXDEV;
 		return link_fallback_v1(told.fd, told.path,
 					tnew.fd, tnew.path, rv);
 	}

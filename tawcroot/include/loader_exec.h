@@ -69,7 +69,7 @@ size_t tawcroot_loader_page_size(void);
 void tawcroot_loader_set_host_auxv(uint64_t hwcap, uint64_t hwcap2,
                                    uintptr_t sysinfo_ehdr,
                                    uint64_t clktck, uint64_t flags,
-                                   uint64_t page_size);
+                                   uint64_t page_size, uint64_t minsigstksz);
 
 /* Arguments to forward to the guest as argv/envp. Passed directly to
  * the stack synthesizer.  `argv[argc]` must be NULL; `envp` must be

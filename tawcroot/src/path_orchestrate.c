@@ -103,7 +103,7 @@ static int apply_memo(char *suf, size_t cap, tawcroot_path_mode mode,
  * bind with dst "system" (would be misrouted). Returns the matched
  * bind (for the RO check at the end of the orchestration), or NULL. */
 static const struct tawcroot_bind *route_through_binds(
-				tawcroot_path_result *r, char *suf,
+				tawcroot_path_result *r, char *suf, size_t cap,
 				const struct tawcroot_bind *binds, size_t n_binds)
 {
 	size_t suf_len = tawc_strlen(suf);
@@ -117,6 +117,15 @@ static const struct tawcroot_bind *route_through_binds(
 		if (!best || b->dst_len > best->dst_len) best = b;
 	}
 	if (!best) return 0;
+	if (best->leaf[0]) {
+		if (suf_len != best->dst_len) r->err = TAWC_ENOTDIR;
+		else {
+			r->base_fd = best->src_fd;
+			long n = tawc_str_copy(suf, cap, best->leaf);
+			if (n < 0) r->err = n;
+		}
+		return best;
+	}
 
 	/* Rewrite: base_fd = best->src_fd, suffix = bytes after best->dst
 	 * (skipping any leading '/'). */
@@ -347,7 +356,8 @@ tawcroot_path_result tawcroot_path_translate_with_ctx(
 
 	/* Bind first. If matched, the bind src takes over — skip memo
 	 * and resolver, both of which are rootfs-view-only. */
-	matched = route_through_binds(&r, out_suffix, ctx->binds, ctx->n_binds);
+	matched = route_through_binds(&r, out_suffix, out_cap, ctx->binds, ctx->n_binds);
+	if (r.err || (matched && matched->leaf[0])) goto done;
 	if (r.base_fd != ctx->rootfs_base_fd) goto resolve_bind;
 
 	/* Well-known-symlink rewrite. If the rewrite kicks in, the suffix
@@ -379,7 +389,8 @@ tawcroot_path_result tawcroot_path_translate_with_ctx(
 	 * rootfs's own shadow of that subtree (conflicting symlinks, or a
 	 * file where the bind has a dir) drives resolution against the
 	 * wrong tree. */
-	matched = route_through_binds(&r, out_suffix, ctx->binds, ctx->n_binds);
+	matched = route_through_binds(&r, out_suffix, out_cap, ctx->binds, ctx->n_binds);
+	if (r.err || (matched && matched->leaf[0])) goto done;
 	if (r.base_fd != ctx->rootfs_base_fd) goto resolve_bind;
 	goto resolve;
 
@@ -424,8 +435,13 @@ resolve:
 	}
 
 	/* Final bind pass — memo may have surfaced a match. */
-	matched = route_through_binds(&r, out_suffix, ctx->binds, ctx->n_binds);
+	matched = route_through_binds(&r, out_suffix, out_cap, ctx->binds, ctx->n_binds);
 done:
+	if (r.err) return r;
+	if (matched && matched->leaf[0] && mode == TAWCROOT_PATH_PARENT_REMOVE) {
+		r.err = TAWC_EBUSY;
+		return r;
+	}
 	/* THE read-only enforcement point. Every path-bearing syscall
 	 * funnels through here; handlers only declare intent, they never
 	 * implement the refusal. Runs after the final bind route is known

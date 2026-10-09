@@ -21,7 +21,7 @@
 bool (*tawcroot_test_raw_hook)(long nr, const long args[6], long *ret);
 
 /* noinline: the asm defines a global label, so it may only be emitted
- * once (tawcroot_raw_syscall_off_stack below calls this). */
+ * once. */
 __attribute__((noinline))
 long tawcroot_raw_syscall(long nr, long a, long b, long c,
 			  long d, long e, long f)
@@ -40,7 +40,9 @@ long tawcroot_raw_syscall(long nr, long a, long b, long c,
 	/* tawcroot_raw_syscall_ret mirrors the asm stub: the label sits
 	 * immediately after the syscall insn, where the kernel reports
 	 * seccomp_data.instruction_pointer. filter.c takes its address. */
-	__asm__ volatile("syscall\n"
+	__asm__ volatile(".globl tawcroot_raw_syscall_insn\n"
+			 "tawcroot_raw_syscall_insn:\n"
+			 "syscall\n"
 			 ".globl tawcroot_raw_syscall_ret\n"
 			 "tawcroot_raw_syscall_ret:"
 			 : "=a"(ret)
@@ -56,7 +58,9 @@ long tawcroot_raw_syscall(long nr, long a, long b, long c,
 	register long x3 __asm__("x3") = d;
 	register long x4 __asm__("x4") = e;
 	register long x5 __asm__("x5") = f;
-	__asm__ volatile("svc #0\n"
+	__asm__ volatile(".globl tawcroot_raw_syscall_insn\n"
+			 "tawcroot_raw_syscall_insn:\n"
+			 "svc #0\n"
 			 ".globl tawcroot_raw_syscall_ret\n"
 			 "tawcroot_raw_syscall_ret:"
 			 : "+r"(x0)
@@ -68,17 +72,16 @@ long tawcroot_raw_syscall(long nr, long a, long b, long c,
 #endif
 }
 
-/* No SIGSYS handler (so no altstack to step off) in hosted tests. */
-long tawcroot_raw_syscall_off_stack(long nr, long a, long b)
-{
-	return tawcroot_raw_syscall(nr, a, b, 0, 0, 0, 0);
-}
-
 /* SA_RESTORER trampoline, same shape as the asm stubs'. handler.c
  * references it; hosted tests don't install the SIGSYS handler, but the
  * symbol must resolve (and stays faithful if one ever does). */
 #if defined(__x86_64__)
 __asm__(".text\n"
+	".globl tawcroot_sigreturn_from\n"
+	"tawcroot_sigreturn_from:\n"
+	"mov %rdi, %rsp\n"
+	"mov $15, %rax\n"
+	"jmp tawcroot_raw_syscall_insn\n"
 	".globl tawcroot_sigreturn_trampoline\n"
 	".type tawcroot_sigreturn_trampoline, @function\n"
 	"tawcroot_sigreturn_trampoline:\n"
@@ -87,6 +90,11 @@ __asm__(".text\n"
 	"	ud2\n");
 #elif defined(__aarch64__)
 __asm__(".text\n"
+	".globl tawcroot_sigreturn_from\n"
+	"tawcroot_sigreturn_from:\n"
+	"mov sp, x0\n"
+	"mov x8, #139\n"
+	"b tawcroot_raw_syscall_insn\n"
 	".globl tawcroot_sigreturn_trampoline\n"
 	".type tawcroot_sigreturn_trampoline, @function\n"
 	"tawcroot_sigreturn_trampoline:\n"

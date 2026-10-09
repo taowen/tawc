@@ -129,6 +129,19 @@ static uint32_t build_and_run(const int *trap_nrs, size_t n_traps,
 
 /* ---------------- prologue: arch + IP allowlist ---------------- */
 
+test(filter_guest_sigreturn_traps_but_runtime_return_does_not)
+{
+	struct test_seccomp_data d = {
+		.nr = TAWC_SYS_rt_sigreturn, .arch = TEST_AUDIT_ARCH,
+		.instruction_pointer = OUT_OF_STUB,
+	};
+	test_int_eq(build_and_run(NULL, 0, STUB_ADDR, 0, TEST_AUDIT_ARCH, &d),
+		    SECCOMP_RET_TRAP);
+	d.instruction_pointer = STUB_ADDR;
+	test_int_eq(build_and_run(NULL, 0, STUB_ADDR, 0, TEST_AUDIT_ARCH, &d),
+		    SECCOMP_RET_ALLOW);
+}
+
 test(filter_wrong_arch_returns_kill_process)
 {
 	int traps[] = { 1 };

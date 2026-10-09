@@ -12,9 +12,6 @@
  *                                filter's IP allowlist matches against it
  *                                (low and high 32 bits separately —
  *                                cBPF is 32-bit, see notes/tawcroot/seccomp-filter.md).
- *   tawcroot_raw_syscall_off_stack — same syscall site with SP moved
- *                                off the current (alt)stack; see
- *                                raw_sys.h.
  *   _start                    — kernel-direct entry. Sets up argc/argv
  *                                from the initial stack and tail-calls
  *                                tawcroot_main. No bionic init runs.
@@ -54,33 +51,6 @@ tawcroot_raw_syscall_ret:
 	ret
 	.size tawcroot_raw_syscall, .-tawcroot_raw_syscall
 
-	/* tawcroot_raw_syscall_off_stack(nr, a, b) — see raw_sys.h.
-	 * Reuses the stub's syscall instruction, so the filter's single
-	 * IP allowlist entry covers it. RSP points at a .rodata slot
-	 * holding the continuation, which the stub's `ret` pops: the
-	 * kernel sees an SP off any altstack and nothing is written. */
-	.global tawcroot_raw_syscall_off_stack
-	.hidden tawcroot_raw_syscall_off_stack
-	.type   tawcroot_raw_syscall_off_stack, @function
-tawcroot_raw_syscall_off_stack:
-	push    %rbx
-	mov     %rsp, %rbx
-	mov     %rdi, %rax
-	mov     %rsi, %rdi
-	mov     %rdx, %rsi
-	lea     .Loff_stack_slot(%rip), %rsp
-	jmp     tawcroot_raw_syscall_insn
-.Loff_stack_back:
-	mov     %rbx, %rsp
-	pop     %rbx
-	ret
-	.size tawcroot_raw_syscall_off_stack, .-tawcroot_raw_syscall_off_stack
-
-	.section .rodata
-	.balign 8
-.Loff_stack_slot:
-	.quad   .Loff_stack_back
-	.text
 
 	/* _start receives the kernel's initial stack:
 	 *   [rsp+0]  argc
@@ -130,9 +100,19 @@ _start:
 	.hidden tawcroot_sigreturn_trampoline
 	.type   tawcroot_sigreturn_trampoline, @function
 tawcroot_sigreturn_trampoline:
+	/* Runtime handlers resume through tawcroot_sigreturn_from directly. */
 	mov     $15, %rax            /* SYS_rt_sigreturn                       */
 	syscall
 	ud2                           /* unreachable                            */
 	.size tawcroot_sigreturn_trampoline, .-tawcroot_sigreturn_trampoline
+
+	.global tawcroot_sigreturn_from
+	.hidden tawcroot_sigreturn_from
+	.type tawcroot_sigreturn_from, @function
+tawcroot_sigreturn_from:
+	mov %rdi, %rsp
+	mov $15, %rax
+	jmp tawcroot_raw_syscall_insn
+	.size tawcroot_sigreturn_from, .-tawcroot_sigreturn_from
 
 	.section .note.GNU-stack,"",@progbits

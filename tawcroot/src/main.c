@@ -32,6 +32,7 @@
  */
 
 #include <stdint.h>
+#include <fcntl.h>
 
 #include <signal.h>
 #include <sys/prctl.h>
@@ -162,7 +163,7 @@ static void capture_host_auxv(int argc, char **argv)
 	while (*envp) envp++;
 	uint64_t *aux = (uint64_t *)(envp + 1);
 
-	uint64_t hwcap = 0, hwcap2 = 0, clktck = 0, flags = 0, pagesz = 0;
+	uint64_t hwcap = 0, hwcap2 = 0, clktck = 0, flags = 0, pagesz = 0, minsigstksz = 0;
 	uintptr_t sysinfo_ehdr = 0;
 
 	for (size_t i = 0; aux[i] != 0 /* AT_NULL */; i += 2) {
@@ -175,11 +176,12 @@ static void capture_host_auxv(int argc, char **argv)
 			case 17: clktck       = v; break;            /* AT_CLKTCK */
 			case 26: hwcap2       = v; break;            /* AT_HWCAP2 */
 			case 33: sysinfo_ehdr = (uintptr_t)v; break; /* AT_SYSINFO_EHDR */
+			case 51: minsigstksz  = v; break;           /* AT_MINSIGSTKSZ */
 			default: break;
 		}
 	}
 	tawcroot_loader_set_host_auxv(hwcap, hwcap2, sysinfo_ehdr,
-	                              clktck, flags, pagesz);
+	                              clktck, flags, pagesz, minsigstksz);
 }
 
 /* Tiny ASCII-decimal parser for `--exec-child <fd>`. Returns the
@@ -316,7 +318,11 @@ static void prod_rootfs_init(const char *rootfs,
 	static char store_path[4096];
 	const char *store = 0;
 	{
-		long n = tawc_str_copy(store_path, sizeof store_path, rootfs);
+		/* A rootfs alias must select the same instance store as its
+		 * canonical path; deriving from argv creates a second store. */
+		long fd = tawc_openat(AT_FDCWD, rootfs, O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+		long n = fd < 0 ? fd : tawcroot_proc_fd_to_host_path((int)fd, store_path, sizeof store_path);
+		if (fd >= 0) tawc_close((int)fd);
 		if (n > 0) {
 			/* Strip trailing '/', truncate to the parent dir
 			 * (keeping its '/'), append the store name. */
@@ -448,7 +454,7 @@ static enum tawcroot_entry classify_entry(int argc, char **argv)
 __attribute__((noreturn)) static void prod_main(int argc, char **argv)
 {
 	const char *rootfs = 0;
-	const char *bind_specs[TAWCROOT_MAX_BINDS];
+	static const char *bind_specs[TAWCROOT_MAX_BINDS];
 	size_t      n_binds   = 0;
 	int         cmd_start = -1;
 	int         host_user = 0;

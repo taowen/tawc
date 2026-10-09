@@ -10,12 +10,9 @@
  * caveat at its definition). The dispatch table handles production
  * traps; the observation slot stays around as a test/debug hatch.
  *
- * We rely on rt_sigaction directly (not bionic's libc wrapper) because
- * we link `-nostdlib`. On x86_64 the kernel mandates SA_RESTORER and a
- * user-supplied trampoline. On aarch64 the kernel falls back to a VDSO
- * trampoline only when SA_RESTORER is unset — we DO set it, so our
- * trampoline is what actually runs on both arches. It lives in
- * arch/<arch>_stub.S as `tawcroot_sigreturn_trampoline`.
+ * We use rt_sigaction directly because we link `-nostdlib`. The action
+ * supplies the restorer required by x86_64, but normal completion resumes
+ * the kernel frame directly through the allowlisted raw syscall stub.
  */
 
 #include <stddef.h>
@@ -56,6 +53,40 @@ struct kernel_sigaction {
 #endif
 
 extern void tawcroot_sigreturn_trampoline(void);
+extern __attribute__((noreturn)) void tawcroot_sigreturn_from(uintptr_t sp);
+
+/* Resume through the allowlisted syscall instruction, without another trap
+ * for our own signal return. AArch64's frame starts with 128-byte siginfo;
+ * x86_64's restorer has already popped the return address, leaving SP at uc. */
+static __attribute__((noreturn)) void resume_context(ucontext_t *uc)
+{
+    *(uint64_t *)&uc->uc_sigmask &= ~((uint64_t)1 << (SIGSYS - 1));
+#if defined(__aarch64__)
+    tawcroot_sigreturn_from((uintptr_t)uc - 128);
+#else
+    tawcroot_sigreturn_from((uintptr_t)uc);
+#endif
+}
+
+static __attribute__((noreturn)) void resume_guest_signal(ucontext_t *trap)
+{
+    uintptr_t sp = tawcroot_arch_sp(trap);
+#if defined(__aarch64__)
+    uintptr_t frame_uc = sp + 128;
+#else
+    uintptr_t frame_uc = sp;
+#endif
+    void *mask_ptr = (void *)(frame_uc + offsetof(ucontext_t, uc_sigmask));
+    uint64_t mask;
+    /* Let the kernel diagnose malformed frames. Never restore a mask that
+     * blocks syscall translation, including masks edited by a guest JIT. */
+    if (tawc_copy_from_guest(&mask, sizeof mask, mask_ptr) == 0) {
+        mask &= ~((uint64_t)1 << (SIGSYS - 1));
+        if (tawc_copy_to_guest(mask_ptr, &mask, sizeof mask) < 0)
+            tawc_exit_group(128 + SIGSEGV);
+    }
+    tawcroot_sigreturn_from(sp);
+}
 
 /* Foundation-smoke debug observation slot. Per review finding D2 the production
  * handler should not write to a mutable process-wide global on every
@@ -106,10 +137,13 @@ static void sigsys_handler(int sig, siginfo_t *info, void *ucontext)
 	 * into the same host call (which would recurse indefinitely). */
 	if (tawcroot_arch_resume_pc(uc) == (uintptr_t)tawcroot_raw_syscall_ret) {
 		tawcroot_arch_write_return(uc, TAWC_ENOSYS);
-		return;
+		resume_context(uc);
 	}
 	tawcroot_syscall_args args;
 	tawcroot_arch_read_args(uc, &args);
+	/* Do this before claiming any dispatch/rescue scratch: sigreturn does
+	 * not return through C and must not leave a live per-thread slot. */
+	if (args.nr == TAWC_SYS_rt_sigreturn) resume_guest_signal(uc);
 
 #ifdef TAWCROOT_TESTHOST
 	/* siginfo_t fields populated by the kernel for SIGSYS:
@@ -166,6 +200,7 @@ static void sigsys_handler(int sig, siginfo_t *info, void *ucontext)
 	}
 #endif
 	tawcroot_arch_write_return(uc, rv);
+	resume_context(uc);
 }
 
 #ifdef TAWCROOT_TESTHOST
@@ -196,7 +231,7 @@ long tawcroot_install_handler(void)
 	 * falls back to the current stack when it doesn't. This is what
 	 * lets small-stack runtimes work at all — Go issues syscalls from
 	 * 2 KiB goroutine stacks and installs a 32 KiB altstack per M.
-	 * handle_sigaltstack keeps guest altstacks big enough for us. */
+	 * AT_MINSIGSTKSZ advertises our additional handler budget. */
 	sa.sa_flags     = SA_SIGINFO | SA_RESTORER | SA_ONSTACK | SA_NODEFER;
 	sa.sa_restorer  = tawcroot_sigreturn_trampoline;
 	/* Allow inherited host-policy traps from the raw syscall stub to

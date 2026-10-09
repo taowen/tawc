@@ -148,6 +148,7 @@ long tawc_loader_build_stack(void *region_low, size_t region_size,
 	if (in->at_clktck)        AUX(TAWC_AT_CLKTCK, in->at_clktck);
 	if (in->at_hwcap)         AUX(TAWC_AT_HWCAP,  in->at_hwcap);
 	if (in->at_hwcap2)        AUX(TAWC_AT_HWCAP2, in->at_hwcap2);
+	if (in->at_minsigstksz)   AUX(TAWC_AT_MINSIGSTKSZ, in->at_minsigstksz);
 	if (in->at_sysinfo_ehdr)  AUX(TAWC_AT_SYSINFO_EHDR, (uint64_t)in->at_sysinfo_ehdr);
 	AUX(TAWC_AT_NULL,    0);
 	#undef AUX

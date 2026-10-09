@@ -1,73 +1,13 @@
-/* chroot(2) emulation — handler-side root-view swap.
+/* chroot(2) changes the runtime's path view, not the kernel root.
+ * Resolve and pin the target, re-anchor binds in guest coordinates, then
+ * replace the root fd/path and rebuild symlink memoization. Retain the selected
+ * guest route: reverse host lookup can choose a different alias of that directory.
  *
- * See include/chroot.h for the why; notes/tawcroot/path-translation.md §"chroot
- * emulation" for the full design. The handler:
- *
- *   1. Pulls the guest path through usercopy (EFAULT-safe).
- *   2. Translates via tawcroot_path_translate(FOLLOW). Bind/memo/
- *      symlink resolution all run; the result is a (base_fd, suffix)
- *      pair pointing at the *target* of the chroot.
- *   3. Opens that target O_PATH | O_DIRECTORY | O_CLOEXEC. Wrong
- *      kind (ENOTDIR), missing (ENOENT), permission denied — these
- *      surface to the guest verbatim; we don't sugarcoat.
- *   4. Reserves the new fd into the high-fd range via fd_reserve so
- *      the guest can't close it.
- *   5. Reads /proc/self/fd/<new_fd> for the canonical host path of
- *      the new root (kernel resolves any symlinks/binds in our
- *      openat path; we want what the kernel sees, not what we asked
- *      for).
- *   6. Calls tawcroot_path_binds_reanchor to filter the bind table:
- *      surviving binds get their dst rewritten to be relative to
- *      the new root; binds outside the new view are deactivated.
- *      The deactivated src_fds stay reserved (un-closeable from the
- *      guest) but no longer route any paths.
- *   7. Replaces tawcroot_rootfs_fd and tawcroot_rootfs_host_path.
- *      The old fd stays in the reserved table — leaking exactly one
- *      fd per chroot. The reserved-fd table is bounded
- *      (TAWCROOT_MAX_RESERVED_FDS == 64); a process that loops
- *      chroot calls will eventually exhaust the table and subsequent
- *      chroots return -ENOSPC. In every workload we target the
- *      chroot happens before execve (post-execve the table is empty
- *      again), so the cap doesn't bite. Same posture as deactivated
- *      bind src_fds.
- *   8. Rebuilds the well-known-symlink memo cache against the new
- *      root: the old cache memoized lib/lib64/usr/lib/etc against
- *      the *outer* root and is no longer correct.
- *
- * Step 6 also discards `tawcroot_path_binds_reanchor`'s aggregate
- * return value: a bind whose stripped dst would overflow `b->dst[]`
- * is silently deactivated like any outside-of-view bind, mirroring
- * the dst-too-long rejection path in `tawcroot_path_add_bind`. The
- * handler has no log channel; surfacing the ENAMETOOLONG would
- * mean wedging it into chroot's own return value, which the guest
- * would then see as a bogus chroot failure.
- *
- * Failure modes that abort the whole operation (rootfs_fd / bind
- * table left untouched):
- *   - usercopy of the guest path fails → return -EFAULT.
- *   - path translate fails → propagate that errno.
- *   - openat fails → propagate (-ENOENT / -ENOTDIR / -EACCES / …).
- *   - fd_reserve fails (table full) → return -ENOSPC; close the
- *     unreserved fd to avoid leaking.
- *   - readlink of /proc/self/fd/<new_fd> fails (very surprising —
- *     means /proc isn't mounted) → close new_fd, return -EIO.
- *
- * Steps 6/7/8 are interlocked by ordering: bind reanchoring uses
- * the OLD rootfs host path before we overwrite it, then we swap fd
- * and host_path together, then memos get refilled against the new
- * fd. A SIGSYS-handler trap on another thread mid-sequence sees a
- * (mostly) consistent view; we can't make this fully atomic without
- * locking, which the handler invariants forbid. In practice chroot
- * is a startup-time event (or a once-only hop in pacman 6.x); the
- * window is single-digit microseconds.
- *
- * pivot_root continues to be denied with -EPERM via the
- * `fake_eperm` registration in syscalls_control.c — different
- * syscall, different dispatch slot. The semantics aren't
- * emulatable in our model (pivot_root requires the new root and
- * old root to be separately mounted; we don't model mounts at
- * all), and no targeted workload hits it. The chroot handler
- * covers what we actually need.
+ * CLONE_FS peers synchronize the root path through shared_root below. Ordinary
+ * fork keeps an independent snapshot; exec transports the active bind table.
+ * Startup view changes are expected to be serialized by the caller. Old root
+ * and inactive bind fds remain reserved until exec or process exit, bounded
+ * by TAWCROOT_MAX_RESERVED_FDS. No kernel mount isolation is provided.
  */
 
 #include <stddef.h>
@@ -92,11 +32,12 @@
 
 /* Only CLONE_FS peers share this mapping. Ordinary fork snapshots the local
  * view, unshare detaches, and exec serializes the synchronized local view.
- * Store paths rather than fd numbers: peers may have separate fd tables. */
+ * Store host and guest paths: peers need both the fd and its original route. */
 struct shared_root {
     atomic_uint sequence;
     int ro;
     char path[4096];
+    char guest[4096];
 };
 static struct shared_root *shared;
 static unsigned seen;
@@ -128,7 +69,7 @@ void tawcroot_fs_detach(void)
  * returns -errno. Chroot itself is a read operation and is ALLOWED
  * into an RO bind (like the kernel); the bit is what makes the whole
  * root view read-only after the swap. */
-static long open_chroot_target(const char *guest_path, int *ro_out)
+static long open_chroot_target(const char *guest_path, int *ro_out, char *guest)
 {
 	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
 	char *path_buf = scratch->buf[0];
@@ -144,10 +85,13 @@ static long open_chroot_target(const char *guest_path, int *ro_out)
 	 * just as on Linux. Preserve ordinary bind RO checks when in view. */
 	if (r.err == TAWC_ENOENT && tawc_streq(path_buf, ".")) {
 		*ro_out = 0;
+		guest[0] = 0;
 		return tawc_openat(AT_FDCWD, ".", O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
 	}
 	if (r.err) return r.err;
 	*ro_out = r.ro;
+	long gr = tawcroot_path_route_to_guest(r.base_fd, suffix, guest, 4096);
+	if (gr < 0) return gr;
 
 	/* tawcroot_path_translate writes "" into suffix when the request
 	 * resolves to the directory base_fd already refers to (e.g.,
@@ -160,7 +104,7 @@ static long open_chroot_target(const char *guest_path, int *ro_out)
 	return tawc_openat(r.base_fd, p, flags, 0);
 }
 
-static long apply_root(long new_fd, int new_root_ro)
+static long apply_root(long new_fd, int new_root_ro, const char *guest)
 {
 	long resv = tawcroot_fd_reserve((int)new_fd);
 	if (resv < 0) {
@@ -181,13 +125,20 @@ static long apply_root(long new_fd, int new_root_ro)
 	}
 	size_t new_host_len = (size_t)hp;
 
-	/* Re-anchor binds against the new root BEFORE overwriting the
-	 * old host_path string — binds_reanchor needs the old prefix to
-	 * compute each bind's host-side coordinates. */
-	(void)tawcroot_path_binds_reanchor(
-		tawcroot_binds, tawcroot_n_binds,
-		tawcroot_rootfs_host_path, tawcroot_rootfs_host_path_len,
-		new_host, new_host_len);
+	/* Bind destinations are guest coordinates, not host paths. In particular,
+	 * /tmp may itself be a bind outside the rootfs. Re-anchor in guest space
+	 * so nested mappings survive chroot into that directory. */
+	char *new_guest = scratch->buf[1];
+	long gp;
+	if (guest && *guest) {
+		gp = (long)strlen(guest);
+		memcpy(new_guest, guest, (size_t)gp + 1);
+	} else gp = tawcroot_fd_to_guest_abs(new_root_fd, new_guest,
+	                                   TAWCROOT_PATH_SCRATCH_SIZE);
+	if (gp < 0) return gp;
+	if (!tawc_streq(new_guest, "/"))
+		(void)tawcroot_path_binds_reanchor(tawcroot_binds, tawcroot_n_binds,
+		                                  "", 0, new_guest, (size_t)gp);
 
 	/* Swap rootfs_fd + host_path.
 	 *
@@ -239,12 +190,13 @@ long tawcroot_fs_sync(void)
     if (version & 1) return TAWC_EAGAIN;
     TAWCROOT_PATH_SCRATCH_AUTO(scratch);
     memcpy(scratch->buf[0], shared->path, sizeof(shared->path));
+    memcpy(scratch->buf[1], shared->guest, sizeof(shared->guest));
     int ro = shared->ro;
     if (atomic_load_explicit(&shared->sequence, memory_order_acquire) != version)
         return TAWC_EAGAIN;
     long fd = tawc_openat(AT_FDCWD, scratch->buf[0], O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
     if (fd < 0) return fd;
-    long result = apply_root(fd, ro);
+    long result = apply_root(fd, ro, scratch->buf[1]);
     if (!result) seen = version;
     return result;
 }
@@ -254,17 +206,20 @@ static long handle_chroot(const tawcroot_syscall_args *args, ucontext_t *uc)
     (void)uc;
     if (!args->a) return TAWC_EFAULT;
     int ro = 0;
-    long fd = open_chroot_target((void *)(uintptr_t)args->a, &ro);
+    TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+    char *guest = scratch->buf[0];
+    long fd = open_chroot_target((void *)(uintptr_t)args->a, &ro, guest);
     if (fd < 0) return fd;
     unsigned version = seen;
     if (shared && !atomic_compare_exchange_strong(&shared->sequence, &version, seen + 1)) {
         tawc_close((int)fd);
         return TAWC_EAGAIN;
     }
-    long result = apply_root(fd, ro);
+    long result = apply_root(fd, ro, guest);
     if (shared) {
         if (!result) {
             memcpy(shared->path, tawcroot_rootfs_host_path, tawcroot_rootfs_host_path_len + 1);
+            memcpy(shared->guest, guest, strlen(guest) + 1);
             shared->ro = ro;
             seen += 2;
         }

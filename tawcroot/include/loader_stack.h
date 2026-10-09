@@ -71,6 +71,7 @@ extern "C" {
 #define TAWC_AT_HWCAP2       26
 #define TAWC_AT_EXECFN       31
 #define TAWC_AT_SYSINFO_EHDR 33
+#define TAWC_AT_MINSIGSTKSZ 51
 
 struct tawc_loader_stack_input {
 	/* What the guest sees as argv/envp. argv[argc] must be NULL;
@@ -101,6 +102,7 @@ struct tawc_loader_stack_input {
 	uint64_t   at_clktck;
 	uint64_t   at_hwcap;
 	uint64_t   at_hwcap2;
+	uint64_t   at_minsigstksz;    /* kernel frame plus runtime dispatch space */
 	uintptr_t  at_sysinfo_ehdr;    /* vDSO base; 0 = omit */
 
 	/* AT_FLAGS — kernel default is 0; we pass through. */

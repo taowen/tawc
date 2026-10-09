@@ -43,6 +43,7 @@
 #include "rescue.h"
 #include "sysnr.h"
 #include "tawc_uapi.h"
+#include "usercopy.h"
 
 int    tawcroot_rootfs_fd               = -1;
 int    tawcroot_root_ro                 = 0;
@@ -242,6 +243,29 @@ int tawcroot_host_path_in_ro_bind(const char *host, size_t n)
 	return best_ro;
 }
 
+long tawcroot_path_route_to_guest(int base_fd, const char *suffix,
+                                char *out, size_t out_cap)
+{
+	const char *prefix = "";
+	if (base_fd != tawcroot_rootfs_fd) {
+		const struct tawcroot_bind *bind = 0;
+		for (size_t i = 0; i < tawcroot_n_binds; ++i)
+			if (tawcroot_binds[i].active && tawcroot_binds[i].src_fd == base_fd) {
+				bind = &tawcroot_binds[i];
+				break;
+			}
+		if (!bind) return TAWC_ENOENT;
+		prefix = bind->dst;
+		if (bind->leaf[0]) suffix = "";
+	}
+	size_t n = 0;
+	long e = tawc_str_append(out, out_cap, &n, "/");
+	if (!e) e = tawc_str_append(out, out_cap, &n, prefix);
+	if (!e && *prefix && *suffix) e = tawc_str_append(out, out_cap, &n, "/");
+	if (!e) e = tawc_str_append(out, out_cap, &n, suffix);
+	return e ? e : (long)n;
+}
+
 long tawcroot_fd_to_guest_abs(int fd, char *out, size_t out_cap)
 {
 	if (fd < 0 || fd == AT_FDCWD) return TAWC_EINVAL;
@@ -338,11 +362,59 @@ void tawcroot_path_memoize_well_known(void)
 	memo_one("var/run");
 }
 
+long tawcroot_path_bind_guest(const char *source, const char *target)
+{
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	char *name = scratch->buf[0], *suffix = scratch->buf[1];
+	char *host = scratch->buf[2], *destination = scratch->buf[3];
+	long e = tawc_copy_string_from_guest(name, 4096, source);
+	if (e < 0) return e;
+	tawcroot_path_result r = tawcroot_path_translate(name, suffix, 4096,
+		TAWCROOT_PATH_FOLLOW, TAWCROOT_PATH_INTENT_READ);
+	if (r.err) return r.err;
+	long fd = tawc_openat(r.base_fd, *suffix ? suffix : ".",
+		O_PATH | O_CLOEXEC, 0);
+	if (fd < 0) return fd;
+	struct stat source_stat;
+	e = TAWC_RAW(TAWC_SYS_fstat, fd, (long)&source_stat, 0, 0, 0, 0);
+	if (e < 0) { tawc_close((int)fd); return e; }
+	int read_only = r.ro;
+	e = tawcroot_proc_fd_to_host_path((int)fd, host, 4096);
+	tawc_close((int)fd);
+	if (e < 0) return e;
+	e = tawc_copy_string_from_guest(name, 4096, target);
+	if (e < 0) return e;
+	r = tawcroot_path_translate(name, suffix, 4096,
+		TAWCROOT_PATH_FOLLOW, TAWCROOT_PATH_INTENT_READ);
+	if (r.err) return r.err;
+	fd = tawc_openat(r.base_fd, *suffix ? suffix : ".",
+		O_PATH | O_CLOEXEC, 0);
+	if (fd < 0) return fd;
+	struct stat target_stat;
+	e = TAWC_RAW(TAWC_SYS_fstat, fd, (long)&target_stat, 0, 0, 0, 0);
+	if (e < 0) { tawc_close((int)fd); return e; }
+	if (!!S_ISDIR(source_stat.st_mode) != !!S_ISDIR(target_stat.st_mode)) {
+		tawc_close((int)fd);
+		return TAWC_ENOTDIR;
+	}
+	e = tawcroot_path_route_to_guest(r.base_fd, suffix, destination, 4096);
+	tawc_close((int)fd);
+	if (e < 0) return e;
+	/* Replacing an existing bind requires explicit lifecycle handling; do not
+	 * append a hidden duplicate which would silently leave the old mapping. */
+	for (size_t i = 0; i < tawcroot_n_binds; ++i)
+		if (tawcroot_binds[i].active &&
+		    tawc_streq(tawcroot_binds[i].dst, destination + 1))
+			return TAWC_EBUSY;
+	return tawcroot_path_add_bind(host, destination, read_only);
+}
+
 long tawcroot_path_add_bind(const char *src_host, const char *dst_guest,
                             int read_only)
 {
 	if (tawcroot_n_binds >= TAWCROOT_MAX_BINDS) return TAWC_ENOSPC;
 	struct tawcroot_bind *b = &tawcroot_binds[tawcroot_n_binds];
+	if (tawc_strlen(src_host) >= sizeof b->src) return TAWC_ENAMETOOLONG;
 
 	/* Normalize dst through the lexical fold so it matches folded
 	 * suffixes at lookup time — a dst with a trailing '/', '//' runs,
@@ -368,33 +440,40 @@ long tawcroot_path_add_bind(const char *src_host, const char *dst_guest,
 
 	long fd = tawc_openat(AT_FDCWD, src_host,
 			      O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+	int is_file = fd == TAWC_ENOTDIR;
+	if (is_file) fd = tawc_openat(AT_FDCWD, src_host, O_PATH | O_CLOEXEC, 0);
 	if (fd < 0) return fd;
+	b->leaf[0] = 0;
+	long pn = tawcroot_proc_fd_to_host_path((int)fd, b->src, sizeof b->src);
+	if (pn < 0) { tawc_close((int)fd); return pn; }
+	b->src_len = (size_t)pn;
+	if (is_file) {
+		TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+		char *parent = scratch->buf[0];
+		(void)tawc_str_copy(parent, 4096, b->src);
+		size_t slash = b->src_len;
+		while (slash && parent[slash - 1] != '/') --slash;
+		if (!slash) { tawc_close((int)fd); return TAWC_EINVAL; }
+		(void)tawc_str_copy(b->leaf, sizeof b->leaf, parent + slash);
+		parent[slash == 1 ? 1 : slash - 1] = 0;
+		tawc_close((int)fd);
+		fd = tawc_openat(AT_FDCWD, parent, O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+		if (fd < 0) return fd;
+	}
 
 	long resv = tawcroot_fd_reserve((int)fd);
-	if (resv < 0) return resv;
+	if (resv < 0) {
+		tawc_close((int)fd);
+		return resv;
+	}
 
 	b->src_fd    = (int)resv;
 	b->read_only = read_only ? 1 : 0;
 	b->active    = 1;
 	b->dst_len   = n;   /* b->dst already holds the folded form */
 
-	/* Stash the host src path canonicalized through the kernel's view —
-	 * /proc/self/fd of the just-opened src_fd resolves any symlinks /
-	 * `..` / trailing slash, giving us the bytes /proc/self/fd will
-	 * later return for any dirfd opened *through* this bind. That match
-	 * is what lets dirfd_to_guest_abs reverse-translate bind-src
-	 * dirfds and clamp fd-relative `..` at the bind-dst boundary.
-	 * The canonical form is also re-openable, so it's still safe to ferry
-	 * through to --exec-child. Fallback to the raw user-supplied path
-	 * if /proc/self/fd is unavailable: the ferry still works, the
-	 * reverse-translate just won't fire for symlink-traversed srcs. */
-	{
-		long pn = tawcroot_proc_fd_to_host_path(b->src_fd, b->src,
-		                                        sizeof b->src);
-		if (pn <= 0)
-			pn = tawc_str_copy(b->src, sizeof b->src, src_host);
-		b->src_len = pn > 0 ? (size_t)pn : 0;
-	}
+	/* Keep the full canonical source for reverse translation and exec;
+	 * src_fd anchors either that directory or the file's parent. */
 	tawcroot_n_binds++;
 	return 0;
 }
@@ -482,6 +561,25 @@ static long prod_readlink_store(void *ctx, const char *token,
 static const struct tawcroot_path_oracle prod_oracle = {
 	.ctx            = 0,
 	.readlink       = prod_readlink,
+	.readlink_store = prod_readlink_store,
+};
+
+/* Canonical guest names stop at a hardlink's name, not its hidden
+ * backing object. Hardlinked symlinks still follow their actual target. */
+static long name_readlink(void *ctx, const char *suffix, char *out, size_t cap)
+{
+	long n = prod_readlink(ctx, suffix, out, cap);
+	if (n <= 0 || (size_t)n >= cap) return n;
+	out[n] = 0;
+	const char *token;
+	if (!tawcroot_link_target_is_token(out, &token)) return n;
+	char saved[TAWCROOT_LINK_TOKEN_MAX];
+	if (tawc_str_copy(saved, sizeof saved, token) < 0) return TAWC_ENAMETOOLONG;
+	return prod_readlink_store(ctx, saved, out, cap);
+}
+
+static const struct tawcroot_path_oracle name_oracle = {
+	.readlink = name_readlink,
 	.readlink_store = prod_readlink_store,
 };
 
@@ -702,10 +800,10 @@ static long ro_refusal_errno(int base_fd, const char *suffix,
 /* ---------------------------------------------------------------- */
 /* Public API                                                        */
 
-tawcroot_path_result tawcroot_path_translate(const char *guest_path,
+static tawcroot_path_result path_translate(const char *guest_path,
 					     char *out_suffix, size_t out_cap,
 					     tawcroot_path_mode mode,
-					     tawcroot_path_intent intent)
+					     tawcroot_path_intent intent, int preserve_name)
 {
 	tawcroot_path_result r;
 	r.err     = 0;
@@ -737,7 +835,7 @@ tawcroot_path_result tawcroot_path_translate(const char *guest_path,
 		.n_memos          = g_n_memo,
 		.store_link_fd    = tawcroot_store_link_fd,
 		.store_upgrade    = tawcroot_linkstore_latent_upgrade,
-		.oracle           = &prod_oracle,
+		.oracle           = preserve_name ? &name_oracle : &prod_oracle,
 		.cwd_to_guest_abs = prod_cwd_to_guest_abs,
 		.cwd_ctx          = 0,
 	};
@@ -762,15 +860,31 @@ tawcroot_path_result tawcroot_path_translate(const char *guest_path,
 		if (!proc_bind) break;
 		int kind;
 		size_t ml = tawcroot_proc_magic_link_classify(out_suffix, &kind);
-		if (ml == 0 || kind != TAWCROOT_PROC_MAGIC_ROOT_OWN) break;
+		int directory_fd = kind == TAWCROOT_PROC_MAGIC_FD_OWN && out_suffix[ml] == '/';
+		if (ml == 0 || (kind != TAWCROOT_PROC_MAGIC_ROOT_OWN && !directory_fd)) break;
 		if (!magic_link_traversed(mode, out_suffix, ml)) break;
 		if (hop >= 8) { r.err = TAWC_ELOOP; break; }
 
 		if (!rw) rw = tawcroot_path_scratch_acquire();
 		char  *next = rw->buf[0];
 		size_t pos  = 0;
-		if (tawc_str_append(next, TAWCROOT_PATH_SCRATCH_SIZE, &pos, "/") ||
-		    tawc_str_append(next, TAWCROOT_PATH_SCRATCH_SIZE, &pos,
+		if (directory_fd) {
+			/* A directory-fd traversal must see guest symlinks and link
+			 * store tokens, just like openat(fd, suffix). Bare fd links
+			 * retain kernel semantics (including unlinked open files). */
+			char *prefix = rw->buf[1], *host = rw->buf[2];
+			for (size_t i = 0; i < ml; ++i) prefix[i] = out_suffix[i];
+			prefix[ml] = 0;
+			long n = tawc_readlinkat(r.base_fd, prefix, host, TAWCROOT_PATH_SCRATCH_SIZE);
+			if (n <= 0 || n >= TAWCROOT_PATH_SCRATCH_SIZE || host[0] != '/') break;
+			long g = tawcroot_host_path_to_guest_abs(host, (size_t)n, next, TAWCROOT_PATH_SCRATCH_SIZE);
+			if (g < 0) break;
+			pos = (size_t)g;
+		} else {
+			next[pos++] = '/';
+			next[pos] = 0;
+		}
+		if (tawc_str_append(next, TAWCROOT_PATH_SCRATCH_SIZE, &pos,
 				    out_suffix + ml)) {
 			r.err = TAWC_ENAMETOOLONG;
 			break;
@@ -801,4 +915,21 @@ tawcroot_path_result tawcroot_path_translate(const char *guest_path,
 	 * a wrapper-owned slot is live on this thread. */
 	if (r.err == 0) tawcroot_rescue_note(r.base_fd, out_suffix);
 	return r;
+}
+
+tawcroot_path_result tawcroot_path_translate(const char *path, char *out,
+		size_t cap, tawcroot_path_mode mode, tawcroot_path_intent intent)
+{
+	return path_translate(path, out, cap, mode, intent, 0);
+}
+
+long tawcroot_path_guest_name(const char *path, char *out, size_t cap)
+{
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	char *suffix = scratch->buf[0];
+	tawcroot_path_result r = path_translate(path, suffix,
+		TAWCROOT_PATH_SCRATCH_SIZE, TAWCROOT_PATH_FOLLOW,
+		TAWCROOT_PATH_INTENT_READ, 1);
+	if (r.err) return r.err;
+	return tawcroot_path_route_to_guest(r.base_fd, suffix, out, cap);
 }

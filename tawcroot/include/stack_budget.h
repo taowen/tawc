@@ -1,8 +1,8 @@
 /* Handler stack budget.
  *
  * SIGSYS is SA_ONSTACK: the handler runs on the guest thread's
- * sigaltstack when it has one (floored by sigalt.c; this is how Go's
- * 2 KiB goroutine stacks survive), else on the thread's own stack,
+ * sigaltstack when it has one (Go installs a 32 KiB alternate stack),
+ * else on the thread's own stack,
  * whose size the guest chose (musl threads default to 128 KiB; the
  * supported floor is the 16 KiB pinned by tests/integration/programs/
  * static_small_stack_open_argv1.S). The kernel signal frame already

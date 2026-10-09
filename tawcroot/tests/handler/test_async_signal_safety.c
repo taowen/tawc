@@ -213,6 +213,10 @@ test(handler_c_pinned_import_list)
 		/* Sigreturn trampoline (asm). ASS — it just loads ucontext and
 		 * returns to the kernel via rt_sigreturn. */
 		"tawcroot_sigreturn_trampoline",
+		"tawcroot_sigreturn_from",
+		/* Fault-safe frame-mask access via raw process_vm_readv/writev. */
+		"tawc_copy_from_guest",
+		"tawc_copy_to_guest",
 		/* Fatal-path diagnostics for non-seccomp SIGSYS (io.c). ASS —
 		 * stack buffers + the raw write syscall, no state. Only runs
 		 * on the way to exit_group. */

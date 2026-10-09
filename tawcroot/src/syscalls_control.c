@@ -12,8 +12,7 @@
  *   - `rt_sigprocmask`: SIGSYS is reserved and cannot be blocked.
  *     Strip it from requested masks and report the actual kernel mask.
  *     No per-thread shadow or thread-exit bookkeeping is needed.
- *   - `sigaltstack`: virtualize so undersized guest altstacks never
- *     receive our SA_ONSTACK frame, applying it off-stack (sigalt.h).
+ *   - `sigaltstack`: native; loader auxv advertises the stack budget.
  *   - Other signals are unaffected.
  */
 
@@ -22,11 +21,12 @@
 #include <ucontext.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
+#include <sys/mount.h>
+#include "path.h"
 
 #include "dispatch.h"
 #include "errno_neg.h"
 #include "raw_sys.h"
-#include "sigalt.h"
 #include "signal_shadow.h"
 #include "syscalls_control.h"
 #include "sysnr.h"
@@ -273,36 +273,6 @@ static long handle_rt_sigprocmask(const tawcroot_syscall_args *args,
 	return 0;
 }
 
-static long apply_sigaltstack(const stack_t *ss)
-{
-	return tawcroot_raw_syscall_off_stack(TAWC_SYS_sigaltstack,
-					      (long)ss, 0);
-}
-
-/* sigaltstack(ss, old_ss). Never forwarded verbatim — see sigalt.h.
- * Old is copied out before anything mutates, so EFAULT leaves no
- * trace. */
-static long handle_sigaltstack(const tawcroot_syscall_args *args,
-			       ucontext_t *uc)
-{
-	const void *guest_ss  = (const void *)(uintptr_t)args->a;
-	void       *guest_old = (void *)(uintptr_t)args->b;
-	stack_t ss, old;
-
-	if (guest_ss && tawc_copy_from_guest(&ss, sizeof ss, guest_ss) < 0)
-		return TAWC_EFAULT;
-	long r = tawc_sigalt_check(&uc->uc_stack, tawcroot_arch_sp(uc),
-				   guest_ss ? &ss : NULL,
-				   guest_old ? &old : NULL);
-	if (r < 0) return r;
-	if (guest_old && tawc_copy_to_guest(guest_old, &old, sizeof old) < 0)
-		return TAWC_EFAULT;
-	if (!guest_ss) return 0;
-	long tid = TAWC_RAW(TAWC_SYS_gettid, 0, 0, 0, 0, 0, 0);
-	return tawc_sigalt_commit(&uc->uc_stack, &ss, (int)tid,
-				  apply_sigaltstack);
-}
-
 #if defined(__x86_64__)
 /* x86_64 glibc's getpgrp(3) issues the legacy getpgrp syscall, which
  * Android's untrusted_app filter RET_TRAPs (bionic only ever calls
@@ -363,6 +333,15 @@ static long handle_alarm(const tawcroot_syscall_args *args, ucontext_t *uc)
 }
 #endif
 
+static long handle_mount(const tawcroot_syscall_args *args, ucontext_t *uc)
+{
+	(void)uc;
+	/* A bounded path-view operation, not a kernel mount or security boundary.
+	 * Recursive mounts, filesystem creation and propagation remain unsupported. */
+	if ((unsigned long)args->d != MS_BIND) return TAWC_EPERM;
+	return tawcroot_path_bind_guest((const char *)args->a, (const char *)args->b);
+}
+
 void tawcroot_control_register(void)
 {
 	tawcroot_dispatch_install(TAWC_SYS_set_robust_list, handle_set_robust_list);
@@ -380,7 +359,8 @@ void tawcroot_control_register(void)
 	tawcroot_dispatch_install(TAWC_SYS_prctl,           handle_prctl);
 	tawcroot_dispatch_install(TAWC_SYS_rt_sigaction,    handle_rt_sigaction);
 	tawcroot_dispatch_install(TAWC_SYS_rt_sigprocmask,  handle_rt_sigprocmask);
-	tawcroot_dispatch_install(TAWC_SYS_sigaltstack,     handle_sigaltstack);
+	/* Keep sigaltstack native: callers may unmap their stack before
+	 * disabling it. Trapping that disable would use the unmapped stack. */
 	/* io_uring_setup: deny with -ENOSYS so guest libraries fall back to
 	 * syscall-based I/O which we can translate. The plan
 	 * (notes/tawcroot/path-translation.md "Open questions" #1) classifies a passed-through
@@ -425,15 +405,16 @@ void tawcroot_control_register(void)
 	 * state our path-translation layer assumes is fixed: pivot_root would
 	 * desync our root-relative bookkeeping (we don't model mounts, so the
 	 * "pivot the rootfs onto a sibling mount" semantics have nothing to
-	 * pivot to); mount/umount2 would tear down our setup binds (/dev/shm,
+	 * pivot to); kernel mount/umount2 would tear down our setup binds (/dev/shm,
 	 * /proc, libhybris stage); unshare/setns would hand the guest a
 	 * namespace where our fd-relative /proc walks no longer name what we
 	 * think they name. Lying with -EPERM is the same posture proot takes.
 	 *
 	 * chroot is NOT in this list — it has its own handler in chroot.c
-	 * that swaps the root-view bookkeeping. */
+	 * that swaps the root-view bookkeeping. mount only accepts the bounded
+	 * process-local bind operation; all real mount operations stay denied. */
 	tawcroot_dispatch_install(TAWC_SYS_pivot_root,      tawcroot_deny_eperm);
-	tawcroot_dispatch_install(TAWC_SYS_mount,           tawcroot_deny_eperm);
+	tawcroot_dispatch_install(TAWC_SYS_mount,           handle_mount);
 	tawcroot_dispatch_install(TAWC_SYS_umount2,         tawcroot_deny_eperm);
 	tawcroot_dispatch_install(TAWC_SYS_setns,           tawcroot_deny_eperm);
 }

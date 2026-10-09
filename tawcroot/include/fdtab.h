@@ -46,7 +46,7 @@
 /* Cap on simultaneously reserved fds: rootfs (1) + binds (TAWCROOT_MAX_BINDS).
  * Sized generously above the 8 we ship today. Only matters as the BPF
  * filter generator's array bound; runtime growth is the bind table's. */
-#define TAWCROOT_MAX_RESERVED_FDS 64
+#define TAWCROOT_MAX_RESERVED_FDS 256
 
 /* Tombstone: a slot whose fd has been given up (tawcroot_fd_forget_
  * reserved). Any value below TAWCROOT_RESERVED_FD_BASE means "not a

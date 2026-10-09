@@ -447,7 +447,7 @@ test(prod_path_trap_lands_on_guest_sigaltstack)
 	                             "/marker-sigaltstack"), 42);
 }
 
-test(prod_undersized_sigaltstack_is_substituted)
+test(prod_advertised_sigaltstack_minimum_handles_syscalls)
 {
 	test_int_eq(sigaltstack_case("/bin/static_sigaltstack_small_open_argv1",
 	                             "/marker-sigaltstack-small"), 42);

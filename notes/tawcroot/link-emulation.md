@@ -51,10 +51,16 @@ that (`linkstore_new_token_collision_after_copy`). `rootfs/`
 alone is no longer self-contained — hardlinked data lives in
 `tawcroot/link/`. Install management already treats the distro dir as
 the unit; anything new (export, migration, host-side copying) must too.
-Corollary: **bind sources must be distro-exclusive** — tokens name
-objects in one distro's store, so a host dir bound into two distros
-would dangle in the other, and deleting distro A would destroy data a
-shared dir still references.
+Bind aliases inside the instance directory may use the same store,
+including private home directories. External/shared bind sources return
+`EXDEV` when Android denies the real hardlink: putting instance-owned tokens
+there would leave dangling files in other instances or host consumers.
+Directory traversal through `/proc/self/fd/N/...` uses the same guest
+resolver; bare fd links retain kernel semantics. Steam's runtime preparation
+can therefore share file contents without copying them on every launch.
+Store discovery uses the canonical rootfs directory, not the spelling of a
+rootfs alias. Executable names and `$ORIGIN` retain the guest-facing hardlink
+name rather than exposing the backing object's path.
 
 Version gate: `version` is read at configure and re-read at every lock
 acquisition (guests outlive sessions). Newer-than-supported → DEGRADED:

@@ -130,14 +130,14 @@ extern size_t tawcroot_rootfs_host_path_len;
  * against the bind dst paths; on match, base_fd = bind.src_fd and the
  * suffix is the bytes after bind.dst.
  *
- * Fixed size — no malloc reachable from the handler. The current cap
- * comfortably fits the proot-style mount set (/system /vendor /apex
- * /system_ext /dev /proc /sys + a couple of app-data
- * passthroughs). Bumps go through this header. */
-#define TAWCROOT_MAX_BINDS 32
+ * Fixed size — no malloc reachable from the handler. The exec-state
+ * transport uses this same limit, including nested runtime views. */
+#define TAWCROOT_MAX_BINDS 128
 
 struct tawcroot_bind {
-	int    src_fd;               /* O_PATH | O_DIRECTORY of the host src */
+	int    src_fd;               /* O_PATH directory anchor */
+	char   leaf[256];            /* empty for directories; otherwise src_fd
+	                              * is the parent of this file/socket */
 	int    read_only;            /* 1 → write-intent translations into
 	                              * this bind refuse with -EROFS (checked
 	                              * centrally in path_orchestrate.c).
@@ -187,6 +187,10 @@ extern int tawcroot_root_ro;
  * the bind RO (write-intent translations into it are -EROFS). */
 long tawcroot_path_add_bind(const char *src_host, const char *dst_guest,
                             int read_only);
+
+/* Startup-only, process-local bind. Both names are resolved in the
+ * current guest view; no kernel mount or namespace is created. */
+long tawcroot_path_bind_guest(const char *source, const char *target);
 
 /* Re-anchor every bind in `binds[0..n_binds]` for a chroot to
  * `new_root_host`.
@@ -245,6 +249,12 @@ long tawcroot_proc_fd_to_host_path(int fd, char *out, size_t out_cap);
  * The fd may point into the rootfs or an active bind source. Output starts
  * with "/" and is NUL-terminated. */
 long tawcroot_fd_to_guest_abs(int fd, char *out, size_t out_cap);
+
+/* Resolve a guest name without exposing a hardlink's store object. */
+long tawcroot_path_guest_name(const char *path, char *out, size_t out_cap);
+/* Keep the selected guest route; reverse host lookup is ambiguous with aliases. */
+long tawcroot_path_route_to_guest(int base_fd, const char *suffix,
+                                char *out, size_t out_cap);
 
 /* Reverse-translate a host path `host[0..n)` into a guest-absolute path
  * by longest-prefix match against the rootfs host path and the active

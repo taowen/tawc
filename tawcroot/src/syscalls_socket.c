@@ -226,13 +226,20 @@ static long open_uevent_stub(long type)
 /* Look up the host path stored for `base_fd`. Matches against rootfs
  * first, then the bind table. Returns NULL if nothing matches; in that
  * case the caller falls back to /proc/self/fd/. */
-static const char *host_path_for_base_fd(int base_fd)
+static const char *host_path_for_base_fd(int base_fd, char *buffer, size_t cap)
 {
 	if (base_fd == tawcroot_rootfs_fd && tawcroot_rootfs_host_path_len > 0)
 		return tawcroot_rootfs_host_path;
 	for (size_t i = 0; i < tawcroot_n_binds; i++) {
-		if (tawcroot_binds[i].src_fd == base_fd)
-			return tawcroot_binds[i].src;
+		const struct tawcroot_bind *b = &tawcroot_binds[i];
+		if (b->src_fd != base_fd) continue;
+		if (!b->leaf[0]) return b->src;
+		size_t n = b->src_len - tawc_strlen(b->leaf);
+		if (n > 1) --n;
+		if (n >= cap) return 0;
+		memcpy(buffer, b->src, n);
+		buffer[n] = 0;
+		return buffer;
 	}
 	return 0;
 }
@@ -432,7 +439,8 @@ static long translate_unix_sockaddr(const void *guest_addr, long addrlen,
 	if (r.err) return r.err;
 
 	un_out->sun_family = AF_UNIX_FAMILY;
-	const char *host_prefix = host_path_for_base_fd(r.base_fd);
+	const char *host_prefix = host_path_for_base_fd(r.base_fd, scratch->buf[1],
+	                                               TAWCROOT_PATH_SCRATCH_SIZE);
 	long n;
 	if (host_prefix) {
 		n = render_host_path(un_out->sun_path, sizeof un_out->sun_path,
@@ -502,7 +510,9 @@ static long expand_proc_fd_sun_path(const char *host, long hl,
 	const char *rest = host + i + 1;
 
 	size_t pos = 0;
-	const char *known = host_path_for_base_fd((int)fd);
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	const char *known = host_path_for_base_fd((int)fd, scratch->buf[0],
+	                                         TAWCROOT_PATH_SCRATCH_SIZE);
 	long e;
 	if (known) {
 		e = tawc_str_append(out, out_cap, &pos, known);

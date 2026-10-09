@@ -60,6 +60,7 @@
 
 #include "identity.h"
 #include "namespace.h"
+#include "path.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -92,7 +93,8 @@ extern "C" {
  * pgrep/pkill/ps can't identify anything by name. */
 /* v8: namespace startup metadata, independent of guest environment. */
 /* v9: pinned executable descriptor survives the internal re-exec. */
-#define TAWCROOT_EXEC_STATE_VERSION 9
+/* v10: transport the complete runtime bind table instead of truncating at 16. */
+#define TAWCROOT_EXEC_STATE_VERSION 10
 /* MAX_ARGS at 4096: shell glob expansions, linker invocations, and
  * pacman hooks routinely pass hundreds-to-thousands of args; the kernel
  * allows ~2 MB of argv strings. MAX_ENV at 1024 covers the busiest bash
@@ -100,7 +102,7 @@ extern "C" {
  * stack) header. */
 #define TAWCROOT_EXEC_STATE_MAX_ARGS 4096
 #define TAWCROOT_EXEC_STATE_MAX_ENV  1024
-#define TAWCROOT_EXEC_STATE_MAX_BINDS 16
+#define TAWCROOT_EXEC_STATE_MAX_BINDS TAWCROOT_MAX_BINDS
 #define TAWCROOT_EXEC_STATE_MAX_SHM   64
 
 typedef struct {

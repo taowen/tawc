@@ -944,6 +944,23 @@ Tests: `hosted_proc_magic_link_classify`,
 
 ### chroot emulation
 
+Startup launchers can add process-local directory, file and socket mappings
+with `mount(source, target, NULL, MS_BIND, NULL)`. Both endpoints must exist;
+directories cannot be mapped onto non-directories or vice versa.
+Recursive mounts, replacement of an existing mapping and real filesystem
+mounts remain unsupported. This operation only updates the runtime path table;
+it provides no mount namespace or security boundary. Use it in a dedicated
+child before launching application threads. Fork snapshots the table and exec
+transports the full table using the same capacity as path resolution.
+Chroot re-anchors destinations in guest coordinates, including when the new
+root is underneath an existing bind such as the externally stored `/tmp`.
+Mount targets and chroot retain the translator's selected guest route. They
+must not reverse-map the host inode: a more-specific alias of the same source
+can otherwise select a different destination and discard valid child mappings.
+File and socket entries use a parent-directory anchor and source filename;
+they are path mappings, not inode-pinning kernel mounts. Their source paths
+must remain available for the launched process and its subsequent execs.
+
 We don't have CAP_SYS_CHROOT inside the Android app sandbox, so
 `chroot(2)` can't be forwarded to the kernel. Returning `-EPERM`
 (the original posture) breaks pacman 6.x's `_alpm_run_chroot`,
@@ -957,7 +974,7 @@ The emulation lives in `src/chroot.c`.
 
 Non-shared-VM clone calls pass through the namespace handler. `CLONE_FS`
 peers share a small anonymous mapping publishing the current canonical root
-path, read-only flag and generation. Each peer reopens the directory in its
+host path, original guest route, read-only flag and generation. Each peer reopens the directory in its
 own fd table and reanchors its local path view before dispatching another
 translated syscall. Ordinary fork and `unshare(CLONE_FS)` detach; exec takes
 the synchronized local snapshot and does not retain sharing. Shared-VM stack
