@@ -17,6 +17,11 @@ binutils. On Ubuntu 24.04 install `gcc-14`, then run
 continue to use the NDK toolchain; ARLinux also builds that standalone runtime
 with NDK 29 on Windows through its own CMake integration.
 
+ARLinux's optional gamepad bridge is compiled into tawcroot without new build
+dependencies. It activates only with an explicit `/runtime/input` bind onto
+`/dev/input`; ARLinux sets the guest runtime variable
+`SDL_JOYSTICK_DISABLE_UDEV=1` for SDL evdev/inotify discovery on Android.
+
 On WSL, orphan-to-init tests require a PID namespace because WSL's subreaper
 may adopt orphans instead of PID 1. Keep a shell as namespace init (the test
 runner itself must not be PID 1):

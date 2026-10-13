@@ -36,6 +36,7 @@
 
 #include "dispatch.h"
 #include "errno_neg.h"
+#include "gamepad.h"
 #include "fdtab.h"
 #include "identity.h"
 #include "namespace.h"
@@ -253,6 +254,8 @@ static long handle_openat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	char *path = scratch->buf[0];
 	long fe = fetch_guest_path(scratch, 0, gpath);
 	if (fe) return fe;
+	long gamepad = tawcroot_gamepad_open(dirfd, path, flags);
+	if (gamepad != TAWC_ENOSYS) return gamepad;
 	long nsfd = tawcroot_namespace_open(path, flags);
 	if (nsfd != TAWC_ENOSYS) return nsfd;
 
@@ -577,6 +580,8 @@ static long handle_newfstatat(const tawcroot_syscall_args *args,
 			long rv = TAWC_RAW(TAWC_SYS_fstatat, dirfd, (long)"",
 					   (long)&local, flags, 0, 0);
 			if (rv == 0) {
+				int pad = tawcroot_gamepad_fd_slot(dirfd);
+				if (pad >= 0) tawcroot_gamepad_stat(&local, pad);
 				unsigned long c = fd_object_nlink(
 					dirfd, local.st_mode, local.st_nlink,
 					(unsigned long)local.st_dev);
@@ -642,6 +647,8 @@ static long handle_newfstatat(const tawcroot_syscall_args *args,
 	long rv = TAWC_RAW(TAWC_SYS_fstatat, t.fd, (long)resolved,
 			   (long)&local, rv_flags, 0, 0);
 	if (rv == 0) {
+		int pad = tawcroot_gamepad_path_slot(dirfd, scratch->buf[0]);
+		if (pad >= 0) tawcroot_gamepad_stat(&local, pad);
 		if (pmode == TAWCROOT_PATH_NOFOLLOW)
 			(void)stat_fixup_emulated(t.fd, t.path, &local);
 		else
@@ -1721,6 +1728,13 @@ static long handle_statx(const tawcroot_syscall_args *args, ucontext_t *uc)
 			long rv = TAWC_RAW(TAWC_SYS_statx, dirfd, (long)"", flags,
 					   mask, (long)&local, 0);
 			if (rv == 0) {
+				int pad = tawcroot_gamepad_fd_slot(dirfd);
+				if (pad >= 0) {
+					local.stx_mode = S_IFCHR | 0600;
+					local.stx_rdev_major = 13;
+					local.stx_rdev_minor = 192 + pad;
+					local.stx_ino = 0x41520000u + pad;
+				}
 				unsigned long c = fd_object_nlink(
 					dirfd, local.stx_mode,
 					local.stx_nlink,
@@ -1788,6 +1802,15 @@ static long handle_statx(const tawcroot_syscall_args *args, ucontext_t *uc)
 
 	long rv = TAWC_RAW(TAWC_SYS_statx, t.fd, (long)resolved,
 			   rv_flags, mask, (long)&local, 0);
+	if (rv == 0) {
+		int pad = tawcroot_gamepad_path_slot(dirfd, scratch->buf[0]);
+		if (pad >= 0) {
+			local.stx_mode = S_IFCHR | 0600;
+			local.stx_rdev_major = 13;
+			local.stx_rdev_minor = 192 + pad;
+			local.stx_ino = 0x41520000u + pad;
+		}
+	}
 	/* Hardlink emulation — same two fixups as handle_newfstatat:
 	 * NOFOLLOW leaf that is an emulated name → statx the object and
 	 * report the sidecar count; FOLLOW result landing in the store →
@@ -1845,6 +1868,8 @@ static long handle_fstat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	struct stat local;
 	long rv = TAWC_RAW(TAWC_SYS_fstat, fd, (long)&local, 0, 0, 0, 0);
 	if (rv == 0) {
+		int pad = tawcroot_gamepad_fd_slot(fd);
+		if (pad >= 0) tawcroot_gamepad_stat(&local, pad);
 		unsigned long c = fd_object_nlink(fd, local.st_mode,
 						  local.st_nlink,
 						  (unsigned long)local.st_dev);

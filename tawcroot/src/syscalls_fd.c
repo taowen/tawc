@@ -21,6 +21,7 @@
 #include "dirent_filter.h"
 #include "dispatch.h"
 #include "errno_neg.h"
+#include "gamepad.h"
 #include "fdtab.h"
 #include "io.h"
 #include "linkstore.h"
@@ -691,6 +692,8 @@ static long handle_ioctl(const tawcroot_syscall_args *args, ucontext_t *uc)
 	long fd  = args->a;
 	unsigned int cmd = (unsigned int)args->b;
 	long arg = args->c;
+	long gamepad = tawcroot_gamepad_ioctl((int)fd, cmd, arg);
+	if (gamepad != TAWC_ENOSYS) return gamepad;
 
 	if (cmd == TAWC_TCGETS2 || cmd == TAWC_TCSETS2 ||
 	    cmd == TAWC_TCSETSW2 || cmd == TAWC_TCSETSF2) {
