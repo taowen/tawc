@@ -158,6 +158,21 @@ static long handle_get_robust_list(const tawcroot_syscall_args *args, ucontext_t
 	return 0;
 }
 
+static long handle_rt_sigsuspend(const tawcroot_syscall_args *args,
+				ucontext_t *uc)
+{
+	(void)uc;
+	if (args->b != 8) return TAWC_EINVAL;
+	uint64_t mask;
+	long e = tawc_copy_from_guest(&mask, sizeof mask, (const void *)args->a);
+	if (e < 0) return e;
+	/* Temporary wait masks must preserve translation too. In particular,
+	 * JSC suspends a GC target with all signals except SIGPWR blocked;
+	 * its nested resume handler must still be able to return via SIGSYS. */
+	mask &= ~SIGSYS_BIT;
+	return TAWC_RAW(TAWC_SYS_rt_sigsuspend, (long)&mask, 8, 0, 0, 0, 0);
+}
+
 static long handle_rt_sigaction(const tawcroot_syscall_args *args,
 				ucontext_t *uc)
 {
@@ -359,6 +374,7 @@ void tawcroot_control_register(void)
 	tawcroot_dispatch_install(TAWC_SYS_prctl,           handle_prctl);
 	tawcroot_dispatch_install(TAWC_SYS_rt_sigaction,    handle_rt_sigaction);
 	tawcroot_dispatch_install(TAWC_SYS_rt_sigprocmask,  handle_rt_sigprocmask);
+	tawcroot_dispatch_install(TAWC_SYS_rt_sigsuspend,   handle_rt_sigsuspend);
 	/* Keep sigaltstack native: callers may unmap their stack before
 	 * disabling it. Trapping that disable would use the unmapped stack. */
 	/* io_uring_setup: deny with -ENOSYS so guest libraries fall back to

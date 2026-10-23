@@ -349,6 +349,10 @@ long tawcroot_dispatch_call(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	tawcroot_handler_fn fn = tawcroot_dispatch_get((int)args->nr);
 	if (!fn) return TAWC_ENOSYS;
+	/* sigsuspend intentionally runs guest handlers while waiting. They may
+	 * issue translated syscalls or longjmp without returning here. There
+	 * are no filesystem routes to rescue, and no slot may span that wait. */
+	if (args->nr == TAWC_SYS_rt_sigsuspend) return fn(args, uc);
 
 	int idx = slot_claim(current_tid());
 	if (idx < 0) return fn(args, uc);

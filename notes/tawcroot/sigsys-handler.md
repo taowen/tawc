@@ -372,6 +372,13 @@ without the bounded-failure analysis the chroot path has.
 
 ### Guest signal/seccomp control
 
+Temporary masks matter as well as `rt_sigprocmask`: `rt_sigsuspend` must
+clear reserved SIGSYS before waiting. JSC's GC handler waits with only
+SIGPWR unblocked; a nested SIGPWR resume handler otherwise dies when its
+`rt_sigreturn` traps with SIGSYS blocked. Dispatch this wait without a
+rescue slot: guest handlers can re-enter translation or leave via longjmp.
+The outer SIGSYS context retains the pre-wait mask for normal return.
+
 tawcroot owns `SIGSYS`. The seccomp filter is permanent kernel state,
 and the whole architecture assumes a live `SA_SIGINFO` handler for
 seccomp-originated traps. A guest that installs its own `SIGSYS`
